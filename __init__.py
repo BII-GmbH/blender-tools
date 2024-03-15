@@ -26,18 +26,21 @@ from . import close_mesh_holes
 from . import bii_functions_panel
 from . import bulk_assign_ifc_class
 from . import bulk_material_dropdown
+from . import add_ifc_property
 
 def register():
     close_mesh_holes.register()
     bii_functions_panel.register()
     bulk_assign_ifc_class.register()
     bulk_material_dropdown.register()
+    add_ifc_property.register()
 
 def unregister():
     close_mesh_holes.unregister()
     bii_functions_panel.unregister()
     bulk_assign_ifc_class.unregister()
     bulk_material_dropdown.unregister()
+    add_ifc_property.unregister()
 
 if __name__ == "__main__":
     register()

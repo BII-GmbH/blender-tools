@@ -22,6 +22,8 @@ class BiiFunctionsPanel(bpy.types.Panel):
 
         layout.operator("object.set_ifc_class_for_bulk_operator")
 
+        layout.operator("object.set_ifc_group_property_operator")
+
 
 def register():
     bpy.utils.register_class(BiiFunctionsPanel)
