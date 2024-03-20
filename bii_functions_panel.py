@@ -19,14 +19,27 @@ class BiiFunctionsPanel(bpy.types.Panel):
         layout.operator("object.close_mesh_holes_operator")
 
         layout.prop(context.scene, "bulk_material", text="Bulk Material")
-
         layout.operator("object.set_ifc_class_for_bulk_operator")
-
         layout.operator("object.set_ifc_group_property_operator")
+
+        layout.label(text="Clean and reduce IFC")
+
+        # layout.operator("object.upgrade_ifc_operator")
+
+        layout.prop(context.window_manager, "decimate_ratio", text="Decimate Ratio")
+        layout.operator("object.clean_reduce_ifc_operator")
+        layout.label(text="Progress:")
+        layout.label(text=context.scene.clean_progress)
 
 
 def register():
     bpy.utils.register_class(BiiFunctionsPanel)
+    bpy.types.WindowManager.decimate_ratio = bpy.props.FloatProperty(
+        name="Decimate Ratio",
+        default=1.0, min=0.1, max=1.0)
+    bpy.types.Scene.clean_progress = bpy.props.StringProperty(default="Ready to clean and reduce IFC")
 
 def unregister():
     bpy.utils.unregister_class(BiiFunctionsPanel)
+    del bpy.types.WindowManager.decimate_ratio
+    del bpy.types.Scene.clean_progress
