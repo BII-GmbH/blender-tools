@@ -2,6 +2,7 @@ import bpy
 
 def get_material_options(self, context):
     return [
+        ("Bulk", "Bulk", "Description for Option 0"),
         ("Gleisschotter (Verschmutzt)", "Gleisschotter (Verschmutzt)", "Description for Option 1"),
         ("Gleisschotter (Neu)", "Gleisschotter (Neu)", "Description for Option 2"),
         ("Asphalt", "Asphalt", "Description for Option 3"),
