@@ -1,9 +1,9 @@
 import bpy
 import ifcopenshell
-import blenderbim
-from blenderbim.bim.ifc import IfcStore
-import blenderbim.tool as tool
-from blenderbim.bim.module.pset.data import Data as PsetData
+import bonsai
+from bonsai.bim.ifc import IfcStore
+import bonsai.tool as tool
+from bonsai.bim.module.pset.data import Data as PsetData
 import bmesh
 
 def calculate_volume(obj):
@@ -23,7 +23,7 @@ def set_ifc_class_for_bulk(self, context, material):
     # Get the active IFC file
     ifc_file = IfcStore.get_file()
     if not ifc_file:
-        print("No IFC file found. Ensure you're working in a BlenderBIM project.")
+        print("No IFC file found. Ensure you're working in a Bonsai project.")
         return    
 
     # Create a new Pset template file and the Pset template for Bulk
@@ -31,8 +31,8 @@ def set_ifc_class_for_bulk(self, context, material):
     ifcopenshell.api.run("pset_template.add_prop_template", ifc_file, pset_template=pset_template, name="BulkMaterial", description="Limited to what dProB is able to interpret!")
     ifcopenshell.api.run("pset_template.add_prop_template", ifc_file, pset_template=pset_template, name="BulkVolume", primary_measure_type="IfcVolumeMeasure")
     ifcopenshell.api.run("pset_template.add_prop_template", ifc_file, pset_template=pset_template, name="BulkHeight", primary_measure_type="IfcLengthMeasure")
-    blenderbim.bim.handler.refresh_ui_data()
-    blenderbim.bim.schema.reload(tool.Ifc.get().schema)
+    bonsai.bim.handler.refresh_ui_data()
+    bonsai.bim.schema.reload(tool.Ifc.get().schema)
     
     # Loop through all selected objects
     for obj in bpy.context.selected_objects:

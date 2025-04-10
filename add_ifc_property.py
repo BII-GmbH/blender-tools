@@ -1,9 +1,9 @@
 import bpy
 import ifcopenshell
-import blenderbim
-from blenderbim.bim.ifc import IfcStore
-import blenderbim.tool as tool
-from blenderbim.bim.module.pset.data import Data as PsetData
+import bonsai
+from bonsai.bim.ifc import IfcStore
+import bonsai.tool as tool
+from bonsai.bim.module.pset.data import Data as PsetData
 import bmesh
 
 # Global counter for group naming
@@ -20,7 +20,7 @@ def set_ifc_property(self, context, property_name):
      # Get the active IFC file
     ifc_file = IfcStore.get_file()
     if not ifc_file:
-        print("No IFC file found. Ensure you're working in a BlenderBIM project.")
+        print("No IFC file found. Ensure you're working in a Bonsai project.")
         return
     
     # Loop through all selected objects
