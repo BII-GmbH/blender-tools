@@ -16,7 +16,7 @@ bl_info = {
     "author" : "bii",
     "description" : "",
     "blender" : (2, 80, 0),
-    "version" : (0, 0, 2),
+    "version" : (0, 0, 3),
     "location" : "",
     "warning" : "",
     "category" : "BII Tools"
@@ -29,6 +29,7 @@ from . import bulk_material_dropdown
 from . import add_ifc_property
 from . import clean_reduce_ifc
 from . import upgrade_to_IFC4
+from . import export_rail_asset
 
 def register():
     close_mesh_holes.register()
@@ -38,6 +39,7 @@ def register():
     add_ifc_property.register()
     clean_reduce_ifc.register()
     # upgrade_to_IFC4.register()
+    export_rail_asset.register()
 
 def unregister():
     close_mesh_holes.unregister()
@@ -47,6 +49,7 @@ def unregister():
     add_ifc_property.unregister()
     clean_reduce_ifc.unregister()
     # upgrade_to_IFC4.unregister()
+    export_rail_asset.unregister()
 
 if __name__ == "__main__":
     register()
