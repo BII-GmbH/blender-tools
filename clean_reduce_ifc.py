@@ -1,14 +1,14 @@
 import bpy
 
 class CleanReduceIfcOperator(bpy.types.Operator):
-    """Clean and reduce IFC"""
+    """Clean and reduce Model"""
     bl_idname = "object.clean_reduce_ifc_operator"
-    bl_label = "Clean and Reduce IFC"
+    bl_label = "Clean and Reduce Model"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         clean_reduce_ifc(self, context)
-        self.report({'INFO'}, "IFC Clean and Reduce Completed")
+        self.report({'INFO'}, "Model Clean and Reduce Completed")
         return {'FINISHED'}
 
 def clean_and_link_mesh_data(context):

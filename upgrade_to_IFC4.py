@@ -1,9 +1,10 @@
 import bpy
-from bonsai.bim.ifc import IfcStore
-import ifcpatch
-import ifcopenshell
 
 def upgrade_IFC4(self, context):
+    from bonsai.bim.ifc import IfcStore
+    import ifcpatch
+    import ifcopenshell
+
     # Upgrade the IFC file to IFC4
     # Get the active IFC file
     ifc_file = IfcStore.get_file()
