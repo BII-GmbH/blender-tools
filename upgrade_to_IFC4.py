@@ -9,7 +9,7 @@ def upgrade_IFC4(self, context):
     # Get the active IFC file
     ifc_file = IfcStore.get_file()
     if not ifc_file:
-        print("No IFC file found. Ensure you're working in a Bonsai project.")
+        self.report({'ERROR'}, "No IFC file found. Ensure you're working in a Bonsai project.")
         return
     ifc_file.upgrade("IFC4")
             

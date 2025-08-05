@@ -20,7 +20,7 @@ def set_ifc_property(self, context, property_name):
         # Get the active IFC file
         ifc_file = IfcStore.get_file()
         if not ifc_file:
-            print("No IFC file found. Ensure you're working in a Bonsai project.")
+            self.report({'ERROR'}, "No IFC file found. Ensure you're working in a Bonsai project.")
             return
         
         # Loop through all selected objects
@@ -43,7 +43,7 @@ def set_ifc_property(self, context, property_name):
                 }
                 ifcopenshell.api.run("pset.edit_pset", ifc_file, pset=pset, properties=new_values)
     except:
-        print("Bonsai is not installed. Good for you.")
+        self.report({'ERROR'}, "Bonsai is not installed. Good for you.")
 
 class SetIfcPropForGroup(bpy.types.Operator):
     """Set custom ifc property for grouping"""
