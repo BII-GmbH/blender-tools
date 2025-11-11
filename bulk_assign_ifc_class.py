@@ -81,15 +81,17 @@ def set_ifc_class_for_bulk(self, context, material):
 def set_fbx_class_for_bulk(self, context, material):
     fbxs = 0
     for obj in bpy.context.selected_objects:
-        if obj.type == 'MESH':
-            mesh = get_evaluated_world_mesh(obj)
-            volume = calculate_volume(mesh)
-            height = calculate_height(mesh)
-            obj["BulkMaterial"] = material
-            obj["BulkVolume"] = volume
-            obj["BulkHeight"] = height
-            print(f"Assigned Custom Properties to {obj.name}.")
-            fbxs += 1
+        mesh = get_evaluated_world_mesh(obj)
+        volume = calculate_volume(mesh)
+        if volume < 0.00001:
+            self.report({'WARNING'}, f"Object {obj.name} has non-positive volume {volume}. Skipping.")
+            continue
+        height = calculate_height(mesh)
+        obj["BulkMaterial"] = material
+        obj["BulkVolume"] = volume
+        obj["BulkHeight"] = height
+        print(f"Assigned Custom Properties to {obj.name}.")
+        fbxs += 1
     self.report({'INFO'}, f"Assigned Bulk Properties to {fbxs} objects. Be sure to activate 'Custom Properties' when exporting FBX.")
 
 class SetIfcClassForBulkOperator(bpy.types.Operator):
