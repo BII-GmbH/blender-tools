@@ -1,0 +1,25 @@
+schema_version = "1.0.0"
+
+id = "railway_chainage"
+version = "1.25.0"
+name = "Umgebung"
+tagline = "Kilometrierung, Gleisachsen, Gelände und Gebäude aus OSM-Daten"
+maintainer = "Stefan Brauner"
+type = "add-on"
+
+website = "https://www.openrailwaymap.org"
+
+tags = ["Import-Export", "Add Curve"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+network = "Bahn- und Höhendaten aus offenen Diensten laden"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "*.zip",
+]
