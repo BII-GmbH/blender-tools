@@ -1,0 +1,17 @@
+{
+  "Dimensions": {
+    "Length": 45.0,
+    "Width": 8.0,
+    "Height": 15.0
+  },
+  "Offset": {
+    "Top Construction Length": 10.0,
+    "Legs Width": 12.0,
+    "Middle Beam Height": -3.0
+  },
+  "Optional": {
+    "Base Beam Thickness": 0.2,
+    "Top Beam Thickness": 0.15,
+    "Beam Profile Resolution": 8
+  }
+}
