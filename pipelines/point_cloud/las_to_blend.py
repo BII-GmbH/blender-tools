@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 import bpy
@@ -80,29 +81,184 @@ def add_modifier(obj: Any) -> Any | None:
         return None
 
 
-def apply_modifier(obj: Any, mod: Any) -> None:
-    if mod:
-        print("Applying Geometry Node modifier...")
-        try:
-            bpy.context.view_layer.objects.active = obj
-            bpy.ops.object.modifier_apply(modifier=mod.name)
-            print(f"Successfully applied modifier: {mod.name}")
-        except Exception as e:
-            print(f"Error applying modifier: {e}")
-    else:
-        print("Warning: No modifier was created to apply.")
-
-
-def save_blend_file(path: str) -> None:
+def apply_modifier(obj: Any, mod: str) -> None:
+    print("Applying Geometry Node modifier...")
     try:
-        blend_dir = Path(bpy.data.filepath).parent
-        bpy.ops.wm.save_as_mainfile(filepath=f"{blend_dir}/{path}")
-        print(f"SUCCESS: File saved to -> {Path(bpy.data.filepath).parent}/{path}")
+        bpy.context.view_layer.objects.active = obj
+        bpy.ops.object.modifier_apply(modifier=mod)
+        print(f"Successfully applied modifier: {mod}")
     except Exception as e:
-        print(f"Error saving file: {e}")
+        print(f"Error applying modifier: {e}")
 
 
-def convert_las_to_blend(las_file):
+# def save_blend_file(path: str) -> None:
+#     try:
+#         blend_dir = Path(bpy.data.filepath).parent
+#         bpy.ops.wm.save_as_mainfile(filepath=f"{blend_dir}/{path}")
+#         print(f"SUCCESS: File saved to -> {Path(bpy.data.filepath).parent}/{path}")
+#     except Exception as e:
+#         print(f"Error saving file: {e}")
+
+
+def smart_uv_unwrap(obj: Any) -> None:
+    # Make the target the only selected object.
+    bpy.ops.object.mode_set(mode="OBJECT")
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    # Select every face and unwrap.
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+
+    bpy.ops.uv.smart_project(
+        angle_limit=math.radians(66),
+        margin_method="FRACTION",
+        island_margin=0.02,
+        correct_aspect=True,
+        scale_to_bounds=True,
+    )
+
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def get_material(obj:Any, name: str) -> Any:
+    material = bpy.data.materials.get(name)
+
+    if material is None:
+        raise RuntimeError(
+            f'Material "{name}" was not found.'
+        )
+
+    if material.name not in {
+        slot.material.name
+        for slot in obj.material_slots
+        if slot.material
+    }:
+        raise RuntimeError(
+            f'Active object does not use material "{name}".'
+        )
+
+    return material
+
+
+def make_only_material(obj: Any, material: Any) -> None:
+    obj.data.materials.clear()
+    obj.data.materials.append(material)
+
+    for polygon in obj.data.polygons:
+        polygon.material_index = 0
+
+
+def create_bake_target(material: Any, img_name: str, res: int) -> tuple[Any, Any]:
+    nodes = material.node_tree.nodes
+
+    # reusing image routine
+    img = bpy.data.images.get(img_name)
+    # img there but not right size
+    if img and tuple(img.size) != (res, res):
+        bpy.data.images.remove(img)
+        img = None
+    if img is not None:
+        return img
+
+    # create texture
+    img = bpy.data.images.new(
+        name = img_name,
+        width= res,
+        height = res,
+        alpha = False,
+        float_buffer = False
+    )
+    img.colorspace_settings.name = "sRGB"
+    img.file_format = "PNG"
+    blend_dir = Path(bpy.data.filepath).parent
+    img.filepath_raw = str(f"{blend_dir}/{img_name}.png")
+
+    # create img_texture node in material
+    img_node = nodes.get(img_name)
+    if img_node is None or img_node.type != "TEX_IMAGE":
+        img_node = nodes.new("ShaderNodeTexImage")
+        img_node.name = img_name
+        img_node.label = img_name
+        img_node.image = img
+
+    # set the image node texture to active -> so we use it for the baking process
+    for node in nodes:
+        node.select = False
+    img_node.select = True
+    nodes.active = img_node
+
+    return img, img_node
+
+
+def bake_point_cloud_diffuse_colors(obj: Any, img: Any) -> None:
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+
+    # GPU is optimal, CPU backup
+    scene.cycles.device = "GPU"
+
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    bpy.ops.object.bake(
+        type="DIFFUSE",
+        pass_filter={"COLOR"},
+        target="IMAGE_TEXTURES",
+        margin=16,
+        use_clear=True,
+    )
+
+    # FBX embedding is most dependable when the image has an actual file.
+    img.save()
+
+
+def use_baked_img(material: Any, image_node: Any) -> None:
+    nodes = material.node_tree.nodes
+    links = material.node_tree.links
+
+    principled = next(
+        (node for node in nodes if node.type == "BSDF_PRINCIPLED"),
+        None,
+    )
+
+    if principled is None:
+        raise RuntimeError(
+            f'Material "{material.name}" has no Principled BSDF node.'
+        )
+
+    base_color = principled.inputs.get("Base Color")
+
+    if base_color is None:
+        raise RuntimeError("Principled BSDF has no Base Color input.")
+
+    # This removes the existing Attribute → Base Color connection, if any.
+    for link in list(base_color.links):
+        links.remove(link)
+
+    links.new(image_node.outputs["Color"], base_color)
+
+
+def export_fbx(obj: Any, name: str) -> None:
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+    blend_dir = Path(bpy.data.filepath).parent
+    bpy.ops.export_scene.fbx(
+        filepath=str(str(f"{blend_dir}/{name}.fbx")),
+        use_selection=True,
+        object_types={"MESH"},
+        path_mode="COPY",
+        embed_textures=True,
+        bake_anim=False,
+        add_leaf_bones=False,
+    )
+
+
+def convert_las_to_fbx(las_file):
     print(f"\n--- Starting Automation ---")
     print(f"Input LAS: {las_file}")
 
@@ -112,18 +268,34 @@ def convert_las_to_blend(las_file):
 
     mod = add_modifier(imported_las_obj)
 
-    apply_modifier(imported_las_obj, mod)
+    apply_modifier(imported_las_obj, mod.name)
 
+    # version 1 .las -> .blend
     name = las_file.split(".")[0]
-    save_blend_file(f"{name}.blend")
+    #save_blend_file(f"{name}.blend")
+
+    # version 2 .las -> .fbx
+
+    # 1. smart uv unrwap the active element
+    smart_uv_unwrap(imported_las_obj)
+    # 2. add image texture -> 4k -> name maybe the same as the file? + get material "P_Cloud" & select the image!
+    mat = get_material(imported_las_obj, "P Cloud")
+    make_only_material(imported_las_obj, mat)
+    img, img_node = create_bake_target(mat, name, 4096)
+    # 4. BAKING time:
+    # - switch renderer to cycles
+    # - type = diffuse, constributions ONLY color
+    bake_point_cloud_diffuse_colors(imported_las_obj, img)
+    # 5. Shader:
+    # - switch input from attribute to generated image -> Base color Principal BDSF
+    use_baked_img(mat, img_node)
+    # 6. FBX export with texture embedded
+    export_fbx(imported_las_obj, name)
 
 
 def main() -> None:
     args = parse_args()
-    try:
-        convert_las_to_blend(str(args.filepath))
-    except Exception as e:
-        print(f"Error: No arguments found after '--' {e}")
+    convert_las_to_fbx(str(args.filepath))
 
 
 if __name__ == "__main__":
