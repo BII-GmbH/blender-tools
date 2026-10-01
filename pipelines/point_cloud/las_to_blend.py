@@ -114,7 +114,7 @@ def smart_uv_unwrap(obj: Any) -> None:
     bpy.ops.uv.smart_project(
         angle_limit=math.radians(66),
         margin_method="FRACTION",
-        island_margin=0.02,
+        island_margin=0,
         correct_aspect=True,
         scale_to_bounds=True,
     )
@@ -272,7 +272,6 @@ def convert_las_to_fbx(las_file):
 
     # version 1 .las -> .blend
     name = las_file.split(".")[0]
-    #save_blend_file(f"{name}.blend")
 
     # version 2 .las -> .fbx
 
@@ -291,6 +290,9 @@ def convert_las_to_fbx(las_file):
     use_baked_img(mat, img_node)
     # 6. FBX export with texture embedded
     export_fbx(imported_las_obj, name)
+
+    # Debug
+    # save_blend_file(f"{name}.blend")
 
 
 def main() -> None:
