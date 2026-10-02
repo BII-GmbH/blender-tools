@@ -91,15 +91,6 @@ def apply_modifier(obj: Any, mod: str) -> None:
         print(f"Error applying modifier: {e}")
 
 
-# def save_blend_file(path: str) -> None:
-#     try:
-#         blend_dir = Path(bpy.data.filepath).parent
-#         bpy.ops.wm.save_as_mainfile(filepath=f"{blend_dir}/{path}")
-#         print(f"SUCCESS: File saved to -> {Path(bpy.data.filepath).parent}/{path}")
-#     except Exception as e:
-#         print(f"Error saving file: {e}")
-
-
 def smart_uv_unwrap(obj: Any) -> None:
     # Make the target the only selected object.
     bpy.ops.object.mode_set(mode="OBJECT")
@@ -258,37 +249,35 @@ def export_fbx(obj: Any, name: str) -> None:
     )
 
 
+def save_blend_file(path: str) -> None:
+    try:
+        blend_dir = Path(bpy.data.filepath).parent
+        bpy.ops.wm.save_as_mainfile(filepath=f"{blend_dir}/{path}")
+        print(f"SUCCESS: File saved to -> {Path(bpy.data.filepath).parent}/{path}")
+    except Exception as e:
+        print(f"Error saving file: {e}")
+
+
 def convert_las_to_fbx(las_file):
     print(f"\n--- Starting Automation ---")
     print(f"Input LAS: {las_file}")
 
     imported_las_obj = import_las_file(las_file)
-
     convert_point_cloud_to_mesh(imported_las_obj)
 
     mod = add_modifier(imported_las_obj)
-
     apply_modifier(imported_las_obj, mod.name)
 
-    # version 1 .las -> .blend
     name = las_file.split(".")[0]
 
-    # version 2 .las -> .fbx
-
-    # 1. smart uv unrwap the active element
+    # Embed color attribute into 4k texture
     smart_uv_unwrap(imported_las_obj)
-    # 2. add image texture -> 4k -> name maybe the same as the file? + get material "P_Cloud" & select the image!
     mat = get_material(imported_las_obj, "P Cloud")
     make_only_material(imported_las_obj, mat)
     img, img_node = create_bake_target(mat, name, 4096)
-    # 4. BAKING time:
-    # - switch renderer to cycles
-    # - type = diffuse, constributions ONLY color
     bake_point_cloud_diffuse_colors(imported_las_obj, img)
-    # 5. Shader:
-    # - switch input from attribute to generated image -> Base color Principal BDSF
     use_baked_img(mat, img_node)
-    # 6. FBX export with texture embedded
+
     export_fbx(imported_las_obj, name)
 
     # Debug
