@@ -1,11 +1,25 @@
 import math
-from typing import Any
+from typing import Any, Generator
+import time
+from contextlib import contextmanager
 
 import bpy
 import sys
 import argparse
 from pathlib import Path
 
+
+@contextmanager
+def timer(label: str) -> Generator[None, Any, None]:
+    start = time.perf_counter()
+
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - start
+        minutes, seconds = divmod(elapsed, 60)
+
+        print(f"[Timing] {label}: {int(minutes):02d}:{seconds:05.2f} min")
 
 def parse_args() -> argparse.Namespace:
     """Parse only arguments appearing after Blender's '--' separator."""
@@ -22,6 +36,12 @@ def parse_args() -> argparse.Namespace:
         "filepath",
         type=Path,
         help="Path to the LAS file, for example: example.las",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="Directory for generated FBX and texture files.",
     )
 
     return parser.parse_args(script_args)
@@ -62,7 +82,7 @@ def convert_point_cloud_to_mesh(obj: Any) -> None:
         print(f"Error during conversion: {e}")
 
 
-def add_modifier(obj: Any) -> Any | None:
+def add_geo_node_modifier(obj: Any) -> Any | None:
     geo_node_name = "Convert P Cloud to Mesh"
     geo_node_tree = bpy.data.node_groups.get(geo_node_name)
 
@@ -232,14 +252,34 @@ def use_baked_img(material: Any, image_node: Any) -> None:
     links.new(image_node.outputs["Color"], base_color)
 
 
-def export_fbx(obj: Any, name: str) -> None:
+def add_decimate_mod(obj: Any, ratio: float) -> Any | None:
+    mod = obj.modifiers.new(
+        name="Decimate_Auto",
+        type="DECIMATE",
+    )
+    mod.decimate_type = "COLLAPSE"
+    mod.ratio = ratio
+
+    result = bpy.ops.object.modifier_apply(modifier=mod.name)
+    if "FINISHED" not in result:
+        raise RuntimeError(f"Could not apply Decimate: {result}")
+
+    print("Decimate mod applied successfully.")
+
+
+def export_fbx(obj: Any, name: str, output_dir: str | None) -> None:
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
 
     blend_dir = Path(bpy.data.filepath).parent
+    if output_dir:
+        output_dir = str(output_dir)
+        path = f"{blend_dir}/{output_dir}/{name}.fbx"
+    else:
+        path = f"{blend_dir}/{name}.fbx"
     bpy.ops.export_scene.fbx(
-        filepath=str(str(f"{blend_dir}/{name}.fbx")),
+        filepath=str(path),
         use_selection=True,
         object_types={"MESH"},
         path_mode="COPY",
@@ -258,27 +298,31 @@ def save_blend_file(path: str) -> None:
         print(f"Error saving file: {e}")
 
 
-def convert_las_to_fbx(las_file):
+def convert_las_to_fbx(las_file: str, output_dir: str):
     print(f"\n--- Starting Automation ---")
     print(f"Input LAS: {las_file}")
 
-    imported_las_obj = import_las_file(las_file)
-    convert_point_cloud_to_mesh(imported_las_obj)
+    with timer("Import & convert point cloud to mesh via geo node"):
+        imported_las_obj = import_las_file(las_file)
+        convert_point_cloud_to_mesh(imported_las_obj)
 
-    mod = add_modifier(imported_las_obj)
-    apply_modifier(imported_las_obj, mod.name)
+        mod = add_geo_node_modifier(imported_las_obj)
+        apply_modifier(imported_las_obj, mod.name)
 
-    name = las_file.split(".")[0]
+    name = Path(las_file).stem
 
-    # Embed color attribute into 4k texture
-    smart_uv_unwrap(imported_las_obj)
-    mat = get_material(imported_las_obj, "P Cloud")
-    make_only_material(imported_las_obj, mat)
-    img, img_node = create_bake_target(mat, name, 4096)
-    bake_point_cloud_diffuse_colors(imported_las_obj, img)
-    use_baked_img(mat, img_node)
+    with timer("Embed color attribute into 4k texture"):
+        smart_uv_unwrap(imported_las_obj)
+        mat = get_material(imported_las_obj, "P Cloud")
+        make_only_material(imported_las_obj, mat)
+        img, img_node = create_bake_target(mat, name, 4096)
+        bake_point_cloud_diffuse_colors(imported_las_obj, img)
+        use_baked_img(mat, img_node)
 
-    export_fbx(imported_las_obj, name)
+    with timer("Apply Decimate to reduce vertex count -> file size"):
+        add_decimate_mod(imported_las_obj, 0.25)
+
+    export_fbx(imported_las_obj, name, output_dir)
 
     # Debug
     # save_blend_file(f"{name}.blend")
@@ -286,7 +330,9 @@ def convert_las_to_fbx(las_file):
 
 def main() -> None:
     args = parse_args()
-    convert_las_to_fbx(str(args.filepath))
+
+    with timer("Complete pipeline"):
+        convert_las_to_fbx(str(args.filepath), args.output_dir)
 
 
 if __name__ == "__main__":
