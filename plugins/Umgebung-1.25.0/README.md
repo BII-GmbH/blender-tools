@@ -1,22 +1,22 @@
 # Umgebung
 
-This Blender add-on builds the surroundings of a railway line from open data: a chainage line with kilometre labels, track axes with switches and crossings, terrain, map textures and buildings.
+Dieses Blender-Addon baut die Umgebung einer Bahnstrecke aus offenen Daten auf: eine Kilometrierungslinie mit Kilometerangaben, Gleisachsen mit Weichen und Kreuzungen, Gelände, Kartentexturen und Gebäude.
 
-## How to install
+## Installation
 
-1. [Blender](https://www.blender.org/download/) 4.2 or newer has to be installed.
-2. Zip this folder, then in Blender go to **Edit ▸ Preferences ▸ Add-ons ▸ Install from Disk…** and select the zip.
-3. Restart Blender. The add-on is in the 3D Viewport sidebar (key **N**), tab **Umgebung**.
+1. [Blender](https://www.blender.org/download/) 4.2 oder neuer muss installiert sein.
+2. Diesen Ordner zippen, dann in Blender unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Von Festplatte installieren…** die Zip-Datei auswählen.
+3. Blender neu starten. Das Addon liegt in der Seitenleiste der 3D-Ansicht (Taste **N**), Reiter **Umgebung**.
 
-## How to use
+## Benutzung
 
-1. **Gebiet**: choose the area, e.g. with **Gebiet auswählen** on a map.
-2. **Strecken Auswahl**: click **Strecken suchen** and select the railway lines.
-3. Click **Kilometrierung erzeugen** (chainage) and **Gleisachsen erzeugen** (track axes).
-4. Optional: **Gelände und Korridor** for terrain and map textures, **Gebäude** for buildings.
+1. **Gebiet**: Gebiet festlegen, z. B. mit **Gebiet auswählen** auf einer Karte.
+2. **Strecken Auswahl**: **Strecken suchen** klicken und die Strecken auswählen.
+3. **Kilometrierung erzeugen** und **Gleisachsen erzeugen** klicken.
+4. Optional: **Gelände und Korridor** für Gelände und Kartentexturen, **Gebäude** für Gebäude.
 
-Switches and crossings are created as V-shaped meshes; connections between tracks stay within 10°, so the network can be used in a driving simulation.
+Weichen und Kreuzungen werden als V-förmige Meshes angelegt; Übergänge zwischen Gleisen bleiben innerhalb von 10°, damit sich das Gleisnetz in einer Fahrsimulation verwenden lässt.
 
-## Disclaimer
+## Hinweise
 
-The user interface is in German. The add-on needs internet access; data comes from OpenStreetMap (© OpenStreetMap contributors) and official German services. Detailed 1 m terrain is only available for Baden-Württemberg, Bavaria and North Rhine-Westphalia. The detailed manual is in German: [README.de.md](README.de.md).
+Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (© OpenStreetMap-Mitwirkende) und von amtlichen deutschen Diensten. Gelände mit 1 m Auflösung gibt es nur für Baden-Württemberg, Bayern und Nordrhein-Westfalen. Die ausführliche Anleitung steht in [README.de.md](README.de.md).
