@@ -19,4 +19,4 @@ Switches and crossings are created as V-shaped meshes; connections between track
 
 ## Disclaimer
 
-The user interface is in German. The add-on needs internet access; data comes from OpenStreetMap (© OpenStreetMap contributors) and official German services. Detailed 1 m terrain is only available for Baden-Württemberg, Bavaria and North Rhine-Westphalia. The detailed manual is in German: [README.de.md](README.de.md).
+The add-on needs internet access; data comes from OpenStreetMap (© OpenStreetMap contributors) and official German services. Detailed 1 m terrain is only available for Baden-Württemberg, Bavaria and North Rhine-Westphalia. The detailed manual is in German: [README.de.md](README.de.md).
