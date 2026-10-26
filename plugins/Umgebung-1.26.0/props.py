@@ -90,12 +90,13 @@ class RC_Props(PropertyGroup):
         default='PUBLIC',
     )
     overpass_url: StringProperty(
-        name="Adresse", default="http://2.28.27.1/api/interpreter",
-        description="Vollständige Adresse des Overpass-Endpunkts, z. B. "
-                    "http://server/api/interpreter")
+        name="Adresse", default="https://geo.simbox.site/overpass/api/interpreter",
+        description="Vollständige Adresse des Overpass-Endpunkts. Für die eigene Geo-Box "
+                    "(geo.simbox.site) meldet sich das Addon mit dem Service-Konto aus den "
+                    "Add-on-Einstellungen an")
 
     map_view_url: StringProperty(
-        name="Kartenansicht", default="http://2.28.27.1:8080/",
+        name="Kartenansicht", default="https://turbo.simbox.site/",
         description="Adresse der eigenen Kartenanwendung. Enthält sie {lat}, {lon} oder {zoom}, "
                     "werden diese durch das eingestellte Gebiet ersetzt; sonst wird für "
                     "Overpass-Turbo-Adressen automatisch der Parameter C=lat;lon;zoom angehängt")
@@ -445,6 +446,10 @@ class RC_Props(PropertyGroup):
              "Topografische Karte mit Höhenlinien. Ebenfalls ehrenamtliche Server"),
             ('BKG_ORM', "basemap.de + OpenRailwayMap",
              "BKG-Basiskarte mit Bahn-Infrastruktur; für kleine ausgewählte Abschnitte"),
+            ('SIMBOX_LUFTBILD', "Luftbilder (Geo-Box)",
+             "Orthophotos der Länder (DE, AT, CH, etwa 0,2-0,5 m) über den eigenen Server "
+             "geo.simbox.site. Braucht ein Service-Konto - Client-ID und Secret in den "
+             "Add-on-Einstellungen eintragen"),
         ),
         default='BASEMAP_DE',
     )
@@ -527,13 +532,51 @@ class RC_Props(PropertyGroup):
 classes = (RC_RouteItem, RC_Props)
 
 
+def _zugang_setzen(prefs, _context=None):
+    """Zugangsdaten an das Geo-Box-Modul weitergeben (Hauptthread)."""
+    from . import simbox
+    simbox.configure(prefs.simbox_client_id, prefs.simbox_client_secret)
+
+
+class RC_AddonPreferences(bpy.types.AddonPreferences):
+    """Zugang zur eigenen Geo-Box. Steht in den Blender-Einstellungen, nicht in der
+    .blend-Datei - so wandert das Secret nicht mit Projektdateien weiter."""
+
+    bl_idname = __package__
+
+    simbox_client_id: StringProperty(
+        name="Client-ID", default="simbox-geo-blender", update=_zugang_setzen,
+        description="Service-Konto der Geo-Box (Keycloak, Realm simbox), vom Betreiber "
+                    "eingerichtet nach dem Vorbild simbox-geo-cm")
+    simbox_client_secret: StringProperty(
+        name="Secret", default="", subtype='PASSWORD', update=_zugang_setzen,
+        description="Client-Secret des Service-Kontos (aus dem Passwortmanager). Ersatzweise "
+                    "Umgebungsvariable SIMBOX_GEO_CLIENT_SECRET")
+
+    def draw(self, context):
+        layout = self.layout
+        box = layout.box()
+        box.label(text="Geo-Box (geo.simbox.site): Luftbilder und eigener Overpass-Server",
+                  icon='WORLD')
+        col = box.column()
+        col.prop(self, "simbox_client_id")
+        col.prop(self, "simbox_client_secret")
+        box.operator("railway_chainage.simbox_test", icon='CHECKMARK')
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.railway_chainage = bpy.props.PointerProperty(type=RC_Props)
+    bpy.utils.register_class(RC_AddonPreferences)
+    try:
+        _zugang_setzen(bpy.context.preferences.addons[__package__].preferences)
+    except (KeyError, AttributeError):
+        _zugang_setzen(type("Leer", (), {"simbox_client_id": "", "simbox_client_secret": ""})())
 
 
 def unregister():
+    bpy.utils.unregister_class(RC_AddonPreferences)
     del bpy.types.Scene.railway_chainage
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

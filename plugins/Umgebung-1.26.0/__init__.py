@@ -9,7 +9,7 @@ Kilometerwerte als Beschriftung - keine Schienengeometrie.
 bl_info = {
     "name": "Umgebung",
     "author": "Stefan Brauner",
-    "version": (1, 25, 0),
+    "version": (1, 26, 0),
     "blender": (3, 3, 0),
     "location": "3D-Ansicht > Seitenleiste (N) > Umgebung",
     "description": "Umgebung zu Bahnstrecken aufbauen: Kilometrierungslinie, Gleisachsen, "
@@ -21,10 +21,10 @@ import importlib
 import sys
 
 from . import (buildings, builder, corridor, dgm, maptexture, operators, overpass,
-               projection, props, railgeom, selector, tracknetwork, ui)
+               projection, props, railgeom, selector, simbox, tracknetwork, ui)
 
-_modules = (projection, overpass, railgeom, tracknetwork, dgm, corridor, maptexture, selector,
-            buildings, builder, props, operators, ui)
+_modules = (projection, simbox, overpass, railgeom, tracknetwork, dgm, corridor, maptexture,
+            selector, buildings, builder, props, operators, ui)
 
 
 def _reload():

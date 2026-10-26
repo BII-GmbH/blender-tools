@@ -80,16 +80,19 @@ def _write_cache(path, data):
 
 
 def _request(endpoint, query, timeout):
+    from . import simbox
     payload = urllib.parse.urlencode({"data": query}).encode("utf-8")
-    req = urllib.request.Request(
-        endpoint,
-        data=payload,
-        headers={
-            "User-Agent": USER_AGENT,
-            "Accept": "application/json",
-            "Accept-Encoding": "gzip",
-        },
-    )
+    headers = {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json",
+        "Accept-Encoding": "gzip",
+    }
+    try:
+        # Die eigene Geo-Box beantwortet nur angemeldete Abfragen
+        headers.update(simbox.auth_headers(endpoint))
+    except simbox.SimboxError as exc:
+        raise OverpassError(str(exc))
+    req = urllib.request.Request(endpoint, data=payload, headers=headers)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         raw = resp.read()
         if resp.headers.get("Content-Encoding") == "gzip":

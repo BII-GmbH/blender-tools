@@ -49,7 +49,7 @@ Hilfsschaltflächen:
 | **BLOSM-Karte** | Öffnet die Auswahlkarte des BLOSM-Addons (prochitecture.com). Dort *Show selection rectangle*, Rechteck setzen, Koordinaten kopieren – anschließend hier *Aus Zwischenablage*. Braucht eine Internetverbindung |
 | **Aus Zwischenablage** | Übernimmt das kopierte Gebiet. Versteht außerdem kopierte Adressen: OpenStreetMap (`#map=…` oder `?bbox=…`), Google Maps (`@lat,lon,17z`), vier Zahlen als `west,süd,ost,nord` oder ein Koordinatenpaar `48.1, 9.79` |
 | **Gebiet von BLOSM** | Übernimmt das im BLOSM-Addon eingestellte Gebiet |
-| **In eigener Karte ansehen** | Öffnet das Gebiet in der eigenen Kartenanwendung. Die Adresse steht im Feld darunter (Voreinstellung: die selbst gehostete Overpass-Turbo-Instanz). Enthält sie `{lat}`, `{lon}` oder `{zoom}`, werden diese ersetzt; sonst wird für Overpass Turbo automatisch `C=lat;lon;zoom` angehängt |
+| **In eigener Karte ansehen** | Öffnet das Gebiet in der eigenen Kartenanwendung. Die Adresse steht im Feld darunter (Voreinstellung: die eigene Overpass-Turbo-Instanz `https://turbo.simbox.site/`, VPN und simbox-Anmeldung). Enthält sie `{lat}`, `{lon}` oder `{zoom}`, werden diese ersetzt; sonst wird für Overpass Turbo automatisch `C=lat;lon;zoom` angehängt |
 
 #### Gebiet auf der Karte auswählen
 
@@ -86,10 +86,10 @@ Weltursprung entfernt – das ist beabsichtigt und hält verschiedene Importe zu
 lagerichtig.
 
 **Eigener OSM-Server:** Unter *Strecken* lässt sich zwischen den öffentlichen
-Overpass-Servern und einer **eigenen Instanz** umschalten (Feld *Adresse*, z. B.
-`http://server/api/interpreter`). Eine eigene Instanz hat kein Rate-Limit und
-antwortet meist deutlich schneller; der Datenstand richtet sich nach dem dort
-eingespielten Auszug.
+Overpass-Servern und einer **eigenen Instanz** umschalten. Voreingestellt ist die
+eigene Geo-Box (`https://geo.simbox.site/overpass/api/interpreter`, DACH, täglich
+aktualisiert); für sie meldet sich das Addon mit dem Service-Konto an (siehe
+*Zugang zur Geo-Box*). Eine andere Instanz trägt man im Feld *Adresse* ein.
 
 ### 2. Strecken suchen
 
@@ -283,6 +283,31 @@ gewählte öffentliche Karte. Die Zoomstufe ergibt sich automatisch aus der gew�
 Auflösung; die Bildbreite ist auf 16384 Pixel begrenzt, weil Grafikkarten meist nicht
 mehr darstellen. Kacheln werden lokal zwischengespeichert, der Abruf läuft im
 Hintergrund.
+
+#### Luftbilder (Geo-Box)
+
+Unter *Karte* steht zusätzlich **Luftbilder (Geo-Box)**: die Orthophotos der Länder
+(DE, AT, CH, etwa 0,2–0,5 m) von der eigenen Geo-Box `geo.simbox.site`. Sie werden
+wie jede andere Karte auf Korridor- oder Flächengelände gelegt; das Addon fragt dazu
+jede Kartenkachel einzeln als Bildausschnitt ab, vier gleichzeitig.
+
+- Die Kartenstufe ist mindestens 16 (Kacheln von gut 400 m Kantenlänge), weil die
+  Geo-Box größere Ausschnitte aus hochauflösenden Orthophotos ablehnt.
+- Wo keine Quelle Bilder hat, bleibt die Textur schwarz; die Meldung nennt die Zahl
+  dieser Kacheln.
+- **Quellenangabe ist Pflicht:** Das Addon ermittelt, welche Landes-Orthophotos die
+  Kacheln geliefert haben, und schreibt Namensnennung und Lizenz in die Meldung, an
+  das Kartenbild (`quelle`) und in die Szene (`kartenquelle`).
+
+**Zugang zur Geo-Box:** Alle Dienste der Geo-Box verlangen eine Anmeldung; anonyme
+Abrufe beantwortet sie mit `401`. Das Addon nutzt dafür ein Service-Konto (Keycloak,
+Realm `simbox`, Client-Credentials). Der Betreiber richtet es nach dem Vorbild
+`simbox-geo-cm` ein, das Secret kommt über den Passwortmanager. Eingetragen wird es
+unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Umgebung** (*Client-ID*, voreingestellt
+`simbox-geo-blender`, und *Secret*); **Verbindung testen** meldet sich an und ruft den
+Luftbild-Katalog ab. Das Secret steht damit in den Blender-Einstellungen, nicht in der
+.blend-Datei. Ersatzweise liest das Addon die Umgebungsvariablen
+`SIMBOX_GEO_CLIENT_ID` und `SIMBOX_GEO_CLIENT_SECRET`.
 
 **Kartenqualität** wird als Stufe gewählt – Übersicht (4 m/Px), Mittel (2 m), Standard
 (1 m), Detail (0,5 m), Maximal (0,25 m) oder ein eigener Wert. Direkt darunter steht,
