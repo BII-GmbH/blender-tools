@@ -329,6 +329,12 @@ class RC_PT_ground(_Base, Panel):
         box.label(text="Kartentextur", icon='IMAGE_DATA')
         col = box.column(align=True)
         col.prop(props, "map_source")
+        if props.map_source == 'SIMBOX_LUFTBILD' and not props.tile_url.strip():
+            from . import simbox
+            if simbox.has_credentials():
+                col.label(text="Geo-Box, Service-Konto „%s“" % simbox.client_id(), icon='LOCKED')
+            else:
+                col.label(text="Zugang fehlt: Add-on-Einstellungen", icon='ERROR')
         col.prop(props, "tile_url", text="eigener Server")
         col.prop(props, "map_selected_only")
         col.prop(props, "map_quality")

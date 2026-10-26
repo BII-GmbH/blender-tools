@@ -1,6 +1,6 @@
 # Umgebung
 
-Dieses Blender-Addon baut die Umgebung einer Bahnstrecke aus offenen Daten auf: eine Kilometrierungslinie mit Kilometerangaben, Gleisachsen mit Weichen und Kreuzungen, Gelände, Kartentexturen und Gebäude.
+Dieses Blender-Addon baut die Umgebung einer Bahnstrecke aus offenen Daten auf: eine Kilometrierungslinie mit Kilometerangaben, Gleisachsen mit Weichen und Kreuzungen, Gelände, Kartentexturen (auch Luftbilder über den eigenen Geo-Server) und Gebäude.
 
 ## Installation
 
@@ -19,4 +19,4 @@ Weichen und Kreuzungen werden als V-förmige Meshes angelegt; Übergänge zwisch
 
 ## Hinweise
 
-Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (© OpenStreetMap-Mitwirkende) und von amtlichen deutschen Diensten. Gelände mit 1 m Auflösung gibt es nur für Baden-Württemberg, Bayern und Nordrhein-Westfalen. Die ausführliche Anleitung steht in [README.de.md](README.de.md).
+Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (© OpenStreetMap-Mitwirkende) und von amtlichen deutschen Diensten. Gelände mit 1 m Auflösung gibt es nur für Baden-Württemberg, Bayern und Nordrhein-Westfalen. Luftbilder und der eigene Overpass-Server brauchen ein Service-Konto der Geo-Box: Client-ID und Secret unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Umgebung** eintragen. Die ausführliche Anleitung steht in [README.de.md](README.de.md).

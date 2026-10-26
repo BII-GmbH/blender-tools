@@ -9,7 +9,7 @@ import bpy
 from bpy.props import EnumProperty, StringProperty
 from bpy.types import Operator
 
-from . import (buildings, builder, corridor as corridor_mod, dgm, maptexture, overpass,
+from . import (buildings, builder, corridor as corridor_mod, dgm, maptexture, simbox, overpass,
                railgeom, selector, tracknetwork)
 from .projection import TransverseMercator
 
@@ -82,8 +82,7 @@ def estimate_map(props, span_x, span_y, lat=51.0):
     min_res = max(res_kante, res_budget)
 
     schritt = span_x / max(1, breite)
-    max_zoom = maptexture.SOURCES[props.map_source][1] if not props.tile_url.strip() else 22
-    zoom = maptexture.choose_zoom(lat, schritt, max_zoom)
+    zoom = maptexture.zoom_for(props.map_source, lat, schritt, props.tile_url.strip())
     kachel_m = 256.0 * maptexture.tile_resolution(lat, zoom)
     # schräg verlaufende Korridore berühren deutlich mehr Kacheln als das Rechteck
     schraeg = 2.0 if span_x > 10.0 * span_y else 1.0
@@ -283,6 +282,24 @@ def _zu_gross(masse):
     return ("Die Kartentextur ergäbe %d x %d Pixel (%.0f Mio, Grenze %.0f Mio). Bitte die "
             "Auflösung gröber wählen oder das Gebiet verkleinern"
             % (masse[0], masse[1], masse[0] * masse[1] / 1e6, MAX_TEXTURE_PIXELS / 1e6))
+
+
+def luftbilder_vorbereiten(props):
+    """Vor einem Luftbild-Abruf: Zugang prüfen, Quellenliste leeren. Rückgabe Fehlertext."""
+    if props.map_source != maptexture.IMAGERY or props.tile_url.strip():
+        return None
+    if not simbox.has_credentials():
+        return ("Für Luftbilder der Geo-Box fehlt der Zugang: Client-ID und Secret unter "
+                "Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Umgebung eintragen")
+    maptexture.reset_imagery_report()
+    return None
+
+
+def luftbild_hinweis(props):
+    """Ergänzung der Meldung, wenn Kacheln ohne Luftbild geblieben sind."""
+    if props.map_source == maptexture.IMAGERY and maptexture.imagery_missing():
+        return " | %d Kachel(n) ohne Luftbild (außerhalb der Abdeckung)" % maptexture.imagery_missing()
+    return ""
 
 
 def check_tile_budget(props, count, pixels=0):
@@ -1225,9 +1242,7 @@ class RC_OT_map_texture(Operator):
                                                 map_resolution(props), props.map_max_edge)
             lat, lon, width, height, length, step = grid
             middle = float(lat[lat.shape[0] // 2, lat.shape[1] // 2])
-            source = maptexture.SOURCES[props.map_source]
-            max_zoom = source[1] if not props.tile_url.strip() else 22
-            zoom = maptexture.choose_zoom(middle, step, max_zoom)
+            zoom = maptexture.zoom_for(props.map_source, middle, step, props.tile_url.strip())
             keys = builder.corridor_tile_keys(lat, lon, zoom)
             jobs.append({"object": obj, "grid": grid, "zoom": zoom, "keys": keys})
         if not jobs and zu_gross:
@@ -1272,7 +1287,7 @@ class RC_OT_map_texture(Operator):
         by_zoom = self._keys_by_zoom(jobs)
         total = sum(len(keys) for keys in by_zoom.values())
         pixels = sum(job["grid"][2] * job["grid"][3] for job in jobs)
-        problem = check_tile_budget(props, total, pixels)
+        problem = check_tile_budget(props, total, pixels) or luftbilder_vorbereiten(props)
         if problem:
             self.report({'ERROR'}, problem)
             return {'CANCELLED'}
@@ -1306,7 +1321,9 @@ class RC_OT_map_texture(Operator):
             return {'CANCELLED'}
 
         built = self._build(context, props, self._plan, self._fetcher.tiles)
-        info = " | ".join(built) + " | Quelle: " + maptexture.credit(props.map_source)
+        quelle = maptexture.credit(props.map_source)
+        context.scene["kartenquelle"] = quelle
+        info = " | ".join(built) + " | Quelle: " + quelle + luftbild_hinweis(props)
         props.scan_info = info
         self.report({'INFO'}, info)
         _redraw(context)
@@ -1330,7 +1347,7 @@ class RC_OT_map_texture(Operator):
         by_zoom = self._keys_by_zoom(jobs)
         total = sum(len(keys) for keys in by_zoom.values())
         pixels = sum(job["grid"][2] * job["grid"][3] for job in jobs)
-        problem = check_tile_budget(props, total, pixels)
+        problem = check_tile_budget(props, total, pixels) or luftbilder_vorbereiten(props)
         if problem:
             self.report({'ERROR'}, problem)
             return {'CANCELLED'}
@@ -1343,7 +1360,9 @@ class RC_OT_map_texture(Operator):
             self.report({'ERROR'}, str(exc))
             return {'CANCELLED'}
         built = self._build(context, props, jobs, tiles)
-        info = " | ".join(built) + " | Quelle: " + maptexture.credit(props.map_source)
+        quelle = maptexture.credit(props.map_source)
+        context.scene["kartenquelle"] = quelle
+        info = " | ".join(built) + " | Quelle: " + quelle + luftbild_hinweis(props)
         props.scan_info = info
         self.report({'INFO'}, info)
         return {'FINISHED'}
@@ -1450,8 +1469,7 @@ class RC_OT_import_area(Operator):
             lat, lon, width, height, step = builder.local_latlon_grid(
                 lokal, projection, map_resolution(props), props.map_max_edge)
             middle = float(lat[lat.shape[0] // 2, lat.shape[1] // 2])
-            max_zoom = maptexture.SOURCES[props.map_source][1] if not job["tile_url"] else 22
-            zoom = maptexture.choose_zoom(middle, step, max_zoom)
+            zoom = maptexture.zoom_for(props.map_source, middle, step, job["tile_url"])
             job.update({"grid": (lat, lon, width, height, step), "map_zoom": zoom,
                         "map_keys": builder.corridor_tile_keys(lat, lon, zoom)})
         return job
@@ -1494,8 +1512,10 @@ class RC_OT_import_area(Operator):
                                              job["map_tiles"], job["map_zoom"],
                                              name="Gebietskarte", tile_url=job["tile_url"])
             builder.apply_map_material(obj, image, name="Gebietskarte")
-            info += " | Karte %d x %d Pixel, %.2f m/Pixel, Zoom %d" % (
-                width, height, step, job["map_zoom"])
+            quelle = maptexture.credit(props.map_source)
+            context.scene["kartenquelle"] = quelle
+            info += " | Karte %d x %d Pixel, %.2f m/Pixel, Zoom %d | Quelle: %s%s" % (
+                width, height, step, job["map_zoom"], quelle, luftbild_hinweis(props))
         return info
 
     def invoke(self, context, event):
@@ -1507,8 +1527,9 @@ class RC_OT_import_area(Operator):
         if job.get("too_large"):
             self.report({'ERROR'}, _zu_gross(job["too_large"]))
             return {'CANCELLED'}
-        problem = check_tile_budget(props, len(job["map_keys"]),
-                                    job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
+        problem = (check_tile_budget(props, len(job["map_keys"]),
+                                     job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
+                   or (luftbilder_vorbereiten(props) if job["map_keys"] else None))
         if problem:
             self.report({'ERROR'}, problem)
             return {'CANCELLED'}
@@ -1563,8 +1584,9 @@ class RC_OT_import_area(Operator):
         if job.get("too_large"):
             self.report({'ERROR'}, _zu_gross(job["too_large"]))
             return {'CANCELLED'}
-        problem = check_tile_budget(props, len(job["map_keys"]),
-                                    job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
+        problem = (check_tile_budget(props, len(job["map_keys"]),
+                                     job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
+                   or (luftbilder_vorbereiten(props) if job["map_keys"] else None))
         if problem:
             self.report({'ERROR'}, problem)
             return {'CANCELLED'}
@@ -1789,7 +1811,9 @@ def _selector_tiles(props):
     if eigen:
         return eigen, 22
     quelle = maptexture.SOURCES.get(props.map_source)
-    if quelle is None or props.map_source in maptexture.VOLUNTEER_SOURCES:
+    # Luftbilder brauchen eine Anmeldung, die der Browser nicht hat
+    if (quelle is None or props.map_source in maptexture.VOLUNTEER_SOURCES
+            or props.map_source == maptexture.IMAGERY):
         return selector.DEFAULT_TILES, 19
     return quelle[0], quelle[1]
 
@@ -1819,11 +1843,15 @@ class RC_OT_select_area(Operator):
     def _seite(self, props):
         bbox = get_bbox(props)
         kacheln, max_zoom = _selector_tiles(props)
-        quelle = maptexture.SOURCES.get(props.map_source)
+        if props.tile_url.strip():
+            quellenangabe = ""
+        elif kacheln == selector.DEFAULT_TILES:
+            quellenangabe = maptexture.SOURCES['BASEMAP_DE'][4]
+        else:
+            quellenangabe = maptexture.credit(props.map_source)
         return selector.build_html(
             bbox[0], bbox[1], bbox[2], bbox[3],
-            tile_url=kacheln, max_zoom=max_zoom,
-            attribution=quelle[4] if quelle and not props.tile_url.strip() else "",
+            tile_url=kacheln, max_zoom=max_zoom, attribution=quellenangabe,
             with_server=True)
 
     def invoke(self, context, event):
@@ -2096,6 +2124,27 @@ class RC_OT_organize_tracks(Operator):
         return {'FINISHED'}
 
 
+class RC_OT_simbox_test(Operator):
+    bl_idname = "railway_chainage.simbox_test"
+    bl_label = "Verbindung testen"
+    bl_description = ("Mit dem eingetragenen Service-Konto an der Geo-Box anmelden und den "
+                      "Luftbild-Katalog abrufen")
+
+    def execute(self, context):
+        try:
+            simbox.token(force=True)
+            datensaetze = simbox.catalogue(refresh=True)
+        except simbox.SimboxError as exc:
+            self.report({'ERROR'}, str(exc))
+            return {'CANCELLED'}
+        except Exception as exc:                                  # noqa: BLE001
+            self.report({'ERROR'}, "Geo-Box: %s" % exc)
+            return {'CANCELLED'}
+        self.report({'INFO'}, "Geo-Box erreichbar, angemeldet als „%s“, %d Luftbild-Datensätze"
+                    % (simbox.client_id(), len(datensaetze)))
+        return {'FINISHED'}
+
+
 class RC_OT_clear_cache(Operator):
     bl_idname = "railway_chainage.clear_cache"
     bl_label = "Zwischenspeicher leeren"
@@ -2113,7 +2162,7 @@ classes = (RC_OT_scan, RC_OT_generate, RC_OT_import_terrain, RC_OT_import_area,
            RC_OT_shrinkwrap, RC_OT_generate_rails, RC_OT_clip_scene,
            RC_OT_select_routes, RC_OT_from_blosm, RC_OT_paste_bbox,
            RC_OT_open_map, RC_OT_select_area, RC_OT_select_area_blosm,
-           RC_OT_clear_cache, RC_OT_organize_tracks)
+           RC_OT_clear_cache, RC_OT_organize_tracks, RC_OT_simbox_test)
 
 
 def register():

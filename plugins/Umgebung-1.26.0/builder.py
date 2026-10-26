@@ -528,7 +528,11 @@ def _load_tile_array(np, path, cache):
     """Kachel als uint8-Array (oben links zuerst)."""
     if path in cache:
         return cache[path]
-    image = bpy.data.images.load(path, check_existing=False)
+    try:
+        image = bpy.data.images.load(path, check_existing=False)
+    except RuntimeError:
+        cache[path] = np.zeros((0, 0, 4), dtype=np.uint8)   # unlesbare Datei
+        return cache[path]
     try:
         image.colorspace_settings.name = 'Non-Color'
         width, height = image.size
@@ -624,12 +628,17 @@ def corridor_texture(lat, lon, width, height, step, source_key, tiles, zoom, til
         cols = np.clip((px[mask] - kx * tile_size).astype(np.int64), 0, tile_size - 1)
         rows = np.clip((py[mask] - ky * tile_size).astype(np.int64), 0, tile_size - 1)
         base = _load_tile_array(np, layers["base"], cache)
+        if base.size == 0:
+            continue                # unlesbare Kachel: Stelle bleibt leer statt abzubrechen
         scale = base.shape[0] / float(tile_size)
         patch = base[np.clip((rows * scale).astype(np.int64), 0, base.shape[0] - 1),
                      np.clip((cols * scale).astype(np.int64), 0, base.shape[1] - 1)]
         overlay_path = layers.get("overlay")
         if overlay_path:
             over = _load_tile_array(np, overlay_path, cache)
+            if over.size == 0:
+                overlay_path = None
+        if overlay_path:
             oscale = over.shape[0] / float(tile_size)
             opatch = over[np.clip((rows * oscale).astype(np.int64), 0, over.shape[0] - 1),
                           np.clip((cols * oscale).astype(np.int64), 0, over.shape[1] - 1)]

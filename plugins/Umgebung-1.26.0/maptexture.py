@@ -50,6 +50,14 @@ SOURCES['BKG_ORM'] = (SOURCES['BASEMAP_DE'][0], 19, 256, SOURCES['OSM_ORM'][3],
 VOLUNTEER_SOURCES = {'OSM', 'OSM_ORM', 'BKG_ORM', 'TOPO'}
 VOLUNTEER_LIMIT = 250
 
+# Luftbilder der eigenen Geo-Box: keine URL-Vorlage, sondern ein angemeldeter
+# WMS-Abruf je Kachel (siehe simbox.py). Die Quellenangabe hängt davon ab,
+# welche Landes-Orthophotos die geladenen Kacheln tatsächlich liefern.
+IMAGERY = 'SIMBOX_LUFTBILD'
+SOURCES[IMAGERY] = ("simbox:imagery", 19, 256, None, "Luftbilder: Geo-Box (simbox)")
+_imagery_sources = set()
+_imagery_missing = [0]
+
 _TLS_CONTEXT = None
 
 
@@ -94,6 +102,22 @@ def choose_zoom(lat, resolution, max_zoom, tile_size=256):
     return max_zoom
 
 
+def zoom_range(source_key, tile_url=""):
+    """(kleinste, größte) Zoomstufe einer Quelle."""
+    if tile_url:
+        return 1, 22
+    if source_key == IMAGERY:
+        from . import simbox
+        return simbox.IMAGERY_MIN_ZOOM, simbox.IMAGERY_MAX_ZOOM
+    return 1, SOURCES[source_key][1]
+
+
+def zoom_for(source_key, lat, resolution, tile_url=""):
+    """Zoomstufe für die gewünschte Auflösung, innerhalb der Grenzen der Quelle."""
+    smallest, largest = zoom_range(source_key, tile_url)
+    return max(smallest, choose_zoom(lat, resolution, largest))
+
+
 def global_pixels(lat, lon, zoom, tile_size=256):
     """Geografische Koordinate -> globale Pixelkoordinate der Kachelpyramide."""
     n = 2 ** zoom * tile_size
@@ -108,8 +132,8 @@ def cache_dir():
     return folder
 
 
-def tile_path(source_key, layer, zoom, x, y):
-    return os.path.join(cache_dir(), "%s_%s_%d_%d_%d.png" % (source_key, layer, zoom, x, y))
+def tile_path(source_key, layer, zoom, x, y, extension="png"):
+    return os.path.join(cache_dir(), "%s_%s_%d_%d_%d.%s" % (source_key, layer, zoom, x, y, extension))
 
 
 def download_tile(url, path, timeout=30):
@@ -142,6 +166,20 @@ def fetch_tiles(source_key, keys, zoom, progress=None, tile_url=""):
     if tile_url:
         template, overlay = tile_url, None
         source_key = "custom"
+    elif source_key == IMAGERY:
+        from . import simbox
+        try:
+            paths, sources, missing = simbox.fetch_imagery_tiles(
+                keys, zoom, lambda x, y: tile_path(IMAGERY, "base", zoom, x, y, "jpg"), progress)
+        except simbox.SimboxError as exc:
+            raise MapError(str(exc))
+        _imagery_sources.update(sources)
+        _imagery_missing[0] += missing
+        try:
+            simbox.catalogue()      # Quellenangaben vorab laden, nicht im Hauptthread
+        except Exception:                                         # noqa: BLE001
+            pass
+        return {key: {"base": path} for key, path in paths.items()}
     result = {}
     total = len(keys)
     for number, (x, y) in enumerate(keys):
@@ -159,4 +197,17 @@ def fetch_tiles(source_key, keys, zoom, progress=None, tile_url=""):
 
 
 def credit(source_key):
+    if source_key == IMAGERY:
+        from . import simbox
+        return simbox.attribution(_imagery_sources)
     return SOURCES[source_key][4]
+
+
+def reset_imagery_report():
+    """Vor einem Abruf: gesammelte Luftbild-Quellen und Lücken zurücksetzen."""
+    _imagery_sources.clear()
+    _imagery_missing[0] = 0
+
+
+def imagery_missing():
+    return _imagery_missing[0]
