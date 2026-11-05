@@ -13,7 +13,9 @@ A zip of this folder does not work: the release zips contain OpenCascade, which 
 
 ## STEP import
 
-File > Import > STEP (.step, .stp). You can also drag a STEP file into the 3D viewport.
+File > Import > STEP (.step, .stp). You can also drag STEP files into the 3D viewport. Several files can be chosen or dropped at once, except with Choose Parts.
+
+The status bar shows the progress of the import. Esc cancels it; Blender reacts to Esc between steps, not while it reads the STEP file or loads the converted model.
 
 | Option | Meaning |
 |---|---|
@@ -41,8 +43,8 @@ blender -b --python step2glb.py -- model.step model.glb --exclude 0/0 0/1 --max-
 
 ## Release
 
-1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push.
-2. On GitHub: Actions > Release BII Blender Import > Run workflow.
+1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push to `main`.
+2. On GitHub: Actions > Release BII Blender Import > Run workflow, on `main`.
 
 The workflow builds one zip per platform and publishes them as the release `bii_blender_import-v<version>`. To build locally instead (Python 3.11+ and Blender 4.2+):
 

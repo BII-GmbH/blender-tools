@@ -13,7 +13,7 @@ If the old "BII Blender Tools" add-on is installed (under Add-ons, before versio
 
 ## Release
 
-1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push.
-2. On GitHub: Actions > Release BII Blender Tools > Run workflow.
+1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push to `main`.
+2. On GitHub: Actions > Release BII Blender Tools > Run workflow, on `main`.
 
 This publishes the release `bii_blender_tools-v<version>`.

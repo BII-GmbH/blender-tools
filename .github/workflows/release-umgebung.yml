@@ -1,5 +1,5 @@
 # Releases Umgebung as umgebung-v<version>, with the version from
-# plugins/Umgebung-*/blender_manifest.toml. Raise that version first, then run it from
+# plugins/Umgebung-*/blender_manifest.toml. Raise that version first, then run it on main from
 # Actions > Release Umgebung > Run workflow. See release-extension.yml.
 
 name: Release Umgebung

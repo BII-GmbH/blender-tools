@@ -1,5 +1,5 @@
 # Releases BII Blender Import as bii_blender_import-v<version>, with the version from
-# plugins/bii_blender_import/blender_manifest.toml. Raise that version first, then run it from
+# plugins/bii_blender_import/blender_manifest.toml. Raise that version first, then run it on main from
 # Actions > Release BII Blender Import > Run workflow. See release-extension.yml.
 
 name: Release BII Blender Import

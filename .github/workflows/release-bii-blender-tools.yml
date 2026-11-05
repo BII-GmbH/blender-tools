@@ -1,5 +1,5 @@
 # Releases BII Blender Tools as bii_blender_tools-v<version>, with the version from
-# plugins/bii_blender_tools/blender_manifest.toml. Raise that version first, then run it from
+# plugins/bii_blender_tools/blender_manifest.toml. Raise that version first, then run it on main from
 # Actions > Release BII Blender Tools > Run workflow. See release-extension.yml.
 
 name: Release BII Blender Tools
