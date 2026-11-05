@@ -1,0 +1,40 @@
+schema_version = "1.0.0"
+
+id = "bii_blender_import"
+version = "0.1.0"
+name = "BII Blender Import"
+tagline = "STEP import with colors, part filters and low-poly meshing"
+maintainer = "BII GmbH"
+type = "add-on"
+
+website = "https://github.com/BII-GmbH/blender-tools"
+
+tags = ["Import-Export"]
+
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+# OCP (OpenCascade) for the STEP importer. Not in git: scripts/build_extension.py
+# downloads them. One wheel per Python version: 3.11 for Blender 4.x, 3.13
+# for Blender 5.1 and newer. Blender installs the one that fits.
+platforms = ["windows-x64", "linux-x64", "macos-arm64", "macos-x64"]
+wheels = [
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp311-cp311-win_amd64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp311-cp311-manylinux_2_28_x86_64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp311-cp311-macosx_11_0_arm64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp311-cp311-macosx_11_0_x86_64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp313-cp313-win_amd64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp313-cp313-macosx_11_0_arm64.whl",
+  "./wheels/cadquery_ocp_novtk-8.0.1.1.0-cp313-cp313-macosx_11_0_x86_64.whl",
+]
+
+[permissions]
+files = "Import STEP files"
+
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "/.git/",
+  "*.zip",
+]

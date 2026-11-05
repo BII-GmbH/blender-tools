@@ -1,0 +1,25 @@
+# Releases BII Blender Tools as bii_blender_tools-v<version>, with the version from
+# plugins/bii_blender_tools/blender_manifest.toml. Raise that version first, then run it from
+# Actions > Release BII Blender Tools > Run workflow. See release-extension.yml.
+
+name: Release BII Blender Tools
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark as pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/release-extension.yml
+    with:
+      extension_dir: plugins/bii_blender_tools
+      tag_prefix: bii_blender_tools
+      title: BII Blender Tools
+      prerelease: ${{ inputs.prerelease }}

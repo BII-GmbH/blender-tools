@@ -11,16 +11,8 @@
 # You should have received a copy of the GNU General Public License
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-bl_info = {
-    "name" : "BII Blender Tools",
-    "author" : "bii",
-    "description" : "",
-    "blender" : (2, 80, 0),
-    "version" : (0, 0, 4),
-    "location" : "",
-    "warning" : "",
-    "category" : "BII Tools"
-}
+# Extension metadata (name, version, Blender version) is in
+# blender_manifest.toml.
 
 from . import close_mesh_holes
 from . import bii_functions_panel
@@ -52,6 +44,7 @@ def unregister():
     clean_reduce_ifc.unregister()
     # upgrade_to_IFC4.unregister()
     export_rail_asset.unregister()
+    fbx_export_preset.unregister()
 
 if __name__ == "__main__":
     register()

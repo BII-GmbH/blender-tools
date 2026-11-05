@@ -1,0 +1,25 @@
+# Releases Umgebung as umgebung-v<version>, with the version from
+# plugins/Umgebung-*/blender_manifest.toml. Raise that version first, then run it from
+# Actions > Release Umgebung > Run workflow. See release-extension.yml.
+
+name: Release Umgebung
+
+on:
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: Mark as pre-release
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: ./.github/workflows/release-extension.yml
+    with:
+      extension_dir: plugins/Umgebung-*
+      tag_prefix: umgebung
+      title: Umgebung
+      prerelease: ${{ inputs.prerelease }}
