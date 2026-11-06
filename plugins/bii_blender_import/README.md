@@ -1,4 +1,4 @@
-# BII Blender Import
+# BII Import
 
 Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts.
 
@@ -44,7 +44,7 @@ blender -b --python step2glb.py -- model.step model.glb --exclude 0/0 0/1 --max-
 ## Release
 
 1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push to `main`.
-2. On GitHub: Actions > Release BII Blender Import > Run workflow, on `main`.
+2. On GitHub: Actions > Release BII Import > Run workflow, on `main`.
 
 The workflow builds one zip per platform and publishes them as the release `bii_blender_import-v<version>`. To build locally instead (Python 3.11+ and Blender 4.2+):
 

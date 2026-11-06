@@ -1,4 +1,4 @@
-# Umgebung
+# BII Umgebung
 
 Dieses Blender-Addon baut die Umgebung einer Bahnstrecke aus offenen Daten auf: eine Kilometrierungslinie mit Kilometerangaben, Gleisachsen mit Weichen und Kreuzungen, Gelände, Kartentexturen und Gebäude.
 

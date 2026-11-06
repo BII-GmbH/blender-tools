@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "bii_blender_tools"
 version = "0.1.0"
-name = "BII Blender Tools"
+name = "BII Tools"
 tagline = "IFC cleanup tools and dProB rail asset export"
 maintainer = "BII GmbH"
 type = "add-on"

@@ -182,7 +182,7 @@ jobs:
           {
             echo "The latest version of every plugin in this repository. Each plugin's release workflow updates this release."
             echo
-            echo "Download the zip of the plugin you need (for BII Blender Import, the one for your system) and install it in Blender with"
+            echo "Download the zip of the plugin you need (for BII Import, the one for your system) and install it in Blender with"
             echo "Edit > Preferences > Get Extensions > Install from Disk. The changes of each version are in the plugin's own release."
             echo
             echo "## Files"

@@ -1,6 +1,6 @@
-# BII Blender Tools
+# BII Tools
 
-Blender extension with IFC cleanup tools and the dProB rail asset export. The STEP importer is a separate extension: [BII Blender Import](../bii_blender_import/README.md).
+Blender extension with IFC cleanup tools and the dProB rail asset export. The STEP importer is a separate extension: [BII Import](../bii_blender_import/README.md).
 
 ## Install
 
@@ -14,6 +14,6 @@ If the old "BII Blender Tools" add-on is installed (under Add-ons, before versio
 ## Release
 
 1. Raise `version` in [blender_manifest.toml](blender_manifest.toml) and push to `main`.
-2. On GitHub: Actions > Release BII Blender Tools > Run workflow, on `main`.
+2. On GitHub: Actions > Release BII Tools > Run workflow, on `main`.
 
 This publishes the release `bii_blender_tools-v<version>`.

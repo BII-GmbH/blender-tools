@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "bii_blender_import"
 version = "0.1.0"
-name = "BII Blender Import"
+name = "BII Import"
 tagline = "STEP import with colors, part filters and low-poly meshing"
 maintainer = "BII GmbH"
 type = "add-on"

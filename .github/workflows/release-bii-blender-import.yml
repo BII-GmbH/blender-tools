@@ -1,8 +1,8 @@
-# Releases BII Blender Import as bii_blender_import-v<version>, with the version from
+# Releases BII Import as bii_blender_import-v<version>, with the version from
 # plugins/bii_blender_import/blender_manifest.toml. Raise that version first, then run it on main from
-# Actions > Release BII Blender Import > Run workflow. See release-extension.yml.
+# Actions > Release BII Import > Run workflow. See release-extension.yml.
 
-name: Release BII Blender Import
+name: Release BII Import
 
 on:
   workflow_dispatch:
@@ -21,5 +21,5 @@ jobs:
     with:
       extension_dir: plugins/bii_blender_import
       tag_prefix: bii_blender_import
-      title: BII Blender Import
+      title: BII Import
       prerelease: ${{ inputs.prerelease }}

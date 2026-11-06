@@ -1,8 +1,8 @@
-# Releases Umgebung as umgebung-v<version>, with the version from
+# Releases BII Umgebung as umgebung-v<version>, with the version from
 # plugins/Umgebung-*/blender_manifest.toml. Raise that version first, then run it on main from
-# Actions > Release Umgebung > Run workflow. See release-extension.yml.
+# Actions > Release BII Umgebung > Run workflow. See release-extension.yml.
 
-name: Release Umgebung
+name: Release BII Umgebung
 
 on:
   workflow_dispatch:
@@ -21,5 +21,5 @@ jobs:
     with:
       extension_dir: plugins/Umgebung-*
       tag_prefix: umgebung
-      title: Umgebung
+      title: BII Umgebung
       prerelease: ${{ inputs.prerelease }}

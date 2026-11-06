@@ -2,7 +2,7 @@ schema_version = "1.0.0"
 
 id = "railway_chainage"
 version = "1.25.0"
-name = "Umgebung"
+name = "BII Umgebung"
 tagline = "Kilometrierung, Gleisachsen, Gelände und Gebäude aus OSM-Daten"
 maintainer = "Stefan Brauner"
 type = "add-on"
