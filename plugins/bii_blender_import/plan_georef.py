@@ -79,9 +79,8 @@ def estimate_from_scene(scene, obj, pg, p):
     if pos is None:
         return False
     s = pg.grid_spacing or 1
-    p.easting, p.northing = round(pos[0] / s) * s, round(pos[1] / s) * s
-    # After the values: setting them clears the flags.
-    p.easting_guessed = p.northing_guessed = True
+    import_plan.set_point_value(p, "easting", round(pos[0] / s) * s, True)
+    import_plan.set_point_value(p, "northing", round(pos[1] / s) * s, True)
     return True
 
 
@@ -100,12 +99,10 @@ def refresh_guesses(scene, obj, pg):
             continue
         e, n = scene_position(scene, obj, pg, p.x, p.y)
         if p.easting_guessed:
-            p.easting = round(e / s) * s
-            p.easting_guessed = True  # setting the value cleared it
+            import_plan.set_point_value(p, "easting", round(e / s) * s, True)
             changed += 1
         if p.northing_guessed:
-            p.northing = round(n / s) * s
-            p.northing_guessed = True
+            import_plan.set_point_value(p, "northing", round(n / s) * s, True)
             changed += 1
     return changed
 
@@ -205,7 +202,6 @@ def mouse_to_sheet(area, event, obj):
 
 
 def sheet_pixels(image):
-    import numpy as np  # noqa: F401  (plan_raster returns numpy arrays)
     from . import plan_raster
     if image is None:
         return None
@@ -286,6 +282,8 @@ class PlanPickOperator(bpy.types.Operator):
         if obj is None:
             self.finish(context)
             return {'CANCELLED'}
+        if event.type == 'RIGHTMOUSE' and event.shift:
+            return {'PASS_THROUGH'}  # Shift + right click places the 3D cursor
         if event.type in {'ESC', 'RIGHTMOUSE', 'RET'} and event.value == 'PRESS':
             self.finish(context)
             return {'FINISHED'} if self.added else {'CANCELLED'}
@@ -337,9 +335,9 @@ class PlanPickOperator(bpy.types.Operator):
             e, n = plan_geo.apply_similarity(fit, x, y)
             s = grid_spacing(pg) or 1
             known_e, known_n = known_values(pg)
-            p.easting, p.northing = round(e / s) * s, round(n / s) * s
             # An axis without values read from the plan only has guesses to go by.
-            p.easting_guessed, p.northing_guessed = known_e == 0, known_n == 0
+            import_plan.set_point_value(p, "easting", round(e / s) * s, known_e == 0)
+            import_plan.set_point_value(p, "northing", round(n / s) * s, known_n == 0)
         elif context is not None:
             obj = bpy.data.objects[self.obj_name]
             if estimate_from_scene(context.scene, obj, pg, p):
@@ -740,13 +738,11 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
             layout.label(text="Select a plan to edit it")
             return
         pg = obj.bii_plan
-        if import_plan.is_outdated(pg):
+        if import_plan.outline_off_sheet(obj):
             box = layout.box()
-            wrapped_label(box, context, "Imported with an earlier version: colors and "
-                          "transparency are not right yet", 'ERROR')
-            op = box.operator(import_plan.PlanUpdateOperator.bl_idname,
-                              text="Update All Plans", icon='FILE_REFRESH')
-            op.all_plans = True
+            wrapped_label(box, context, "The outline lies outside the sheet. Set Origin and "
+                          "Apply Rotation or Scale move the sheet against the image and the "
+                          "points: undo them, or Reset Crop", 'ERROR')
         col = layout.column(align=True)
         col.label(text=pg.image.name if pg.image else obj.name, icon='IMAGE_DATA')
         col.label(text=f"{pg.width * 1000:.0f} x {pg.height * 1000:.0f} mm, {pg.dpi:.0f} dpi")

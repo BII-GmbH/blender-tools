@@ -45,13 +45,13 @@ blender -b --python step2glb.py -- model.step model.glb --exclude 0/0 0/1 --max-
 
 File > Import > Plan (.pdf, .tif, .png, .jpg). PDF files can also be dragged into the 3D viewport.
 
-The plan becomes a plane at its true size: the sheet size comes from the file's resolution (dpi) or the PDF page size, and the object scale is the Maßstab (scale 1000 for 1:1000). Scanned PDFs are rendered at the resolution of the scan. Black-and-white plans are stored as 1-bit PNG, about as small as the original.
+The plan becomes a plane at its true size: the sheet size comes from the file's resolution (dpi) or the PDF page size, and the object scale is the Maßstab (scale 1000 for 1:1000). Scanned PDFs are rendered at the resolution of the scan, with at most 16384 pixels on the long side (GPUs show no more). Black-and-white plans are stored as 1-bit PNG, about as small as the original.
 
 | Option | Meaning |
 |---|---|
 | Maßstab 1: | Scale printed on the plan. Can be changed later in the sidebar. |
 | Orientation | Flat for Lagepläne (on the ground), Upright for Ansichten and Schnitte. |
-| White Transparent | Starts with Background 0, white paper transparent, so the lines lie over maps and models. Off starts with Background 1, the plan as printed. |
+| Background | Opacity of the white paper, see below. 0 (default): the lines lie over maps and models. 1: the plan as printed. Can be changed later in the sidebar. |
 | PDF Page | Page of a PDF with several pages. |
 | PDF Resolution | 0 uses the resolution of the scan in the PDF, or 300 dpi for vector drawings. |
 
@@ -63,17 +63,15 @@ The sidebar (N) > BII Import > Plan shows the settings of the selected plan.
 
 The mesh outline is the crop: the UV map follows the vertex positions (Geometry Nodes modifier "BII Plan Sheet"), so moving or cutting edges in Edit Mode hides parts of the sheet without moving the image. Crop Rectangle crops by two clicks on the sheet. Full Sheet shows the whole sheet again, for example to read the Legende, and keeps the crop.
 
-Do not apply the object's scale: the scale is the Maßstab.
+The mesh coordinates are sheet coordinates: image, crop and grid crosses depend on them. Do not apply the object's scale or rotation (the scale is the Maßstab), and do not use Set Origin. The panel warns when the outline lies outside the sheet; undo the step, or use Reset Crop.
 
 Opacity fades the whole plan, Background sets how much of its white paper shows:
 
 - Background 0 lays the plan on the scene like a print on tracing paper: white vanishes, black stays black, colors tint what lies below (multiply). Good for line plans over maps.
 - Background 1 shows the plan as printed, opaque. Good for plans with aerial images.
-- Values in between mix the two in Material Preview and Rendered view. Solid view cannot mix: it hides the paper below 0.5 and shows it from 0.5 on. Solid view also shows pixels this light in every channel (230 of 255) as paper.
+- Values in between mix the two in Material Preview and Rendered view. Solid view cannot mix: it hides the paper below 0.5 and shows it from 0.5 on. Solid view also shows pixels this light in every channel (230 of 255) as paper. Copies of a plan (Shift+D) share its image, so in Solid view they show the paper alike; Opacity and Background in Material Preview and Rendered view stay separate.
 
 The plan's colors stay exactly as in the file. In Material Preview and Rendered view, Blender's default View Transform AgX makes them paler and lowers the contrast; the panel offers to switch the scene to Standard (Render Properties > Color Management), which shows them as printed.
-
-Plans imported with an earlier version show a warning in the panel with Update All Plans. It writes their image again from the source file (with the plan's own colors) and gives them the current material; crop, points and placement stay. The source file must still be where it was imported from.
 
 ### Georeference
 
@@ -112,6 +110,16 @@ The coordinates go through WGS84 with the 7-parameter transformations PROJ uses 
 For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
 
 The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3-Clause, PDFium BSD-3-Clause) for PDF files.
+
+## Tests
+
+The plan import has tests in [tests/bii_blender_import](../../tests/bii_blender_import). They run in Blender's Python with Pillow and pypdfium2 from `wheels/` (download them first with the build script, see below):
+
+```
+blender -b --factory-startup --python-exit-code 1 --python tests/bii_blender_import/run_in_blender.py
+```
+
+`python -m unittest discover tests/bii_blender_import` runs the coordinate tests without Blender and skips the others.
 
 ## Release
 

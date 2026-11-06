@@ -5,8 +5,8 @@ large image; the page is rendered at that image's resolution, so no detail
 is lost or invented. Other formats are read with Pillow, which also reads
 the 1-bit CCITT compressed TIFFs of scanned plans.
 
-The result is written as PNG for Blender, with the plan's own colors. With
-"white transparent", its alpha marks the white paper for Solid view.
+The result is written as PNG for Blender, with the plan's own colors. Its
+alpha marks the white paper for Solid view.
 """
 
 import io
@@ -15,9 +15,10 @@ import os
 
 PDF_EXTENSIONS = {".pdf"}
 RASTER_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg", ".bmp"}
-EXTENSIONS = PDF_EXTENSIONS | RASTER_EXTENSIONS
 
-MAX_PIXELS = 400_000_000  # beyond this, the PDF is rendered at a lower resolution
+# Pixels on the long side of a rendered PDF page. GPUs show no more, so
+# Blender would scale a larger image down for the viewport anyway.
+MAX_SIDE = 16384
 PAPER_LEVEL = 230  # pixels this light in every channel count as paper
 
 
@@ -51,9 +52,9 @@ def pdf_page_count(path):
 def _scan_resolution(page):
     """Resolution of the largest image on the page, if it covers most of it.
 
-    Returns (dpi, gray), or (None, False) for pages without such an image
-    (vector drawings). The image matrix maps the image's unit square onto
-    the page, so its column lengths are the drawn size in points.
+    Returns the dpi, or None for pages without such an image (vector
+    drawings). The image matrix maps the image's unit square onto the page,
+    so its column lengths are the drawn size in points.
     """
     import pypdfium2.raw as raw
     page_w, page_h = page.get_size()
@@ -65,15 +66,17 @@ def _scan_resolution(page):
             continue
         px_w, px_h = obj.get_px_size()
         dpi = max(px_w / (w_pt / 72), px_h / (h_pt / 72))
-        meta = obj.get_metadata()
-        gray = meta.bits_per_pixel <= 8 and meta.colorspace in (1, 2)  # DeviceGray, CalGray
-        if best is None or dpi > best[0]:
-            best = (dpi, gray)
-    return best or (None, False)
+        best = dpi if best is None else max(best, dpi)
+    return best
 
 
 def load_pdf(path, page_index=0, dpi=0.0):
-    """Render one PDF page. dpi 0 means the scan's own resolution, else 300."""
+    """Render one PDF page. dpi 0 means the scan's own resolution, else 300.
+
+    The page is rendered in color even for gray scans: stamps or revision
+    clouds drawn over the scan may be colored. write_png stores gray
+    results as grayscale.
+    """
     import pypdfium2 as pdfium
     pdf = pdfium.PdfDocument(path)
     try:
@@ -81,16 +84,18 @@ def load_pdf(path, page_index=0, dpi=0.0):
             raise ValueError(f"The PDF has {len(pdf)} pages, there is no page {page_index + 1}")
         page = pdf[page_index]
         page_w, page_h = page.get_size()
-        scan_dpi, gray = _scan_resolution(page)
+        scan_dpi = _scan_resolution(page)
         note = ""
         if dpi <= 0:
             dpi = round(scan_dpi) if scan_dpi else 300.0
             note = f"scanned at {dpi:.0f} dpi" if scan_dpi else "vector page, rendered at 300 dpi"
-        pixels = page_w / 72 * dpi * page_h / 72 * dpi
-        if pixels > MAX_PIXELS:
-            dpi *= math.sqrt(MAX_PIXELS / pixels)
-            note = f"rendered at {dpi:.0f} dpi to stay below {MAX_PIXELS / 1e6:.0f} megapixels"
-        bitmap = page.render(scale=dpi / 72, grayscale=gray)
+        long_side = max(page_w, page_h) / 72 * dpi
+        if long_side > MAX_SIDE:
+            # Slightly less, as the pixel size is rounded up.
+            dpi *= MAX_SIDE / long_side * (1 - 1e-6)
+            note = (f"rendered at {dpi:.0f} dpi, {MAX_SIDE} pixels on the long side: GPUs "
+                    "show no more")
+        bitmap = page.render(scale=dpi / 72)
         image = bitmap.to_pil()
         # The real resolution after rounding the pixel size.
         return Sheet(image, image.width / (page_w / 72), image.height / (page_h / 72), note)
@@ -128,59 +133,74 @@ def _is_black_and_white(gray):
     return (hist[0] + hist[255]) >= 0.995 * total
 
 
-def write_png(sheet, path, white_transparent=True):
-    """Write the sheet as PNG. Returns a short description of the format."""
-    import numpy as np
+def _on_white(image):
+    """The image as "L" or "RGB", with transparent parts laid on white paper.
+
+    Plans exported from CAD often have a transparent background whose
+    color is black; dropping the alpha would turn the paper black.
+    """
     from PIL import Image
-    image = sheet.image
-    if image.mode in ("1", "L", "LA", "I", "I;16", "F"):
+    if image.mode == "P":
+        image = image.convert("RGBA" if "transparency" in image.info else "RGB")
+    elif image.mode in ("1", "I", "I;16", "F"):
         image = image.convert("L")
+    if image.mode in ("L", "RGB"):
+        return image
+    if image.mode in ("LA", "La", "PA", "RGBA", "RGBa"):
+        rgba = image.convert("RGBA")
+        paper = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
+        paper.alpha_composite(rgba)
+        return paper.convert("RGB")
+    return image.convert("RGB")  # CMYK, YCbCr, ...
+
+
+def write_png(sheet, path):
+    """Write the sheet as PNG. Returns a short description of the format.
+
+    The colors stay as they are; the shader uses them unchanged. The alpha
+    only marks the paper (pixels this light in every channel) for Solid
+    view, which cuts the image off at its alpha.
+    """
+    from PIL import Image, ImageChops
+    image = _on_white(sheet.image)
+    if image.mode == "RGB":
+        r, g, b = image.split()
+        if (ImageChops.difference(r, g).getbbox() is None
+                and ImageChops.difference(g, b).getbbox() is None):
+            image = r  # gray, stored with one channel
+            lowest = r
+        else:
+            lowest = ImageChops.darker(ImageChops.darker(r, g), b)
+        del r, g, b
     else:
-        image = image.convert("RGB")
-        r, g, b = (np.asarray(c) for c in image.split())
-        if np.array_equal(r, g) and np.array_equal(g, b):
-            image = Image.fromarray(r)
-    # The colors stay as they are; the shader uses them unchanged. With
-    # white transparent, the alpha only marks the paper (near-white pixels)
-    # for Solid view, which cuts the image off at its alpha.
+        lowest = image
     if image.mode == "L" and _is_black_and_white(image):
-        bw = image.point(lambda v: 255 if v >= 128 else 0).convert("1")
-        if white_transparent:
-            # 1-bit palette, white transparent.
-            index = image.point(lambda v: 1 if v >= 128 else 0)
-            pal = Image.frombytes("P", image.size, index.tobytes())
-            pal.putpalette([0, 0, 0, 255, 255, 255])
-            pal.save(path, transparency=bytes([255, 0]), bits=1, optimize=True)
-            return "black and white, white transparent"
-        bw.save(path, optimize=True)
+        # 1-bit palette, white transparent.
+        index = image.point(lambda v: 1 if v >= 128 else 0)
+        pal = Image.frombytes("P", image.size, index.tobytes())
+        pal.putpalette([0, 0, 0, 255, 255, 255])
+        pal.save(path, transparency=bytes([255, 0]), bits=1, optimize=True)
         return "black and white"
-    if not white_transparent:
-        image.save(path)
-        return "grayscale" if image.mode == "L" else "color"
-    pixels = np.asarray(image)
-    lowest = pixels if pixels.ndim == 2 else pixels.min(axis=2)
-    alpha = np.where(lowest >= PAPER_LEVEL, 0, 255).astype(np.uint8)
+    alpha = lowest.point(lambda v: 0 if v >= PAPER_LEVEL else 255)
     if image.mode == "L":
-        Image.merge("LA", (image, Image.fromarray(alpha))).save(path)
-        return "grayscale, white transparent"
-    image.putalpha(Image.fromarray(alpha))
+        Image.merge("LA", (image, alpha)).save(path)
+        return "grayscale"
+    image.putalpha(alpha)
     image.save(path)
-    return "color, white transparent"
+    return "color"
 
 
 def gray_pixels(data_or_path):
-    """Grayscale pixels (numpy uint8, row 0 at the top) of a PNG file or bytes."""
+    """Grayscale pixels (numpy uint8, row 0 at the top) of a PNG file or bytes.
+
+    The alpha is ignored: it only marks pixels as light as paper, whose
+    colors stay in the PNG, and snapping looks for dark pixels.
+    """
     import numpy as np
     from PIL import Image
     Image.MAX_IMAGE_PIXELS = None
     source = io.BytesIO(data_or_path) if isinstance(data_or_path, (bytes, bytearray)) else data_or_path
     with Image.open(source) as image:
-        if image.mode in ("LA", "RGBA", "PA") or "transparency" in image.info:
-            # Transparent white: put the image on white before graying.
-            rgba = image.convert("RGBA")
-            white = Image.new("RGBA", rgba.size, (255, 255, 255, 255))
-            white.alpha_composite(rgba)
-            return np.asarray(white.convert("L"))
         return np.asarray(image.convert("L"))
 
 

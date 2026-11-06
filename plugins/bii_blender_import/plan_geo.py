@@ -40,11 +40,6 @@ CRS_ITEMS = [
      "the zone in front (32xxxxxx), or 6 digits and the zone set below"),
 ]
 
-# Height systems. They do not affect the position on the ground, so the
-# plugin needs none of them; they only appear here to recognize them.
-HEIGHT_SYSTEMS = ("DHHN92", "DHHN2016", "DHHN12", "NHN", "NN", "HN")
-
-
 def check_coordinates(crs, points, utm_zone):
     """Hints about entered coordinates: (info line, list of warnings).
 
@@ -441,14 +436,3 @@ def similarity_angle(fit):
 
 
 STANDARD_SPACINGS = (1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 1)
-
-
-def guess_grid_spacing(values):
-    """Largest common grid spacing of the given coordinate values (meters)."""
-    diffs = {round(abs(a - b)) for a in values for b in values if round(abs(a - b))}
-    if not diffs:
-        return 0
-    for s in STANDARD_SPACINGS:
-        if all(d % s == 0 for d in diffs):
-            return s
-    return 0

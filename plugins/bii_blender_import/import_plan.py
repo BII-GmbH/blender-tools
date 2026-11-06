@@ -25,12 +25,10 @@ from bpy_extras.io_utils import ImportHelper
 from . import plan_geo
 
 NODE_GROUP = "BII Plan Sheet"
-OLD_NODE_GROUPS = ("BII Plan Sheet 2",)  # 0.2 prototype, with a paper face
 MODIFIER = "BII Plan Sheet"
 OPACITY_NODE = "Opacity"
 BACKGROUND_NODE = "Background"
-SHADER_VERSION = 3  # material["bii_plan_shader"]; older materials are rebuilt
-IMAGE_VERSION = 2  # PlanSettings.image_version; 2: the PNG keeps the plan's own colors
+SHEET_TOLERANCE = 1e-5  # paper meters a vertex may lie outside the sheet
 
 
 # ---------------------------------------------------------------- properties
@@ -60,6 +58,17 @@ def _points_changed(self, context):
     if obj and getattr(obj, "bii_plan", None):
         plan_georef.update_residuals(obj.bii_plan)
     _redraw(self, context)
+
+
+def set_point_value(point, axis, value, guessed):
+    """Set the "easting" or "northing" of a PlanPoint from code.
+
+    Typing a value in the sidebar marks it as read from the plan: the
+    property's update clears its guessed flag. Code sets values through this
+    function, which sets the flag after the value.
+    """
+    setattr(point, axis, value)
+    setattr(point, axis + "_guessed", guessed)
 
 
 def _easting_edited(self, context):
@@ -130,24 +139,57 @@ def _set_full_sheet(self, context):
     _redraw(self, context)
 
 
+def own_material(obj):
+    """The plan's material, copied first if another plan uses it too.
+
+    Shift+D links the material by default, so without the copy the Opacity
+    and Background of one plan would change its copies as well. The Geometry
+    Nodes modifier sets the material, so the copy goes there.
+    """
+    pg = obj.bii_plan
+    mat = pg.material
+    if mat is None:
+        return None
+    if not any(o is not obj and o.bii_plan.material == mat
+               for o in bpy.data.objects if o.bii_plan.is_plan):
+        return mat
+    copy = mat.copy()
+    pg.material = copy
+    mod = obj.modifiers.get(MODIFIER)
+    if mod:
+        _set_modifier_input(mod, "Material", copy)
+    if obj.data.users == 1:  # not a linked duplicate (Alt+D): its slots are its own
+        for i, slot_mat in enumerate(obj.data.materials):
+            if slot_mat == mat:
+                obj.data.materials[i] = copy
+    obj.update_tag()
+    return copy
+
+
 def _set_opacity(self, context):
-    upgrade_plan(self.id_data)
-    self.material.node_tree.nodes[OPACITY_NODE].outputs[0].default_value = self.opacity
+    mat = own_material(self.id_data)
+    if mat is None:
+        return
+    mat.node_tree.nodes[OPACITY_NODE].outputs[0].default_value = self.opacity
     # Solid view does not run the shader; it takes the opacity from the
     # material's viewport color.
-    self.material.diffuse_color = (1.0, 1.0, 1.0, self.opacity)
+    mat.diffuse_color = (1.0, 1.0, 1.0, self.opacity)
 
 
 def _set_background(self, context):
-    upgrade_plan(self.id_data)
-    self.material.node_tree.nodes[BACKGROUND_NODE].outputs[0].default_value = self.background
+    mat = own_material(self.id_data)
+    if mat is None:
+        return
+    mat.node_tree.nodes[BACKGROUND_NODE].outputs[0].default_value = self.background
     update_solid_paper(self)
 
 
 def update_solid_paper(pg):
     """Solid view cuts the image off at its alpha instead of blending it:
-    from Background 0.5 on, it shows the image without alpha, with its paper."""
-    if pg.image is not None and pg.white_transparent:
+    from Background 0.5 on, it shows the image without alpha, with its paper.
+    Copies of a plan share its image, so in Solid view they show the paper
+    alike."""
+    if pg.image is not None:
         pg.image.alpha_mode = 'NONE' if pg.background >= 0.5 else 'STRAIGHT'
 
 
@@ -181,9 +223,6 @@ class PlanSettings(bpy.types.PropertyGroup):
         description="Opacity of the white paper. 0: the plan lies on the scene like a print "
         "on tracing paper (white vanishes, colors tint what is below). 1: the plan as "
         "printed. Solid view shows the paper from 0.5 on")
-    white_transparent: BoolProperty(
-        description="The image's alpha marks the white paper, for Solid view")
-    image_version: IntProperty(description="Format of the plan's PNG; 0: from the prototype")
     page: IntProperty(default=1, min=1, description="PDF page of the plan")
 
     crs: EnumProperty(name="Coordinates", items=plan_geo.CRS_ITEMS, default='DB_REF',
@@ -322,13 +361,9 @@ def plan_material(name, image):
     Solid view.
     """
     mat = bpy.data.materials.new(name)
-    mat["bii_plan_shader"] = SHADER_VERSION
     mat.use_nodes = True
     mat.use_backface_culling = False
-    if hasattr(mat, "surface_render_method"):
-        mat.surface_render_method = 'BLENDED'  # colored transparency needs Blended
-    else:
-        mat.blend_method = 'BLEND'
+    mat.surface_render_method = 'BLENDED'  # colored transparency needs Blended
     nodes, links = mat.node_tree.nodes, mat.node_tree.links
     nodes.clear()
     tex = nodes.new('ShaderNodeTexImage')
@@ -381,51 +416,10 @@ def plan_material(name, image):
     return mat
 
 
-def upgrade_plan(obj):
-    """Give plans from earlier prototype versions the current material and nodes."""
-    pg = obj.bii_plan
-    if pg.material is None or pg.material.get("bii_plan_shader", 0) < SHADER_VERSION:
-        old = pg.material
-        mat = plan_material(obj.name, pg.image)
-        mat.node_tree.nodes[OPACITY_NODE].outputs[0].default_value = pg.opacity
-        mat.node_tree.nodes[BACKGROUND_NODE].outputs[0].default_value = pg.background
-        mat.diffuse_color = (1.0, 1.0, 1.0, pg.opacity)
-        slot = obj.data.materials.find(old.name) if old is not None else -1
-        if slot >= 0:
-            obj.data.materials[slot] = mat
-        else:
-            obj.data.materials.append(mat)
-        pg.material = mat
-        if pg.image is not None and pg.image.alpha_mode != 'NONE':
-            pg.white_transparent = True
-    mod = obj.modifiers.get(MODIFIER)
-    if mod and _old_group(mod):
-        mod.node_group = sheet_node_group()
-        _set_modifier_input(mod, "Width", pg.width)
-        _set_modifier_input(mod, "Height", pg.height)
-        _set_modifier_input(mod, "Full Sheet", pg.full_sheet)
-    if mod:
-        _set_modifier_input(mod, "Material", pg.material)
-    update_solid_paper(pg)
-
-
-def _old_group(mod):
-    # "BII Plan Sheet 2", also as "BII Plan Sheet 2.001" after appending
-    return mod.node_group is not None and mod.node_group.name.split(".")[0] in OLD_NODE_GROUPS
-
-
-def is_outdated(pg):
-    material = pg.material
-    mod = pg.id_data.modifiers.get(MODIFIER)
-    return (pg.image_version < IMAGE_VERSION or material is None
-            or material.get("bii_plan_shader", 0) < SHADER_VERSION
-            or (mod is not None and _old_group(mod)))
-
-
-def load_plan_image(png_path, white_transparent):
+def load_plan_image(png_path):
     image = bpy.data.images.load(png_path)
     # The alpha marks paper for Solid view; the shader lays the image on white.
-    image.alpha_mode = 'STRAIGHT' if white_transparent else 'NONE'
+    image.alpha_mode = 'STRAIGHT'
     if bpy.data.filepath:
         try:
             image.filepath = bpy.path.relpath(png_path)
@@ -434,59 +428,6 @@ def load_plan_image(png_path, white_transparent):
     else:
         image.pack()
     return image
-
-
-def update_plan(obj):
-    """Bring a plan from an earlier version up to date, keeping crop, points and place.
-
-    Rebuilds material and nodes, and writes the PNG again from the source
-    file, at the same resolution, so the sheet keeps its size. Returns a
-    list of notes for the user. Raises OSError if the source is gone.
-    """
-    from . import plan_raster
-    pg = obj.bii_plan
-    notes = []
-    if pg.image_version < IMAGE_VERSION:
-        source = bpy.path.abspath(pg.source)
-        if not os.path.isfile(source):
-            raise OSError(f"The source file {pg.source} is not there any more. Import the plan "
-                          "again, or put the file back")
-        if pg.material is None or pg.material.get("bii_plan_shader", 0) < SHADER_VERSION:
-            # Plans from before White Transparent was stored had it on unless
-            # their image ignored alpha.
-            pg.white_transparent = pg.image is None or pg.image.alpha_mode != 'NONE'
-        page_index, page_count = pg.page - 1, 1
-        is_pdf = os.path.splitext(source)[1].lower() in plan_raster.PDF_EXTENSIONS
-        if is_pdf:
-            page_count = plan_raster.pdf_page_count(source)
-            if pg.page == 1 and page_count > 1 and obj.name.rsplit(" p", 1)[-1].isdigit():
-                page_index = int(obj.name.rsplit(" p", 1)[-1]) - 1  # " p3": page 3
-        sheet = plan_raster.load(source, page_index, pg.dpi if is_pdf else 0.0)
-        if abs(sheet.width_m - pg.width) > 1e-4 or abs(sheet.height_m - pg.height) > 1e-4:
-            notes.append(f"the new image is {sheet.width_m * 1000:.1f} x "
-                         f"{sheet.height_m * 1000:.1f} mm, the old one was "
-                         f"{pg.width * 1000:.1f} x {pg.height * 1000:.1f} mm: check the plan")
-        png = plan_output_path(source, page_index, page_count)
-        plan_raster.write_png(sheet, png, pg.white_transparent)
-        old = pg.image
-        pg.image = load_plan_image(png, pg.white_transparent)
-        pg.page = page_index + 1
-        pg.image_version = IMAGE_VERSION
-        if old is not None and pg.material is not None:
-            for node in pg.material.node_tree.nodes:
-                if node.type == 'TEX_IMAGE' and node.image == old:
-                    node.image = pg.image
-        if old is not None and old.users == 0:
-            bpy.data.images.remove(old)  # the old PNG made by the plugin
-        from . import plan_georef
-        plan_georef._pixel_cache.clear()
-    if pg.material is not None and pg.material.get("bii_plan_shader", 0) >= SHADER_VERSION:
-        pg.material.node_tree.nodes[OPACITY_NODE].outputs[0].default_value = pg.opacity
-    upgrade_plan(obj)
-    pg.material.node_tree.nodes[BACKGROUND_NODE].outputs[0].default_value = pg.background
-    pg.material.diffuse_color = (1.0, 1.0, 1.0, pg.opacity)
-    obj.update_tag()
-    return notes
 
 
 def set_sheet_rectangle(obj, x0, y0, x1, y1):
@@ -504,6 +445,26 @@ def set_sheet_rectangle(obj, x0, y0, x1, y1):
         co = mesh.vertices[loop.vertex_index].co
         uv.data[loop.index].uv = (co.x / pg.width, co.y / pg.height)
     mesh.update()
+
+
+def outline_off_sheet(obj):
+    """True if vertices of the mesh lie outside the sheet.
+
+    The UV map and the points are in the mesh's own coordinates, which are
+    sheet coordinates. Set Origin and Apply Rotation or Scale move the
+    vertices, and then image and points no longer match the sheet.
+    """
+    mesh, pg = obj.data, obj.bii_plan
+    if obj.mode == 'EDIT' or not mesh.vertices:
+        return False
+    import numpy as np
+    co = np.empty(len(mesh.vertices) * 3, dtype=np.float32)
+    mesh.vertices.foreach_get("co", co)
+    co = co.reshape(-1, 3)
+    t = SHEET_TOLERANCE
+    return bool((co[:, 0] < -t).any() or (co[:, 0] > pg.width + t).any()
+                or (co[:, 1] < -t).any() or (co[:, 1] > pg.height + t).any()
+                or (np.abs(co[:, 2]) > t).any())
 
 
 def plan_output_path(source, page_index, page_count):
@@ -528,11 +489,11 @@ def plan_output_path(source, page_index, page_count):
 
 
 def create_plan_object(context, sheet, png_path, source, massstab, orientation, page_index=0,
-                       page_count=1, white_transparent=True):
+                       page_count=1, background=0.0):
     name = os.path.splitext(os.path.basename(source))[0]
     if page_count > 1:
         name += f" p{page_index + 1}"
-    image = load_plan_image(png_path, white_transparent)
+    image = load_plan_image(png_path)
 
     mesh = bpy.data.meshes.new(name)
     obj = bpy.data.objects.new(name, mesh)
@@ -545,15 +506,12 @@ def create_plan_object(context, sheet, png_path, source, massstab, orientation, 
     pg.height = sheet.height_m
     pg.dpi = (sheet.dpi_x + sheet.dpi_y) / 2
     pg.page = page_index + 1
-    pg.image_version = IMAGE_VERSION
     set_sheet_rectangle(obj, 0, 0, sheet.width_m, sheet.height_m)
 
     mat = plan_material(name, image)
     mesh.materials.append(mat)
     pg.material = mat
-    pg.white_transparent = white_transparent
-    if not white_transparent:
-        pg.background = 1.0
+    pg.background = background
 
     mod = obj.modifiers.new(MODIFIER, 'NODES')
     mod.node_group = sheet_node_group()
@@ -591,10 +549,11 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         name="Orientation",
         items=[('FLAT', "Flat", "Lageplan: lies on the ground (XY)"),
                ('UPRIGHT', "Upright", "Ansicht or Schnitt: stands upright (XZ)")])
-    white_transparent: BoolProperty(name="White Transparent", default=True,
-                                    description="Start with Background 0: white paper "
-                                    "transparent, the lines over maps and models. Off: start "
-                                    "with Background 1, the plan as printed")
+    background: FloatProperty(
+        name="Background", min=0, max=1, default=0, subtype='FACTOR',
+        description="Opacity of the white paper, can be changed later. 0: the plan lies on "
+        "the scene like a print on tracing paper, the lines over maps and models. 1: the "
+        "plan as printed")
     page: IntProperty(name="PDF Page", default=1, min=1)
     dpi: FloatProperty(name="PDF Resolution", default=0, min=0, soft_max=1200,
                        description="Pixels per inch for PDF pages. 0: the resolution "
@@ -605,7 +564,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         layout.use_property_split = True
         layout.prop(self, "massstab")
         layout.prop(self, "orientation")
-        layout.prop(self, "white_transparent")
+        layout.prop(self, "background")
         col = layout.column(heading="PDF")
         col.prop(self, "page")
         col.prop(self, "dpi")
@@ -621,7 +580,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
                 context.window.cursor_set('WAIT')
             sheet = plan_raster.load(path, page_index, self.dpi)
             png = plan_output_path(path, page_index, page_count)
-            kind = plan_raster.write_png(sheet, png, self.white_transparent)
+            kind = plan_raster.write_png(sheet, png)
         except ImportError as e:
             traceback.print_exc()
             self.report({'ERROR'}, f"Pillow or pypdfium2 cannot be loaded: {e}")
@@ -634,7 +593,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
             if context.window:
                 context.window.cursor_set('DEFAULT')
         obj = create_plan_object(context, sheet, png, path, self.massstab, self.orientation,
-                                 page_index, page_count, self.white_transparent)
+                                 page_index, page_count, self.background)
         w, h = sheet.image.size
         text = (f"{obj.name}: {w} x {h} px, {sheet.width_m * 1000:.0f} x "
                 f"{sheet.height_m * 1000:.0f} mm, {kind}")
@@ -663,55 +622,6 @@ class PlanCropResetOperator(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PlanUpdateOperator(bpy.types.Operator):
-    """Bring plans imported with an earlier version up to date: new material, and the
-    image written again from the source file with the plan's own colors. Crop, points
-    and placement stay"""
-    bl_idname = "bii_plan.update"
-    bl_label = "Update Plans"
-    bl_options = {'REGISTER', 'UNDO'}
-
-    all_plans: BoolProperty(name="All Plans", default=True,
-                            description="All outdated plans in the file, not only the "
-                            "active one")
-
-    @classmethod
-    def poll(cls, context):
-        return context.mode == 'OBJECT'
-
-    def execute(self, context):
-        if self.all_plans:
-            plans = [o for o in bpy.data.objects
-                     if getattr(o, "bii_plan", None) and o.bii_plan.is_plan
-                     and is_outdated(o.bii_plan)]
-        else:
-            obj = context.object
-            plans = [obj] if obj is not None and obj.bii_plan.is_plan else []
-        if not plans:
-            self.report({'INFO'}, "All plans are up to date")
-            return {'CANCELLED'}
-        done, problems = [], []
-        if context.window:
-            context.window.cursor_set('WAIT')
-        try:
-            for obj in plans:
-                try:
-                    notes = update_plan(obj)
-                    done.append(obj.name)
-                    problems += [f"{obj.name}: {n}" for n in notes]
-                except (OSError, ValueError, ImportError) as e:
-                    traceback.print_exc()
-                    problems.append(f"{obj.name}: {e}")
-        finally:
-            if context.window:
-                context.window.cursor_set('DEFAULT')
-        text = f"Updated {len(done)} of {len(plans)} plans"
-        if problems:
-            text += ". " + "; ".join(problems)
-        self.report({'WARNING'} if problems else {'INFO'}, text)
-        return {'FINISHED'} if done else {'CANCELLED'}
-
-
 class IO_FH_bii_plan(bpy.types.FileHandler):
     """Drop PDF plans into the 3D viewport"""
     bl_idname = "IO_FH_bii_plan"
@@ -729,7 +639,7 @@ def menu_func_import(self, context):
 
 
 classes = (PlanPoint, AlignPair, PlanSettings, ImportPlanOperator, PlanCropResetOperator,
-           PlanUpdateOperator, IO_FH_bii_plan)
+           IO_FH_bii_plan)
 
 
 def register():
