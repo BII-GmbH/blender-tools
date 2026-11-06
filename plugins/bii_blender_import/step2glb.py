@@ -75,6 +75,16 @@ DEFAULT_ANGLE = 22.5  # degrees
 # --- Reading -----------------------------------------------------------------
 
 def read_step(path):
+    return run(read_step_steps(path))
+
+
+def read_step_steps(path):
+    """read_step with progress: yields once, between parsing and transfer.
+
+    Both are single OCCT calls without progress that Python can follow
+    (OCP cannot subclass Message_ProgressIndicator). Parsing takes about a
+    fifth of the time: 8 of 45 s on a 143 MB SolidWorks file.
+    """
     app = XCAFApp_Application.GetApplication_s()
     doc = TDocStd_Document(TCollection_ExtendedString("MDTV-XCAF"))
     app.InitDocument(doc)
@@ -86,6 +96,7 @@ def read_step(path):
     reader.SetLayerMode(True)
     if reader.ReadFile(path) != IFSelect_RetDone:
         raise RuntimeError(f"Cannot read STEP file: {path}")
+    yield 0.2
     if not reader.Transfer(doc, Message_ProgressRange()):
         raise RuntimeError("STEP transfer failed")
     return doc

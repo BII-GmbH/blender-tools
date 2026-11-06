@@ -60,6 +60,36 @@ def format_length(context, meters):
     return bpy.utils.units.to_string(units.system, 'LENGTH', meters, precision=3)
 
 
+def labeled(steps, text, start=0.0, end=1.0):
+    """Map the progress of step2glb steps to start..end and add text; return their result.
+
+    Yields start first, so that the text is shown before the first step runs.
+    """
+    yield start, text
+    while True:
+        try:
+            fraction = next(steps)
+        except StopIteration as done:
+            return done.value
+        yield start + (end - start) * fraction, text
+
+
+def reading_text(path):
+    return f"Reading {os.path.basename(path)} ({os.path.getsize(path) / 1e6:.0f} MB)"
+
+
+def read_parts(step2glb, path):
+    """Read a STEP file for the parts dialog. Yields (progress, text), returns (document, tree)."""
+    doc = yield from labeled(step2glb.read_step_steps(path), reading_text(path), 0.0, 0.95)
+    yield 0.95, "Reading the assembly tree"
+    return doc, step2glb.assembly_tree(doc)
+
+
+# Share of reading in the import of a file, measured on a 143 MB SolidWorks
+# file: 45 s reading, then about as long for converting and loading.
+READ_SHARE = 0.4
+
+
 def import_steps(op, context, step2glb, files):
     """Read, convert and load STEP files. Yields (progress, text), returns report lines.
 
@@ -70,27 +100,23 @@ def import_steps(op, context, step2glb, files):
     max_size = op.small_size * context.scene.unit_settings.scale_length if op.drop_small else None
     report = []
     for i, (path, doc, exclude) in enumerate(files):
-        def overall(fraction):
-            return (i + fraction) / len(files)
+        def overall(steps, text, start, end):
+            return labeled(steps, text, (i + start) / len(files), (i + end) / len(files))
 
         name = os.path.basename(path)
+        convert_start = 0.0
         if doc is None:
-            yield overall(0.0), f"Reading {name}"
-            doc = step2glb.read_step(path)
+            doc = yield from overall(step2glb.read_step_steps(path), reading_text(path),
+                                     0.0, READ_SHARE)
+            convert_start = READ_SHARE
         fd, glb = tempfile.mkstemp(suffix=".glb")
         os.close(fd)
         try:
             steps = step2glb.convert_steps(doc, glb, op.deflection, math.degrees(op.angle),
                                            op.up_axis.lower(),
                                            step2glb.Filter(set(exclude), max_size, op.drop_hidden))
-            while True:
-                try:
-                    fraction = next(steps)
-                except StopIteration as done:
-                    lines = done.value
-                    break
-                yield overall(0.1 + 0.8 * fraction), f"Converting {name}"
-            yield overall(0.9), f"Loading {name} into Blender"
+            lines = yield from overall(steps, f"Converting {name}", convert_start, 0.9)
+            yield (i + 0.9) / len(files), f"Loading {name} into Blender"
             # Nothing may be yielded after the last file is loaded: the modal
             # import must not be cancelled once objects are in the scene.
             bpy.ops.import_scene.gltf(filepath=glb)
@@ -157,11 +183,20 @@ class StepSettings:
     def run_import(self, context, step2glb, files):
         """Import files, see import_steps, modal when started from the user interface."""
         self.imported_files = 0
-        steps = import_steps(self, context, step2glb, files)
+        self._file_count = len(files)
+        return self.run_steps(context, step2glb, import_steps(self, context, step2glb, files),
+                              self._finished)
+
+    def run_steps(self, context, step2glb, steps, done):
+        """Run steps that yield (progress, text), then return done(their result).
+
+        Modal when started from the user interface, else in one call.
+        """
         if (context.window and not bpy.app.background and self.options.is_invoke
                 and not (self.options.is_repeat or self.options.is_repeat_last)):
             self._steps = steps
-            self._file_count = len(files)
+            self._done = done
+            self._text = None
             self._workspace = context.workspace
             self._show_progress(0.0, "Starting import")
             context.window.cursor_modal_set('WAIT')
@@ -170,10 +205,10 @@ class StepSettings:
             return {'RUNNING_MODAL'}
         with wait_cursor(context):
             try:
-                report = step2glb.run(steps)
+                result = step2glb.run(steps)
             except Exception as e:
                 return self._failed(e)
-        return self._finished(report)
+        return done(result)
 
     def modal(self, context, event):
         if event.type == 'ESC' and event.value == 'PRESS':
@@ -188,19 +223,24 @@ class StepSettings:
         if event.type != 'TIMER':
             return {'RUNNING_MODAL'}  # the scene must not change during the import
 
+        # A slice also ends when the text changes, so that the next step's text
+        # is shown before it runs: some steps are single calls of a minute.
         end = time.monotonic() + SLICE_SECONDS
         try:
-            while time.monotonic() < end:
+            while True:
                 fraction, text = next(self._steps)
+                if text != self._text or time.monotonic() >= end:
+                    break
         except StopIteration as done:
             self._stop_modal(context)
-            return self._finished(done.value)
+            return self._done(done.value)
         except Exception as e:
             self._stop_modal(context)
             if self.imported_files:
                 self._failed(e)
                 return {'FINISHED'}
             return self._failed(e)
+        self._text = text
         self._show_progress(fraction, text)
         return {'RUNNING_MODAL'}
 
@@ -265,17 +305,35 @@ class ImportStepOperator(bpy.types.Operator, ImportHelper, StepSettings):
 
     def execute(self, context):
         paths = self.paths()
-        if self.choose_parts:
-            if len(paths) > 1:
-                self.report({'ERROR'}, "Choose Parts works with one file at a time")
-                return {'CANCELLED'}
-            settings = {name: getattr(self, name) for name in self.setting_names}
-            bpy.ops.import_scene.bii_step_parts('INVOKE_DEFAULT', filepath=paths[0], **settings)
-            return {'CANCELLED'}  # the parts dialog does the import
+        if self.choose_parts and len(paths) > 1:
+            self.report({'ERROR'}, "Choose Parts works with one file at a time")
+            return {'CANCELLED'}
         step2glb = load_converter(self)
         if step2glb is None:
             return {'CANCELLED'}
+        if self.choose_parts:
+            # Read here, with the progress in the status bar; then the parts
+            # dialog opens.
+            return self.run_steps(context, step2glb, read_parts(step2glb, paths[0]),
+                                  lambda result: self._open_parts_dialog(paths[0], *result))
         return self.run_import(context, step2glb, [(path, None, ()) for path in paths])
+
+    def _open_parts_dialog(self, path, doc, tree):
+        global _handover
+        settings = {name: getattr(self, name) for name in self.setting_names}
+        _handover = (path, doc, tree)
+        try:
+            bpy.ops.import_scene.bii_step_parts('INVOKE_DEFAULT', filepath=path, **settings)
+        finally:
+            _handover = None
+        return {'CANCELLED'}  # the parts dialog does the import
+
+
+# The STEP document and assembly tree that ImportStepOperator read, for the
+# parts dialog that it opens. bpy.ops cannot pass Python objects, so they are
+# handed over here, only for the duration of that one call: the dialog's
+# invoke runs within it and takes them.
+_handover = None
 
 
 class StepPartItem(bpy.types.PropertyGroup):
@@ -355,17 +413,12 @@ class ImportStepPartsOperator(bpy.types.Operator, StepSettings):
         col.template_list("BII_UL_step_parts", "", self, "parts", self, "active_parts", rows=18)
 
     def invoke(self, context, event):
-        step2glb = load_converter(self)
-        if step2glb is None:
+        if _handover is None or _handover[0] != self.filepath:
+            self.report({'ERROR'}, "Open the parts list with File > Import > STEP and Choose Parts")
             return {'CANCELLED'}
-        try:
-            with wait_cursor(context):
-                # Kept for execute, which runs on this same operator instance
-                # when the dialog is confirmed, so the file is read once.
-                self._doc = step2glb.read_step(self.filepath)
-                tree = step2glb.assembly_tree(self._doc)
-        except Exception as e:
-            return self._failed(e)
+        # The document is kept for execute, which runs on this same operator
+        # instance when the dialog is confirmed, so the file is read once.
+        _, self._doc, tree = _handover
 
         self.parts.clear()
         index_of = {}
