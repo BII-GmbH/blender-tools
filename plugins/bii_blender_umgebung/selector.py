@@ -24,10 +24,9 @@ import urllib.parse
 DEFAULT_TILES = ("https://sgx.geodatenzentrum.de/wmts_basemapde/tile/1.0.0/"
                  "de_basemapde_web_raster_farbe/default/GLOBAL_WEBMERCATOR/{z}/{y}/{x}.png")
 DEFAULT_SEARCH = "https://nominatim.openstreetmap.org/search"
-
-# Auswahlseite des BLOSM-Addons (prochitecture.com) - dieselbe Karte, die BLOSM
-# über "select" öffnet. Sie gibt das Gebiet als "bbox=west,süd,ost,nord" aus.
-BLOSM_URL = "https://prochitecture.com/blender-osm/extent/"
+# Geo-Box: Kacheln und Ortssuche laufen über den lokalen Server, der den Token ergänzt
+GEOBOX_TILES = "/geo/tiles/{z}/{x}/{y}.png"
+GEOBOX_SEARCH = "/geo/search"
 
 _TEMPLATE = """<!DOCTYPE html>
 <html lang="de">
@@ -492,7 +491,36 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                                 max(sued, nord), max(west, ost))
             self._send(200, "text/plain; charset=utf-8", b"ok")
             return
+        if parsed.path.startswith("/geo/"):
+            self._geo(parsed)
+            return
         self._send(404, "text/plain; charset=utf-8", b"nicht gefunden")
+
+    def _geo(self, parsed):
+        """Basiskarte und Ortssuche der Geo-Box, angemeldet weitergereicht."""
+        from . import geoproxy, simbox
+        if not geoproxy.local_request_allowed(self):
+            # sonst könnte jede Webseite im Browser den Token mitbenutzen
+            self._send(403, "text/plain; charset=utf-8", b"Nur fuer die lokale Auswahlseite")
+            return
+        if parsed.path == "/geo/search":
+            url, accept, art = (simbox.search_url() + "?" + parsed.query,
+                                "application/json", "application/json; charset=utf-8")
+        else:
+            teile = parsed.path[len("/geo/tiles/"):].rsplit(".", 1)[0].split("/")
+            if (not parsed.path.startswith("/geo/tiles/") or len(teile) != 3
+                    or not all(t.isdigit() for t in teile)):
+                self._send(404, "text/plain; charset=utf-8", b"nicht gefunden")
+                return
+            z, x, y = (int(t) for t in teile)
+            url, accept, art = (simbox.basemap_template().format(z=z, x=x, y=y),
+                                "image/png", "image/png")
+        try:
+            data, _headers = simbox.request(url, accept, timeout=30)
+        except Exception as exc:                                  # noqa: BLE001
+            self._send(502, "text/plain; charset=utf-8", str(exc).encode("utf-8"))
+            return
+        self._send(200, art, data)
 
 
 class SelectorServer:
@@ -533,10 +561,3 @@ class SelectorServer:
             self._server.server_close()
         except Exception:                                         # noqa: BLE001
             pass
-
-
-def blosm_url(blender_version=(5, 1), addon_version=(2, 7, 2)):
-    """Adresse der BLOSM-Auswahlkarte (prochitecture.com)."""
-    return ("%s?blender_version=%s.%s&addon=blosm&addon_version=%s.%s.%s"
-            % (BLOSM_URL, blender_version[0], blender_version[1],
-               addon_version[0], addon_version[1], addon_version[2]))

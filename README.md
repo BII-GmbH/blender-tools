@@ -10,7 +10,7 @@ Plugins are directly installed into Blender and add their functionality to the s
 They can be downloaded in the release section of the repo or by zipping them.
 BII Import is the exception: it bundles OpenCascade, so it is built with `scripts/build_extension.py` or its release workflow, see [its README](plugins/bii_blender_import/README.md).
 
-Each plugin has its own releases, tagged `<plugin>-v<version>` (for example `bii_blender_tools-v0.1.0`, `umgebung-v1.25.0`).
+Each plugin has its own releases, tagged `<plugin>-v<version>` (for example `bii_blender_tools-v0.1.0`, `bii_blender_umgebung-v1.29.0`).
 To release a plugin, raise `version` in its `blender_manifest.toml`, push to `main`, and run its workflow on `main` under Actions (Release BII Tools, Release BII Import, Release BII Umgebung). The workflows refuse other branches.
 The release notes list the commits that changed that plugin's folder since its previous release.
 

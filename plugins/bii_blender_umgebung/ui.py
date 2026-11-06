@@ -10,6 +10,8 @@ import math
 import bpy
 from bpy.types import Panel, UIList
 
+from . import uitext
+
 
 class RC_UL_routes(UIList):
 
@@ -28,19 +30,21 @@ class RC_UL_routes(UIList):
 
 
 def _status_anzeigen(layout, props):
-    """Meldungen und - während eines Ladevorgangs - einen Fortschrittsbalken."""
+    """Meldungen und - während eines Ladevorgangs - einen Fortschrittsbalken.
+
+    Steht nur im Panel „Status“ ganz oben, damit Fortschritt und Ergebnis jedes
+    Befehls an derselben Stelle erscheinen, egal welches Panel aufgeklappt ist.
+    """
     if props.busy:
         box = layout.box()
-        box.label(text=props.scan_info or "Daten werden geladen …", icon='SORTTIME')
+        uitext.label(box, props.scan_info or "Daten werden geladen …", icon='SORTTIME')
         row = box.row()
         row.enabled = False
         row.prop(props, "progress", text="")
-        box.label(text="Esc bricht ab", icon='EVENT_ESC')
     elif props.scan_info:
         box = layout.box()
-        box.scale_y = 0.7
         for chunk in props.scan_info.split(" | "):
-            box.label(text=chunk)
+            uitext.label(box, chunk)
 
 
 def _karten_abschaetzung(layout, context, props):
@@ -57,11 +61,7 @@ def _karten_abschaetzung(layout, context, props):
         span_y = 2.0 * float(gelaende[0].get("corridor_radius_m", props.corridor_radius))
         titel = "Abschnitt:"
     else:
-        bbox = ops.get_bbox(props)
-        mitte = math.radians((bbox[0] + bbox[2]) / 2.0)
-        span_x = (bbox[3] - bbox[1]) * 111320.0 * math.cos(mitte)
-        span_y = (bbox[2] - bbox[0]) * 111320.0
-        titel = "Gebiet:"
+        return              # „Gebiet als Fläche laden“ zeigt seine eigene Abschätzung
     if span_x <= 0 or span_y <= 0:
         return
 
@@ -69,16 +69,59 @@ def _karten_abschaetzung(layout, context, props):
     schaetzung = ops.estimate_map(props, span_x, span_y, (bbox[0] + bbox[2]) / 2.0)
     box = layout.box()
     box.scale_y = 0.75
-    box.label(text="%s %d x %d px (%.1f Mio)" %
-              (titel, schaetzung["breite"], schaetzung["hoehe"], schaetzung["pixel"] / 1e6),
-              icon='INFO' if schaetzung["passt"] else 'ERROR')
-    box.label(text="%.2f m/px · Stufe %d · ca. %d Kacheln"
-                   % (schaetzung["schritt"], schaetzung["zoom"], schaetzung["kacheln"]))
+    uitext.label(box, "%s %d x %d px (%.1f Mio)" %
+                 (titel, schaetzung["breite"], schaetzung["hoehe"], schaetzung["pixel"] / 1e6),
+                 icon='INFO' if schaetzung["passt"] else 'ERROR', context=context)
+    uitext.label(box, "%.2f m/px · Stufe %d · ca. %d Kacheln"
+                 % (schaetzung["schritt"], schaetzung["zoom"], schaetzung["kacheln"]),
+                 context=context)
     if not schaetzung["passt"]:
-        box.label(text="zu groß (Grenze %.0f Mio px, %d Kacheln)"
-                       % (ops.MAX_TEXTURE_PIXELS / 1e6, schaetzung["grenze"]))
+        uitext.label(box, "zu groß (Grenze %.0f Mio px%s)"
+                     % (ops.MAX_TEXTURE_PIXELS / 1e6, ", %d Kacheln" % schaetzung["grenze"]
+                        if schaetzung["grenze"] is not None else ""), context=context)
     elif schaetzung["min_res"] > 0.02:
-        box.label(text="Grenze hier: %.2f m/px" % schaetzung["min_res"])
+        uitext.label(box, "Grenze hier: %.2f m/px" % schaetzung["min_res"], context=context)
+
+
+def _gebiet_abschaetzung(layout, context, props):
+    """Umfang von „Gebiet als Fläche laden“ vorab: Punkte, Stücke, Kartenkacheln."""
+    import importlib
+    ops = importlib.import_module(__package__ + ".operators")
+    bbox = ops.get_bbox(props)
+    mitte = math.radians((bbox[0] + bbox[2]) / 2.0)
+    span_x = (bbox[3] - bbox[1]) * 111320.0 * math.cos(mitte)
+    span_y = (bbox[2] - bbox[0]) * 111320.0
+    if span_x <= 0 or span_y <= 0:
+        return
+    raster = float(props.flat_spacing if props.terrain_source == 'FLAT' else props.dem_spacing)
+    punkte = (span_x / raster + 1.0) * (span_y / raster + 1.0)
+    kante = min(props.chunk_size, ops.corridor_mod.MAX_CHUNK_CELLS * raster)
+    if props.area_with_map:
+        kante = min(kante, ops.MAX_CHUNK_TEXTURE * ops.map_resolution(props))
+    stuecke = math.ceil(span_x / kante) * math.ceil(span_y / kante)
+    box = layout.box()
+    box.scale_y = 0.75
+    zu_viel = False
+    gross = punkte > ops.WARN_TERRAIN_POINTS
+    uitext.label(box, "Gebiet %.1f x %.1f km: %.1f Mio Punkte in %d Stück(en)"
+                 % (span_x / 1000.0, span_y / 1000.0, punkte / 1e6, stuecke),
+                 icon='ERROR' if gross else 'INFO', context=context)
+    if gross:
+        uitext.label(box, "sehr groß: ca. %.0f GB in Blender" % (punkte * 100 / 1e9),
+                     context=context)
+    if props.area_with_map:
+        zoom = ops.maptexture.zoom_for(ops.map_source(props), (bbox[0] + bbox[2]) / 2.0,
+                                       ops.map_resolution(props))
+        kacheln = ops.tile_range(bbox, zoom)
+        grenze = ops.tile_limit(props)
+        zu_viele = grenze is not None and kacheln > grenze
+        uitext.label(box, "Karte %.2f m/px · Stufe %d · ca. %d Kacheln"
+                     % (ops.map_resolution(props), zoom, kacheln),
+                     icon='ERROR' if zu_viele else 'NONE', context=context)
+        if zu_viele:
+            uitext.label(box, "zu viele Kacheln (Grenze %d)" % grenze, context=context)
+            zu_viel = True
+    return not zu_viel
 
 
 # Symbole in den Panel-Überschriften: Blender zeichnet sie sonst in voller Größe.
@@ -109,10 +152,45 @@ class _Base:
         self.layout.separator(factor=ICON_GAP)
 
 
+class RC_PT_status(_Base, Panel):
+    """Fortschritt und letzte Meldung - für alle Befehle an einer Stelle."""
+
+    bl_idname = "RC_PT_status"
+    bl_options = {'HIDE_HEADER'}
+    bl_order = 0
+    bl_label = "Status"
+
+    @classmethod
+    def poll(cls, context):
+        props = context.scene.railway_chainage
+        return props.busy or bool(props.scan_info)
+
+    def draw(self, context):
+        _status_anzeigen(self.layout, context.scene.railway_chainage)
+
+
+class RC_PT_source(_Base, Panel):
+    """Einzige Stelle für Server und Zugang - alle anderen Panels übernehmen sie."""
+
+    bl_idname = "RC_PT_source"
+    rc_icon = 'NETWORK_DRIVE'
+    bl_order = 1
+    bl_label = "Datenquelle"
+
+    def draw(self, context):
+        from . import props as props_mod
+        layout = self.layout
+        prefs = props_mod.preferences(context)
+        if prefs is None:
+            uitext.label(layout, "Add-on-Einstellungen nicht verfügbar", icon='ERROR')
+            return
+        props_mod.draw_data_source(layout, prefs)
+
+
 class RC_PT_extent(_Base, Panel):
     bl_idname = "RC_PT_extent"
     rc_icon = 'WORLD'
-    bl_order = 1
+    bl_order = 2
     bl_label = "Gebiet"
 
     def draw(self, context):
@@ -137,13 +215,8 @@ class RC_PT_extent(_Base, Panel):
         row.scale_y = 1.2
         row.operator("railway_chainage.select_area", icon='SELECT_SET')
         row = layout.row(align=True)
-        row.operator("railway_chainage.select_area_blosm", icon='WORLD')
         row.operator("railway_chainage.paste_bbox", icon='PASTEDOWN')
-
-        row = layout.row(align=True)
-        row.operator("railway_chainage.from_blosm", icon='IMPORT')
         row.operator("railway_chainage.open_map", icon='URL')
-        layout.prop(props, "map_view_url", text="")
         layout.prop(props, "use_scene_origin")
 
 
@@ -151,7 +224,7 @@ class RC_PT_routelist(_Base, Panel):
     bl_idname = "RC_PT_routelist"
     bl_options = {'DEFAULT_CLOSED'}
     rc_icon = 'SNAP_EDGE'
-    bl_order = 2
+    bl_order = 3
     bl_label = "Strecken Auswahl"
 
     def draw(self, context):
@@ -167,13 +240,7 @@ class RC_PT_routelist(_Base, Panel):
         if props.include_station_tracks:
             col.prop(props, "station_radius")
 
-        row = layout.row(align=True)
-        row.prop(props, "overpass_mode", expand=True)
-        if props.overpass_mode == 'CUSTOM':
-            layout.prop(props, "overpass_url", text="")
-
         layout.operator("railway_chainage.scan", icon='VIEWZOOM')
-        _status_anzeigen(layout, props)
 
         if props.routes:
             layout.template_list("RC_UL_routes", "", props, "routes", props, "routes_index", rows=6)
@@ -187,7 +254,7 @@ class RC_PT_chainline(_Base, Panel):
     bl_idname = "RC_PT_chainline"
     bl_options = {'DEFAULT_CLOSED'}
     rc_icon = 'SNAP_INCREMENT'
-    bl_order = 3
+    bl_order = 4
     bl_label = "Kilometrierung"
 
     def draw(self, context):
@@ -197,7 +264,6 @@ class RC_PT_chainline(_Base, Panel):
         layout.use_property_decorate = False
 
         layout.prop(props, "chainage_source")
-        layout.label(text="Geländehöhe ändert die Kilometerwerte nicht.")
         col = layout.column(align=True)
         if props.chainage_source == 'MANUAL':
             col.prop(props, "start_km")
@@ -211,7 +277,7 @@ class RC_PT_chainline(_Base, Panel):
 
         layout.separator()
         box = layout.box()
-        box.label(text="Lage der Linie (Ril 883.0010)", icon='CON_TRACKTO')
+        box.label(text="Lage der Linie", icon='CON_TRACKTO')
         col = box.column(align=True)
         col.prop(props, "axis_mode", text="")
         if props.axis_mode == 'CENTER':
@@ -234,6 +300,12 @@ class RC_PT_chainline(_Base, Panel):
         col.prop(props, "min_chain_length")
         col.prop(props, "max_angle")
         col.prop(props, "z_offset")
+
+        count = sum(1 for item in props.routes if item.selected)
+        row = layout.row()
+        row.scale_y = 1.4
+        row.enabled = count > 0
+        row.operator("railway_chainage.generate", icon='CURVE_PATH')
 
 
 class RC_PT_chainstyle(_Base, Panel):
@@ -300,26 +372,31 @@ class RC_PT_ground(_Base, Panel):
         box = layout.box()
         box.label(text="Geländemodell", icon='RNDCURVE')
         box.row().prop(props, "terrain_source", expand=True)
+        from . import simbox
         col = box.column(align=True)
         if props.terrain_source == 'FLAT':
             col.prop(props, "flat_spacing")
             col.prop(props, "flat_height")
-            col.prop(props, "terrain_segment_length")
-            col.prop(props, "drape_mode")
         else:
-            col.prop(props, "dem_service")
+            if not simbox.active():
+                col.prop(props, "dem_service")
             col.prop(props, "dem_spacing")
-            col.prop(props, "dem_fill_gaps")
-            if props.dem_fill_gaps:
-                col.prop(props, "dem_fallback_zoom")
-            col.prop(props, "terrain_segment_length")
+            if not simbox.active():
+                col.prop(props, "dem_fill_gaps")
+                if props.dem_fill_gaps:
+                    col.prop(props, "dem_fallback_zoom")
             col.prop(props, "dem_zero_level")
             col.prop(props, "dem_use_blosm_offset")
-            col.prop(props, "drape_mode")
+        col.prop(props, "terrain_segment_length")
+        col.prop(props, "drape_mode")
         box.operator("railway_chainage.import_terrain", icon='IMPORT')
+
         sub = box.column(align=True)
+        sub.prop(props, "chunk_size")
         sub.prop(props, "area_with_map")
-        sub.operator("railway_chainage.import_area", icon='MESH_GRID')
+        row = sub.row()
+        row.enabled = _gebiet_abschaetzung(sub, context, props) is not False
+        row.operator("railway_chainage.import_area", icon='MESH_GRID')
 
         row = box.row(align=True)
         row.operator("railway_chainage.shrinkwrap", text="Shrinkwrap", icon='MOD_SHRINKWRAP')
@@ -328,8 +405,7 @@ class RC_PT_ground(_Base, Panel):
         box = layout.box()
         box.label(text="Kartentextur", icon='IMAGE_DATA')
         col = box.column(align=True)
-        col.prop(props, "map_source")
-        col.prop(props, "tile_url", text="eigener Server")
+        col.prop(props, "geo_map_source" if simbox.active() else "map_source")
         col.prop(props, "map_selected_only")
         col.prop(props, "map_quality")
         if props.map_quality == 'CUSTOM':
@@ -368,7 +444,6 @@ class RC_PT_trackaxes(_Base, Panel):
         winkel.prop(props, "rails_transition")
         winkel.prop(props, "rails_cap_crossings")
         col.prop(props, "rails_spacing")
-        col.label(text="Reine Linien ohne Bevel")
         col.prop(props, "rails_drape")
 
         row = layout.row()
@@ -401,41 +476,19 @@ class RC_PT_houses(_Base, Panel):
         col.prop(props, "buildings_drape")
         if props.buildings_drape:
             col.prop(props, "buildings_skirt")
-        col.prop(props, "buildings_max")
 
         row = layout.row()
         row.scale_y = 1.4
         row.operator("railway_chainage.import_buildings", icon='HOME')
-        _status_anzeigen(layout, props)
-
-
-class RC_PT_make(_Base, Panel):
-    bl_idname = "RC_PT_make"
-    bl_options = {'DEFAULT_CLOSED'}
-    rc_icon = 'MOD_BUILD'
-    bl_order = 4
-    bl_label = "Erzeugen"
-
-    def draw(self, context):
-        props = context.scene.railway_chainage
-        layout = self.layout
-        count = sum(1 for item in props.routes if item.selected)
-
-        row = layout.row()
-        row.scale_y = 1.6
-        row.enabled = count > 0
-        row.operator("railway_chainage.generate", icon='CURVE_PATH')
-        layout.label(text="%d Strecke(n) ausgewählt" % count)
-        _status_anzeigen(layout, props)
 
 
 # Die Reihenfolge im Panel steuert bl_order. Blender merkt sich die Anordnung
 # allerdings je Seitenleiste: Panels, die eine Seitenleiste schon kennt, bleiben
 # dort stehen, wo sie waren. Deshalb tragen die Panels seit 1.14 neue Kennungen -
 # so legt Blender sie neu an und sortiert sie nach bl_order.
-classes = (RC_UL_routes, RC_PT_extent, RC_PT_routelist,
+classes = (RC_UL_routes, RC_PT_status, RC_PT_source, RC_PT_extent, RC_PT_routelist,
            RC_PT_chainline, RC_PT_chainstyle,          # Unterpanel nach dem Elternpanel
-           RC_PT_make, RC_PT_trackaxes, RC_PT_ground, RC_PT_houses)
+           RC_PT_trackaxes, RC_PT_ground, RC_PT_houses)
 
 
 def register():

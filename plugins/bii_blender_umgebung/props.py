@@ -81,31 +81,6 @@ class RC_Props(PropertyGroup):
         default=True,
         description="Gleise mit service=yard/siding/spur/crossover überspringen - sie sind nicht kilometriert",
     )
-    overpass_mode: EnumProperty(
-        name="OSM-Server",
-        items=(
-            ('PUBLIC', "Öffentlich", "Die frei zugänglichen Overpass-Server verwenden"),
-            ('CUSTOM', "Eigener Server", "Eine eigene Overpass-Instanz verwenden"),
-        ),
-        default='PUBLIC',
-    )
-    overpass_url: StringProperty(
-        name="Adresse", default="http://2.28.27.1/api/interpreter",
-        description="Vollständige Adresse des Overpass-Endpunkts, z. B. "
-                    "http://server/api/interpreter")
-
-    map_view_url: StringProperty(
-        name="Kartenansicht", default="http://2.28.27.1:8080/",
-        description="Adresse der eigenen Kartenanwendung. Enthält sie {lat}, {lon} oder {zoom}, "
-                    "werden diese durch das eingestellte Gebiet ersetzt; sonst wird für "
-                    "Overpass-Turbo-Adressen automatisch der Parameter C=lat;lon;zoom angehängt")
-
-    tile_url: StringProperty(
-        name="Kachel-Adresse", default="",
-        description="Eigener Kachelserver als Vorlage mit {z}/{x}/{y}, z. B. "
-                    "http://server:8080/tile/{z}/{x}/{y}.png. Leer = die gewählte "
-                    "öffentliche Karte verwenden")
-
     use_cache: BoolProperty(
         name="Antworten zwischenspeichern",
         default=True,
@@ -315,9 +290,11 @@ class RC_Props(PropertyGroup):
     )
     dem_spacing: EnumProperty(
         name="Rasterweite",
-        items=(('1', "1 m", "Feinstes Raster - sehr viele Punkte"),
-               ('2', "2 m", ""),
-               ('5', "5 m", "Guter Kompromiss für Streckenkorridore"),
+        items=(('1', "1 m", "Für öffentliche DGM1-Dienste; die Geo-Box liefert höchstens 5 m"),
+               ('2', "2 m", "Für öffentliche DGM1-Dienste; die Geo-Box liefert höchstens 5 m"),
+               ('5', "5 m · Geo-Box max.", "Feinstes Raster der Geo-Box (amtliche DGM in "
+                                           "DACH; ohne Landesdaten, z. B. Niedersachsen, "
+                                           "Thüringen, nur rund 30 m)"),
                ('10', "10 m", ""),
                ('25', "25 m", "Grob, für lange Strecken")),
         default='5',
@@ -421,6 +398,12 @@ class RC_Props(PropertyGroup):
         description="Das Gelände wird in Abschnitte dieser Länge unterteilt. Jeder Abschnitt "
                     "bekommt eine eigene Kartentextur und damit eine deutlich höhere "
                     "Auflösung. 0 = nicht unterteilen")
+    chunk_size: FloatProperty(
+        name="Stückgröße", default=2000.0, min=250.0, max=20000.0, subtype='DISTANCE',
+        description="„Gebiet als Fläche laden“ baut das Gelände in quadratischen Stücken "
+                    "dieser Kantenlänge auf - eines nach dem anderen, jedes mit eigener "
+                    "Kartentextur. So bleibt der Speicherbedarf auch bei großen Gebieten "
+                    "klein, und Fehler in der Eingabe zeigen sich schon am ersten Stück")
 
     map_selected_only: BoolProperty(
         name="Nur ausgewählte Terrainabschnitte", default=False,
@@ -447,16 +430,28 @@ class RC_Props(PropertyGroup):
              "BKG-Basiskarte mit Bahn-Infrastruktur; für kleine ausgewählte Abschnitte"),
         ),
         default='BASEMAP_DE',
-    )
+        description="Öffentliche Kartenquelle - gilt, wenn im Panel „Datenquelle“ die "
+                    "öffentlichen Dienste gewählt sind")
+    geo_map_source: EnumProperty(
+        name="Karte",
+        items=(
+            ('SIMBOX_LUFTBILD', "Luftbilder",
+             "Orthophotos der Länder (DE, AT, CH), von der Geo-Box mit 0,5 m geliefert"),
+            ('SIMBOX_BASEMAP', "Basiskarte",
+             "Straßenkarte der Geo-Box aus OpenStreetMap (Protomaps-Stil)"),
+        ),
+        default='SIMBOX_LUFTBILD',
+        description="Kartenquelle der Geo-Box - gilt, wenn im Panel „Datenquelle“ die "
+                    "Geo-Box gewählt ist")
     map_quality: EnumProperty(
         name="Kartenqualität",
         items=(
             ('4', "Übersicht (4 m/Px)", "Grob, für lange Strecken"),
             ('2', "Mittel (2 m/Px)", "Für Übersichten über mehrere Kilometer"),
             ('1', "Standard (1 m/Px)", "Guter Kompromiss - Beschriftungen lesbar"),
-            ('0.5', "Detail (0,5 m/Px)", "Fein, für kurze Abschnitte"),
-            ('0.25', "Maximal (0,25 m/Px)", "Sehr fein; nur für kleine Gebiete und mit "
-                                            "eigenem Kachelserver sinnvoll"),
+            ('0.5', "Detail (0,5 m/Px) · Geo-Box max.", "Feinste Luftbilder der Geo-Box (0,5 m)"),
+            ('0.25', "Maximal (0,25 m/Px)", "Feiner als die Geo-Box - für öffentliche Dienste "
+                                            "mit höherer Auflösung"),
             ('CUSTOM', "Eigener Wert", "Auflösung frei eingeben"),
         ),
         default='1',
@@ -467,9 +462,9 @@ class RC_Props(PropertyGroup):
                     "Auflösung ergibt sich zusätzlich aus der Streckenlänge und der "
                     "Bildbegrenzung")
     map_max_edge: IntProperty(
-        name="max. Bildbreite", default=16384, min=1024, max=32768,
-        description="Obergrenze für die Pixelbreite der Textur. Grafikkarten unterstützen "
-                    "meist bis 16384 Pixel")
+        name="max. Bildbreite", default=16384, min=1024, max=16384,
+        description="Obergrenze für die Pixelbreite jeder Textur. Unity und die meisten "
+                    "Grafikkarten nehmen höchstens 16384 Pixel")
     map_max_tiles: IntProperty(
         name="max. Kacheln", default=500, min=10, max=5000,
         description="Sicherheitsgrenze für die Zahl der Kartenkacheln, die geladen werden. "
@@ -510,9 +505,6 @@ class RC_Props(PropertyGroup):
         name="Einbindetiefe", default=1.0, min=0.0, max=20.0, subtype='DISTANCE',
         description="So weit reicht die Grundfläche unter den tiefsten Geländepunkt, damit "
                     "am Hang keine Lücke entsteht")
-    buildings_max: IntProperty(
-        name="Höchstzahl", default=20000, min=100, max=200000,
-        description="Obergrenze, damit ein zu großes Gebiet Blender nicht überlastet")
 
     color: FloatVectorProperty(name="Farbe", subtype='COLOR', size=4, min=0.0, max=1.0,
                                default=(0.9, 0.15, 0.05, 1.0))
@@ -527,13 +519,142 @@ class RC_Props(PropertyGroup):
 classes = (RC_RouteItem, RC_Props)
 
 
+def _zugang_setzen(prefs, _context=None):
+    """Einstellungen des Panels „Datenquelle“ an das Geo-Box-Modul weitergeben.
+
+    Dies ist die einzige Stelle, an der Server und Zugang gesetzt werden; alle
+    Abrufe des Addons lesen sie über ``simbox``.
+    """
+    from . import simbox
+    simbox.configure(prefs.simbox_client_id, prefs.simbox_client_secret,
+                     base=prefs.simbox_url, token_url=prefs.simbox_token_url,
+                     enabled=prefs.data_source == 'GEOBOX', env_file=env_file(prefs))
+
+
+ENV_NAME = ".env"
+
+
+def env_file(prefs):
+    """Zugangsdatei: eingetragener Pfad, sonst ``.env`` im Ordner des Addons (falls vorhanden)."""
+    import os
+    pfad = bpy.path.abspath(prefs.simbox_env_file.strip()) if prefs.simbox_env_file.strip() else ""
+    if pfad:
+        return pfad
+    eigen = os.path.join(os.path.dirname(os.path.abspath(__file__)), ENV_NAME)
+    return eigen if os.path.isfile(eigen) else ""
+
+
+def preferences(context=None):
+    """Einstellungen des Addons (Datenquelle) oder None, falls nicht geladen."""
+    context = context or bpy.context
+    try:
+        return context.preferences.addons[__package__].preferences
+    except (KeyError, AttributeError):
+        return None
+
+
+def draw_data_source(layout, prefs):
+    """Inhalt des Panels „Datenquelle“ - auch in den Add-on-Einstellungen gezeigt."""
+    from . import simbox, uitext
+    layout.row().prop(prefs, "data_source", expand=True)
+    if prefs.data_source == 'PUBLIC':
+        return
+
+    layout.prop(prefs, "simbox_env_file")
+    pfad, aus_datei, fehler = simbox.env_source()
+    if fehler:
+        uitext.label(layout, fehler, icon='ERROR')
+    elif pfad:
+        uitext.label(layout, "Aus .env: %s" % ", ".join(k.replace("SIMBOX_GEO_", "")
+                                                         for k in aus_datei), icon='FILE_TEXT')
+
+    felder = (("simbox_url", "SIMBOX_GEO_URL"), ("simbox_token_url", "SIMBOX_GEO_TOKEN_URL"),
+              None, ("simbox_client_id", "SIMBOX_GEO_CLIENT_ID"),
+              ("simbox_client_secret", "SIMBOX_GEO_CLIENT_SECRET"))
+    col = layout.column(align=True)
+    for feld in felder:
+        if feld is None:
+            col = layout.column(align=True)
+            continue
+        zeile = col.row(align=True)
+        zeile.enabled = feld[1] not in aus_datei      # Wert aus der .env-Datei hat Vorrang
+        zeile.prop(prefs, feld[0])
+
+    if not simbox.has_credentials():
+        uitext.label(layout, "Client-Secret fehlt - bis dahin öffentliche Dienste", icon='ERROR')
+    if "@" in prefs.simbox_client_id:
+        uitext.label(layout, "Client-ID ist eine E-Mail - Service-Konto nutzen (simbox-geo-dev)",
+                     icon='ERROR')
+
+    layout.operator("railway_chainage.simbox_test", icon='CHECKMARK')
+    text, ok = simbox.status()
+    if text:
+        icon = 'SORTTIME' if ok is None else 'CHECKMARK' if ok else 'ERROR'
+        uitext.label(layout.box(), text, icon=icon)
+
+
+class RC_AddonPreferences(bpy.types.AddonPreferences):
+    """Datenquelle des Addons. Steht in den Blender-Einstellungen, nicht in der
+    .blend-Datei - so wandert das Secret nicht mit Projektdateien weiter."""
+
+    bl_idname = __package__
+
+    data_source: EnumProperty(
+        name="Datenquelle",
+        items=(
+            ('GEOBOX', "Geo-Box",
+             "Eigener Server der simbox (ganz DACH): Overpass, Luftbilder, Basiskarte, "
+             "Höhen und Ortssuche - für alle Abrufe des Addons"),
+            ('PUBLIC', "Öffentlich",
+             "Frei zugängliche Dienste (Overpass, amtliche Höhendienste, öffentliche Karten)"),
+        ),
+        default='GEOBOX', update=_zugang_setzen)
+    simbox_url: StringProperty(
+        name="Server", default="https://geo.simbox.site", update=_zugang_setzen,
+        description="Adresse der Geo-Box. Overpass, Luftbilder, Basiskarte, Höhen, Ortssuche "
+                    "und Overpass Turbo werden daraus abgeleitet")
+    simbox_token_url: StringProperty(
+        name="Anmeldung",
+        default="https://auth.bii-gmbh.com/realms/simbox/protocol/openid-connect/token",
+        update=_zugang_setzen,
+        description="Token-Adresse des Keycloak-Realms simbox")
+    simbox_client_id: StringProperty(
+        name="Client-ID", default="simbox-geo-dev", update=_zugang_setzen,
+        description="Client-ID des Service-Kontos der Geo-Box (Keycloak, Realm simbox) - "
+                    "nicht der persönliche Benutzername. Für das Plugin: simbox-geo-dev")
+    simbox_env_file: StringProperty(
+        name="Zugangsdatei (.env)", default="", subtype='FILE_PATH', update=_zugang_setzen,
+        description="Datei mit SIMBOX_GEO_CLIENT_SECRET (optional auch SIMBOX_GEO_CLIENT_ID, "
+                    "SIMBOX_GEO_URL, SIMBOX_GEO_TOKEN_URL), z. B. die .env.local der simbox. "
+                    "Leer = .env im Ordner des Addons, falls vorhanden. Werte aus der Datei "
+                    "haben Vorrang vor den Feldern")
+    simbox_client_secret: StringProperty(
+        name="Client-Secret", default="", subtype='PASSWORD', update=_zugang_setzen,
+        description="Client-Secret des Service-Kontos (vom Betreiber, nicht das persönliche "
+                    "Passwort). Ersatzweise Umgebungsvariable SIMBOX_GEO_CLIENT_SECRET")
+
+    def draw(self, context):
+        from . import uitext
+        # Eine Stelle für Server und Zugang: das Panel „Datenquelle“ - hier nur der Verweis
+        uitext.label(self.layout, "Einstellungen: Seitenleiste ▸ Umgebung ▸ Datenquelle",
+                     icon='INFO', context=context)
+
+
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Scene.railway_chainage = bpy.props.PointerProperty(type=RC_Props)
+    bpy.utils.register_class(RC_AddonPreferences)
+    try:
+        _zugang_setzen(bpy.context.preferences.addons[__package__].preferences)
+    except (KeyError, AttributeError):
+        _zugang_setzen(type("Leer", (), {"simbox_client_id": "", "simbox_client_secret": "",
+                                         "simbox_url": "", "simbox_token_url": "", "simbox_env_file": "",
+                                         "data_source": 'GEOBOX'})())
 
 
 def unregister():
+    bpy.utils.unregister_class(RC_AddonPreferences)
     del bpy.types.Scene.railway_chainage
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)

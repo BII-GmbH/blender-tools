@@ -1,21 +1,26 @@
 """Operatoren: Gebiet festlegen, Strecken suchen, Kilometrierung erzeugen."""
 
 import math
+import queue
 import re
 import threading
+import urllib.error
+import urllib.parse
 import uuid
 
 import bpy
+import numpy as np
 from bpy.props import EnumProperty, StringProperty
 from bpy.types import Operator
 
-from . import (buildings, builder, corridor as corridor_mod, dgm, maptexture, overpass,
-               railgeom, selector, tracknetwork)
+from . import (buildings, builder, corridor as corridor_mod, dgm, geoproxy, maptexture, simbox,
+               overpass, railgeom, selector, tracknetwork)
 from .projection import TransverseMercator
 
-# Obergrenze fuer die Summe aller Kartentexturen (RGBA, rund 4 Byte je Pixel)
-# Beim Aufbau eines Texturgitters fallen je Pixel mehrere Zwischenwerte an;
-# die Grenze muss daher deutlich unter dem reinen Bildspeicher liegen.
+# Obergrenze je Kartentextur (RGBA, rund 4 Byte je Pixel). Jede Textur wird
+# einzeln gebaut und später nach Unity übernommen, daher gilt die Grenze je Bild,
+# nicht für die Summe. Beim Aufbau eines Texturgitters fallen je Pixel mehrere
+# Zwischenwerte an; die Grenze liegt daher deutlich unter dem reinen Bildspeicher.
 MAX_TEXTURE_PIXELS = 25_000_000
 
 # Zwischenspeicher zwischen "Strecken suchen" und "Kilometrierung erzeugen"
@@ -58,6 +63,12 @@ def is_loaded(props):
     return _STATE["rail"] is not None and _STATE["signature"] == signature(props)
 
 
+def needs_refresh():
+    """Nach einem Ausweichen auf die oeffentlichen Server soll "Strecken suchen" neu
+    laden - sonst bliebe nach korrigiertem Geo-Box-Zugang der alte Stand stehen."""
+    return bool(_STATE.get("overpass_hinweis"))
+
+
 def map_resolution(props):
     """Gewaehlte Kartenaufloesung in Metern je Pixel."""
     if props.map_quality == 'CUSTOM':
@@ -82,39 +93,91 @@ def estimate_map(props, span_x, span_y, lat=51.0):
     min_res = max(res_kante, res_budget)
 
     schritt = span_x / max(1, breite)
-    max_zoom = maptexture.SOURCES[props.map_source][1] if not props.tile_url.strip() else 22
-    zoom = maptexture.choose_zoom(lat, schritt, max_zoom)
+    zoom = maptexture.zoom_for(map_source(props), lat, schritt)
     kachel_m = 256.0 * maptexture.tile_resolution(lat, zoom)
     # schräg verlaufende Korridore berühren deutlich mehr Kacheln als das Rechteck
     schraeg = 2.0 if span_x > 10.0 * span_y else 1.0
     kacheln = max(1, int(math.ceil(span_x / kachel_m + 1.0)
                          * math.ceil(span_y / kachel_m + 1.0) * schraeg))
 
-    grenze = props.map_max_tiles
-    if props.map_source in maptexture.VOLUNTEER_SOURCES and not props.tile_url.strip():
-        grenze = min(grenze, maptexture.VOLUNTEER_LIMIT)
-
+    grenze = tile_limit(props)
     return {"breite": breite, "hoehe": hoehe, "pixel": pixel, "kacheln": kacheln,
             "grenze": grenze, "min_res": min_res, "zoom": zoom, "schritt": schritt,
-            "passt": pixel <= MAX_TEXTURE_PIXELS and kacheln <= grenze}
+            "passt": pixel <= MAX_TEXTURE_PIXELS and (grenze is None or kacheln <= grenze)}
+
+
+def tile_limit(props):
+    """Höchstzahl Kartenkacheln je Abruf - None für die eigene Geo-Box.
+
+    Die Grenze schützt fremde, oft ehrenamtlich betriebene Kartenserver. Die
+    Geo-Box ist der eigene Server; große Gebiete werden dort ohnehin Stück für
+    Stück abgerufen und lassen sich jederzeit mit Esc abbrechen.
+    """
+    source = map_source(props)
+    if source in maptexture.GEOBOX_SOURCES:
+        return None
+    if source in maptexture.VOLUNTEER_SOURCES:
+        return min(props.map_max_tiles, maptexture.VOLUNTEER_LIMIT)
+    return props.map_max_tiles
+
+
+def map_source(props):
+    """Kartenquelle laut Panel „Datenquelle“: mit Geo-Box deren Karten, sonst die
+    öffentliche Auswahl."""
+    if simbox.active():
+        return props.geo_map_source
+    return props.map_source or 'BASEMAP_DE'
 
 
 def overpass_endpoint(props):
-    """Gewaehlter Overpass-Server (None = oeffentliche Server der Reihe nach)."""
-    if props.overpass_mode == 'CUSTOM' and props.overpass_url.strip():
-        return props.overpass_url.strip()
+    """Overpass-Server laut Panel „Datenquelle“ (None = öffentliche Server der Reihe nach).
+
+    Die Geo-Box wird genutzt, wenn sie gewählt, ein Zugang eingetragen ist und das
+    Gebiet in ihrem Datenbereich (DACH) liegt - sonst die öffentlichen Server.
+    """
+    if simbox.active() and simbox.covers(get_bbox(props)):
+        return simbox.overpass_url()
     return None
+
+
+def overpass_label(props):
+    """Kurzer Hinweis, welcher Server die Daten geliefert hat."""
+    if _STATE.get("overpass_hinweis"):
+        return _STATE["overpass_hinweis"]
+    if overpass_endpoint(props):
+        return "Geo-Box"
+    if simbox.enabled():
+        if not simbox.has_credentials():
+            return "öffentliche Overpass-Server (kein Geo-Box-Zugang eingetragen)"
+        return "öffentliche Overpass-Server (Gebiet außerhalb von DACH)"
+    return "öffentliche Overpass-Server"
+
+
+def overpass_query(props, run, status=None):
+    """Fuehrt ``run(endpoint)`` aus. Im Modus Geo-Box wird bei gescheiterter Anmeldung
+    auf die oeffentlichen Server ausgewichen - mit Hinweis in der Meldung."""
+    endpoint = overpass_endpoint(props)
+    _STATE["overpass_hinweis"] = None
+    try:
+        return run(endpoint)
+    except overpass.AuthError as exc:
+        if not endpoint:
+            raise
+        _STATE["overpass_hinweis"] = "öffentliche Overpass-Server (Geo-Box: %s)" % exc
+        if status:
+            status("Geo-Box-Anmeldung gescheitert - öffentliche Server", None)
+        return run(None)
 
 
 def fetch_data(props, status=None):
     """Reiner Netzwerkteil - laeuft ohne bpy und damit auch in einem Thread."""
-    return overpass.fetch(
+    return overpass_query(props, lambda endpoint: overpass.fetch(
         get_bbox(props), sorted(props.track_types) or ['rail'],
         timeout=props.request_timeout,
         use_cache=props.use_cache,
-        endpoint=overpass_endpoint(props),
+        endpoint=endpoint,
         progress=status,
-    )
+    ), status)
 
 
 def process_data(context, props, data):
@@ -134,9 +197,9 @@ def process_data(context, props, data):
     return rail, projection
 
 
-def load_data(context, props):
+def load_data(context, props, refresh=False):
     """Daten bereitstellen - aus dem Zwischenspeicher oder (synchron) vom Server."""
-    if is_loaded(props):
+    if is_loaded(props) and not refresh:
         return _STATE["rail"], _STATE["projection"]
     return process_data(context, props, fetch_data(props))
 
@@ -285,39 +348,53 @@ def _zu_gross(masse):
             % (masse[0], masse[1], masse[0] * masse[1] / 1e6, MAX_TEXTURE_PIXELS / 1e6))
 
 
-def check_tile_budget(props, count, pixels=0):
+def bericht_uebernehmen(plan, bericht):
+    """Kartenbericht eines Stücks in den Lauf übernehmen (Hauptthread).
+
+    Rückgabe die Quellenangabe dieses Stücks - bei Luftbildern genau die
+    Datensätze, die seine Kacheln geliefert haben.
+    """
+    gesamt = plan["luftbild"]
+    gesamt["sources"].update(bericht["sources"])
+    gesamt["missing"] += bericht["missing"]
+    return maptexture.credit(plan["source"], bericht)
+
+
+def luftbild_hinweis(plan):
+    """Ergänzung der Meldung, wenn Kacheln ohne Luftbild geblieben sind."""
+    fehlend = plan["luftbild"]["missing"]
+    if plan["source"] == maptexture.IMAGERY and fehlend:
+        return " | %d Kachel(n) ohne Luftbild (außerhalb der Abdeckung)" % fehlend
+    return ""
+
+
+def kartenquelle_merken(scene, quelle):
+    """Quellenangabe in ``scene["kartenquelle"]`` ergänzen, nicht ersetzen - die Pflicht
+    zur Namensnennung gilt für jede Karte, die in der Szene liegt."""
+    teile = [t for t in str(scene.get("kartenquelle", "")).split(" | ") if t]
+    if quelle not in teile:
+        teile.append(quelle)
+    scene["kartenquelle"] = " | ".join(teile)
+
+
+def check_tile_budget(props, count):
     """Prueft, ob ein Abruf gegenueber der Kartenquelle vertretbar ist.
 
     Rueckgabe: Fehlertext oder None. Ehrenamtlich betriebene Dienste (OSM,
     OpenRailwayMap, OpenTopoMap) sind streng begrenzt - massenhafte Abrufe
     verstossen gegen deren Nutzungsbedingungen und fuehren zur Sperrung.
     """
-    grenze = props.map_max_tiles
-    if props.map_source in maptexture.VOLUNTEER_SOURCES and not props.tile_url.strip():
-        grenze = min(grenze, maptexture.VOLUNTEER_LIMIT)
+    grenze = tile_limit(props)
+    if map_source(props) in maptexture.VOLUNTEER_SOURCES:
         if count > grenze:
             return ("Diese Karte läuft auf ehrenamtlich betriebenen Servern; %d Kacheln "
                     "wären zu viel (Grenze %d). Bitte basemap.de oder TopPlusOpen wählen, "
-                    "einen eigenen Kachelserver eintragen oder das Gebiet verkleinern"
+                    "die Geo-Box als Datenquelle nutzen oder das Gebiet verkleinern"
                     % (count, grenze))
-    if count > grenze:
+    if grenze is not None and count > grenze:
         return ("Dafür wären %d Kartenkacheln nötig (Grenze %d). Bitte die Auflösung gröber "
                 "wählen oder das Gebiet verkleinern" % (count, grenze))
-    if pixels and pixels > MAX_TEXTURE_PIXELS:
-        return ("Die Texturen ergäben zusammen %.0f Millionen Pixel (Grenze %.0f Mio). "
-                "Bitte die Auflösung gröber wählen"
-                % (pixels / 1e6, MAX_TEXTURE_PIXELS / 1e6))
     return None
-
-
-def _steps(start, stop, step):
-    """Werte von start bis stop im Abstand step (stop immer enthalten)."""
-    werte, value = [], start
-    while value < stop:
-        werte.append(value)
-        value += step
-    werte.append(stop)
-    return werte
 
 
 def _zeige_fortschritt(context, props, fetcher):
@@ -362,7 +439,8 @@ class RC_OT_scan(Operator):
 
     def _check(self, context, props):
         bbox = get_bbox(props)
-        tiles = len(overpass.split_bbox(bbox))
+        # die Geo-Box bekommt das ganze Gebiet als eine Abfrage
+        tiles = len(overpass._split_for(bbox, overpass_endpoint(props), overpass.MAX_SPAN))
         if tiles > 1:
             # grosse Gebiete werden gekachelt abgefragt, es gibt keine feste Obergrenze
             print("[Kilometrierung] Gebiet wird in %d Teilabfragen geladen" % tiles)
@@ -381,7 +459,7 @@ class RC_OT_scan(Operator):
         props = context.scene.railway_chainage
         if not self._check(context, props):
             return {'CANCELLED'}
-        if is_loaded(props):
+        if is_loaded(props) and not needs_refresh():
             return self.execute(context)
 
         props.scan_info = "Daten werden geladen … (Esc bricht ab)"
@@ -431,7 +509,7 @@ class RC_OT_scan(Operator):
         if not self._check(context, props):
             return {'CANCELLED'}
         try:
-            load_data(context, props)
+            load_data(context, props, refresh=needs_refresh())
         except overpass.OverpassError as exc:
             props.scan_info = str(exc).splitlines()[0]
             print("[Kilometrierung] %s" % exc)
@@ -473,8 +551,8 @@ class RC_OT_scan(Operator):
             item.track_count = len(track_polylines(rail, route, props))
             item.selected = (not item.is_station) and bool(samples) and route.length > 1000.0
 
-        props.scan_info = "%d Strecken, %d Kilometrierungstafeln im Gebiet" % (
-            len(props.routes), len(rail.milestones))
+        props.scan_info = "%d Strecken, %d Kilometrierungstafeln im Gebiet | Quelle: %s" % (
+            len(props.routes), len(rail.milestones), overpass_label(props))
         self.report({'INFO'}, props.scan_info)
 
 
@@ -610,77 +688,264 @@ def _corridor_from_lines(context, radius):
     return corridor_mod.Corridor(points, radius)
 
 
-class _TileFetcher:
-    """Lädt Höhenkacheln im Hintergrund, damit Blender bedienbar bleibt."""
+class _Hintergrund:
+    """Führt eine Erzeugerfunktion in einem Hintergrundthread aus.
 
-    def __init__(self, model, keys):
-        self.model = model
-        self.keys = keys
+    Jedes gelieferte Stück wartet in einer kurzen Schlange auf den Hauptthread,
+    der daraus die Blender-Objekte baut. Es liegen höchstens ``vorlauf`` Stücke
+    bereit - der Speicher wächst so mit der Stückgröße, nicht mit dem Gebiet.
+    """
+
+    def __init__(self, erzeuger, vorlauf=1):
+        self._erzeuger = erzeuger
+        self.queue = queue.Queue(maxsize=vorlauf)
+        self.abbruch = threading.Event()
         self.error = None
-        self.status = "Höhendaten werden geladen …"
+        self.status = "Daten werden geladen …"
         self.fraction = -1.0
         self._thread = threading.Thread(target=self._run, daemon=True)
 
     def start(self):
         self._thread.start()
+        return self
 
     @property
     def running(self):
         return self._thread.is_alive()
 
-    def _fortschritt(self, message, fraction=None):
+    def fortschritt(self, message, fraction=None):
         self.status = message
         self.fraction = -1.0 if fraction is None else fraction
 
     def _run(self):
         try:
-            self.model.load(self.keys, progress=self._fortschritt)
+            for stueck in self._erzeuger(self.fortschritt, self.abbruch):
+                while not self.abbruch.is_set():
+                    try:
+                        self.queue.put(stueck, timeout=0.2)
+                        break
+                    except queue.Full:
+                        continue
+                if self.abbruch.is_set():
+                    return
         except Exception as exc:                                  # noqa: BLE001
             self.error = exc
 
+    def next(self):
+        try:
+            return self.queue.get_nowait()
+        except queue.Empty:
+            return None
 
-class RC_OT_import_terrain(Operator):
-    bl_idname = "railway_chainage.import_terrain"
-    bl_label = "Gelände im Korridor laden"
-    bl_description = ("Amtliches Höhenmodell entlang der Kilometrierungslinie laden und "
-                      "nur im eingestellten Korridor als Gelände erzeugen")
-    bl_options = {'REGISTER', 'UNDO'}
+
+# Laufender stückweiser Befehl (bl_idname) - nur zur Laufzeit, nie in der .blend-Datei
+_LAEUFT = {"op": None}
+
+
+class _Stueckweise:
+    """Gemeinsamer Ablauf: im Hintergrund laden, im Hauptthread Stück für Stück aufbauen.
+
+    Unterklassen liefern
+      ``_planen(context, props)`` -> (Plan, Fehlertext)            Hauptthread
+      ``_erzeugen(plan, fortschritt, abbruch)`` -> Stücke           Hintergrund, ohne bpy
+      ``_aufbauen(context, props, plan, stueck)``                   Hauptthread
+      ``_abschluss(context, props, plan, abgebrochen)`` -> (Stufe, Text)
+
+    Interaktiv bleibt Blender bedienbar, jedes Stück erscheint sofort in der
+    Szene, und Esc bricht ab - die schon fertigen Stücke bleiben erhalten.
+    Aus Skripten (``execute``) läuft derselbe Ablauf ohne Thread.
+    """
 
     _timer = None
-    _fetcher = None
+    _worker = None
     _plan = None
 
     @classmethod
     def poll(cls, context):
+        # Nur ein stückweiser Lauf zur Zeit: ein zweiter würde z. B. die Stücke des
+        # ersten wegräumen, während dieser noch weitere anlegt
+        return _LAEUFT["op"] is None and cls._bereit(context)
+
+    @classmethod
+    def _bereit(cls, context):
+        """Voraussetzungen der Unterklasse (statt ``poll``)."""
+        return True
+
+    def invoke(self, context, event):
+        props = context.scene.railway_chainage
+        plan, fehler = self._planen(context, props)
+        if fehler:
+            self.report({'ERROR'}, fehler)
+            return {'CANCELLED'}
+        self._plan = plan
+        _LAEUFT["op"] = self.bl_idname
+        props.scan_info = plan.get("start", "Daten werden geladen …") + " (Esc bricht ab)"
+        self._worker = _Hintergrund(
+            lambda fortschritt, abbruch: self._erzeugen(plan, fortschritt, abbruch)).start()
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.1, window=context.window)
+        wm.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        props = context.scene.railway_chainage
+        if event.type == 'ESC':
+            self._worker.abbruch.set()
+            self._release(context)
+            return self._ende(context, props, self._plan, abgebrochen=True)
+        if event.type != 'TIMER':
+            return {'PASS_THROUGH'}
+
+        stueck = self._worker.next()
+        if stueck is not None:
+            try:
+                self._aufbauen(context, props, self._plan, stueck)
+            except Exception as exc:                              # noqa: BLE001
+                self._worker.abbruch.set()
+                self._worker.error = exc
+            _redraw(context)
+        if self._worker.error is not None or (not self._worker.running
+                                              and self._worker.queue.empty()):
+            self._release(context)
+            return self._ende(context, props, self._plan, fehler=self._worker.error)
+        _zeige_fortschritt(context, props, self._worker)
+        return {'RUNNING_MODAL'}
+
+    def _release(self, context):
+        _LAEUFT["op"] = None
+        _fortschritt_beenden(context, context.scene.railway_chainage)
+        if self._timer is not None:
+            context.window_manager.event_timer_remove(self._timer)
+            self._timer = None
+
+    def cancel(self, context):
+        # Blender beendet den Lauf selbst (Datei laden, Fenster schließen)
+        self._worker.abbruch.set()
+        self._release(context)
+
+    def execute(self, context):
+        props = context.scene.railway_chainage
+        plan, fehler = self._planen(context, props)
+        if fehler:
+            self.report({'ERROR'}, fehler)
+            return {'CANCELLED'}
+        try:
+            for stueck in self._erzeugen(plan, lambda *_args: None, threading.Event()):
+                self._aufbauen(context, props, plan, stueck)
+        except Exception as exc:                                  # noqa: BLE001
+            return self._ende(context, props, plan, fehler=exc)
+        return self._ende(context, props, plan)
+
+    def _ende(self, context, props, plan, abgebrochen=False, fehler=None):
+        stufe, text = self._abschluss(context, props, plan, abgebrochen)
+        if fehler is not None:
+            print("[Kilometrierung] %s" % fehler)
+            meldung = str(fehler).splitlines()[0] if str(fehler) else type(fehler).__name__
+            text = meldung if stufe != 'INFO' else "%s | abgebrochen: %s" % (text, meldung)
+            stufe = 'ERROR' if stufe != 'INFO' else 'WARNING'
+        elif abgebrochen:
+            text = "Abgebrochen - " + text if plan.get("gebaut") else "Abgebrochen"
+            stufe = 'INFO'
+        props.scan_info = text
+        self.report({stufe}, text)
+        _redraw(context)
+        # Teilergebnisse bleiben stehen und lassen sich als ein Schritt rückgängig machen
+        return {'FINISHED'} if plan.get("gebaut") else {'CANCELLED'}
+
+
+def _height_model(props, bbox):
+    """(Höhenmodell, UTM-Zone, Rasterweite, Quellenangabe) laut Panel - oder None,
+    wenn für das Gebiet kein Höhendienst hinterlegt ist."""
+    if props.terrain_source == 'FLAT':
+        zone = dgm.utm_zone((bbox[1] + bbox[3]) / 2.0)
+        return (dgm.FlatModel(props.flat_height, zone), zone, float(props.flat_spacing),
+                "ebene Fläche (ohne Höhenmodell)")
+    spacing = float(props.dem_spacing)
+    if simbox.active():
+        zone = dgm.utm_zone((bbox[1] + bbox[3]) / 2.0)
+        return (dgm.GeoBoxHeights(zone, spacing, use_cache=props.use_cache), zone, spacing,
+                dgm.GEOBOX_LABEL)
+    key = props.dem_service
+    if key == 'AUTO':
+        key = dgm.service_for((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+        if key is None:
+            return None
+    entry = dgm.SERVICES[key]
+    fallback = dgm.TerrainTiles(zoom=props.dem_fallback_zoom,
+                                use_cache=props.use_cache) if props.dem_fill_gaps else None
+    model = dgm.HeightModel(entry["url"], entry["coverage"], entry["zone"], spacing,
+                            use_cache=props.use_cache, axes=entry["axes"],
+                            fallback=fallback, kind=entry.get("kind", "wcs"))
+    label = entry["label"] + (" + " + dgm.TERRARIUM_CREDIT if fallback is not None else "")
+    return model, entry["zone"], spacing, label
+
+
+def _needs_probe(context, props):
+    """Wird der Höhenbezug aus dem Gelände selbst bestimmt (tiefster Punkt)?"""
+    if props.terrain_source == 'FLAT' or not props.dem_zero_level:
+        return False
+    return not (props.dem_use_blosm_offset and "height_offset" in context.scene)
+
+
+def _probe(plan, east, north):
+    """Tiefster Punkt einer groben Stichprobe über das ganze Gebiet, bevor das erste
+    Stück entsteht - sonst bestimmte allein das erste Stück die Null. Nur mit der
+    Geo-Box (ein Abruf); andere Dienste nehmen das erste Stück."""
+    if plan.get("probe") and isinstance(plan["model"], dgm.GeoBoxHeights):
+        plan["bezug"] = plan["model"].probe_min(east, north)
+
+
+def _height_offset(context, props, heights, bezug=None):
+    """Höhenbezug, einmal je Lauf festgelegt - alle Stücke liegen auf derselben Null."""
+    if props.terrain_source == 'FLAT':
+        return 0.0
+    if props.dem_use_blosm_offset and "height_offset" in context.scene:
+        return float(context.scene["height_offset"])
+    if props.dem_zero_level:
+        werte = [float(np.nanmin(heights))] if np.isfinite(heights).any() else []
+        if bezug is not None:
+            werte.append(float(bezug))
+        offset = min(werte) if werte else 0.0
+        if "height_offset" not in context.scene:
+            context.scene["height_offset"] = offset
+        return offset
+    return 0.0
+
+
+# Ab dieser Punktzahl wird gewarnt: Das Laden bleibt stückweise klein, aber die fertige
+# Szene belegt etwa 100 Byte je Punkt und Blender wird spürbar träger. Gesperrt wird nichts.
+WARN_TERRAIN_POINTS = 40_000_000
+
+
+def _punkte_hinweis(punkte):
+    if punkte <= WARN_TERRAIN_POINTS:
+        return ""
+    return " - Achtung: rund %.0f Mio Punkte, ca. %.0f GB in Blender" % (
+        punkte / 1e6, punkte * 100 / 1e9)
+
+
+class RC_OT_import_terrain(_Stueckweise, Operator):
+    bl_idname = "railway_chainage.import_terrain"
+    bl_label = "Gelände im Korridor laden"
+    bl_description = ("Amtliches Höhenmodell entlang der Kilometrierungslinie laden und "
+                      "nur im eingestellten Korridor als Gelände erzeugen - Abschnitt für "
+                      "Abschnitt")
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def _bereit(cls, context):
         return bool(_chainage_lines(context))
 
-    # ------------------------------------------------------------ Vorbereitung
-    def _prepare(self, context, props):
+    def _planen(self, context, props):
         projection, _ = get_projection(context, props)
         bbox = get_bbox(props)
-        if props.terrain_source == 'FLAT':
-            zone = dgm.utm_zone((bbox[1] + bbox[3]) / 2.0)
-            spacing = float(props.flat_spacing)
-            model = dgm.FlatModel(props.flat_height, zone)
-            label = "ebene Fläche (ohne Höhenmodell)"
-        else:
-            key = props.dem_service
-            if key == 'AUTO':
-                key = dgm.service_for((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
-                if key is None:
-                    return None
-            entry = dgm.SERVICES[key]
-            zone, label = entry["zone"], entry["label"]
-            spacing = float(props.dem_spacing)
-            fallback = dgm.TerrainTiles(zoom=props.dem_fallback_zoom,
-                                        use_cache=props.use_cache) if props.dem_fill_gaps else None
-            model = dgm.HeightModel(entry["url"], entry["coverage"], zone, spacing,
-                                    use_cache=props.use_cache, axes=entry["axes"],
-                                    fallback=fallback, kind=entry.get("kind", "wcs"))
-            if fallback is not None:
-                label += " + " + dgm.TERRARIUM_CREDIT
+        gewaehlt = _height_model(props, bbox)
+        if gewaehlt is None:
+            return None, ("Für dieses Gebiet gibt es keinen hinterlegten Höhendienst - "
+                          "bitte einen Dienst von Hand wählen")
+        model, zone, spacing, label = gewaehlt
 
-        jobs = []
+        jobs, punkte = [], 0.0
         for line in _chainage_lines(context):
             matrix = line.matrix_world
             points = [(float((matrix @ p.co.to_3d()).x), float((matrix @ p.co.to_3d()).y))
@@ -689,73 +954,115 @@ class RC_OT_import_terrain(Operator):
                 continue
             area = corridor_mod.Corridor(corridor_mod.to_utm(points, projection, zone),
                                          props.corridor_radius)
-            wanted = corridor_mod.grid_points(area, spacing)
-            if wanted:
-                jobs.append((line, wanted, area))
+            count = corridor_mod.corridor_segment_count(area.length,
+                                                        props.terrain_segment_length)
+            jobs.append({"line": line.name, "area": area, "count": count})
+            punkte += area.length * 2.0 * props.corridor_radius / (spacing * spacing)
+        if not jobs:
+            return None, "Keine Kilometrierungslinie mit Punkten gefunden"
+        total = sum(job["count"] for job in jobs)
+        return {"model": model, "jobs": jobs, "projection": projection, "zone": zone,
+                "label": label, "spacing": spacing, "total": total, "offset": None,
+                "probe": _needs_probe(context, props), "bezug": None,
+                "parts": {}, "verts": 0, "faces": 0, "missing": 0, "gebaut": 0,
+                "start": "Gelände: %d Abschnitt(e) werden geladen%s …"
+                         % (total, _punkte_hinweis(punkte))}, None
 
-        keys = sorted({key for _line, wanted, _area in jobs
-                       for key in corridor_mod.tiles_for(wanted, model)})
-        return {"model": model, "jobs": jobs, "keys": keys, "projection": projection,
-                "zone": zone, "label": label, "spacing": spacing}
+    @staticmethod
+    def _erzeugen(plan, fortschritt, abbruch):
+        model, zone, projection = plan["model"], plan["zone"], plan["projection"]
+        if plan["probe"]:
+            fortschritt("Gelände: Höhenbezug wird bestimmt …")
+            erste = plan["jobs"][0]["area"]
+            grob = max(plan["spacing"], math.sqrt(erste.length * 2.0 * erste.radius / 5000.0))
+            punkte = list(corridor_mod.grid_points(erste, grob).values())
+            if punkte:
+                _probe(plan, [p[0] for p in punkte], [p[1] for p in punkte])
+        nummer = 0
+        for job in plan["jobs"]:
+            for index in range(job["count"]):
+                if abbruch.is_set():
+                    return
+                nummer += 1
+                fortschritt("Gelände: Abschnitt %d von %d" % (nummer, plan["total"]),
+                            (nummer - 1) / float(plan["total"]))
+                teil = corridor_mod.corridor_segment(job["area"], plan["spacing"],
+                                                     index, job["count"])
+                if teil is None:
+                    continue
+                east, north, coords, quads = teil
+                model.load(corridor_mod.tile_keys(east, north, model))
+                heights = model.sample(east, north)
+                lat, lon = dgm.utm_to_wgs84_array(east, north, zone)
+                x, y = projection.from_geographic_array(lat, lon)
+                yield {"line": job["line"], "index": index, "count": job["count"],
+                       "span": job["area"].length / job["count"],
+                       "length": job["area"].length, "x": x, "y": y, "z": heights,
+                       "coords": coords, "quads": quads}
+            yield {"line": job["line"], "fertig": True}
 
-    # ------------------------------------------------------------ Aufbau
-    def _build(self, context, props, plan):
-        model, projection, zone = plan["model"], plan["projection"], plan["zone"]
-        total_verts, total_faces, missing_total, created = 0, 0, 0, []
+    def _aufbauen(self, context, props, plan, stueck):
+        line = context.scene.objects.get(stueck["line"])
+        parts = plan["parts"].setdefault(stueck["line"], [])
+        if stueck.get("fertig"):
+            if line is not None and parts:
+                if props.drape_mode == 'DIRECT':
+                    self._drape(line, plan["model"], plan["projection"], plan["zone"],
+                                plan["offset"] or 0.0, props.z_offset)
+                elif props.drape_mode == 'SHRINKWRAP':
+                    # über Namen: ein Rückgängig während des Laufs entfernt Objekte
+                    objekte = [o for o in map(bpy.data.objects.get, parts) if o is not None]
+                    if objekte:
+                        _apply_shrinkwrap(line, objekte, props.z_offset)
+            return
 
-        for line, wanted, area in plan["jobs"]:
-            verts, faces, missing, coords = corridor_mod.build_grid(
-                wanted, model, projection, zone, area=area)
-            if not verts:
-                continue
-            # Eine ebene Fläche liegt genau auf der eingestellten Höhe - ein
-            # Höhenbezug aus BLOSM würde sie unbemerkt nach unten schieben.
-            offset = 0.0
-            if props.terrain_source == 'FLAT':
-                pass
-            elif props.dem_use_blosm_offset and "height_offset" in context.scene:
-                offset = float(context.scene["height_offset"])
-            elif props.dem_zero_level:
-                offset = min(v[2] for v in verts)
+        z = stueck["z"]
+        keep = ~np.isnan(z)
+        plan["missing"] += int((~keep).sum())
+        used, quads = corridor_mod.compact(stueck["quads"], keep)
+        if not len(quads):
+            return
+        if plan["offset"] is None:
+            plan["offset"] = _height_offset(context, props, z[used], plan["bezug"])
+        verts = np.column_stack((stueck["x"][used], stueck["y"][used],
+                                 z[used] - plan["offset"]))
 
-            top = builder.ensure_collection(builder.TOP_COLLECTION, context.scene.collection)
-            name = "Gelände %s" % line.name.replace("KM-Linie ", "")
-            parts = builder.create_terrain_segments(
-                context, name, verts, faces, coords, top, height_offset=offset,
-                segment_length=props.terrain_segment_length, radius=props.corridor_radius)
-            if not parts:
-                continue
-            if (props.dem_zero_level and props.terrain_source != 'FLAT'
-                    and "height_offset" not in context.scene):
-                context.scene["height_offset"] = offset
-            for obj in parts:
-                obj["chainage_line"] = line.name
-                obj["dem_service"] = plan["label"]
-                obj["dem_spacing_m"] = plan["spacing"]
-                obj["corridor_radius_m"] = props.corridor_radius
-                obj["corridor_length_m"] = round(area.length, 1)
-                obj["utm_zone"] = zone
-                created.append(obj.name)
+        top = builder.ensure_collection(builder.TOP_COLLECTION, context.scene.collection)
+        name = "Gelände %s" % stueck["line"].replace("KM-Linie ", "")
+        if stueck["count"] > 1:
+            name = "%s %02d" % (name, stueck["index"] + 1)
+        obj = builder.mesh_from_arrays(name, verts, quads, top)
+        start = stueck["index"] * stueck["span"]
+        builder.apply_corridor_uv(obj, stueck["coords"][used], props.corridor_radius,
+                                  stueck["span"], station_offset=start)
+        obj["height_offset"] = plan["offset"]
+        obj["corridor_station_start"] = round(start, 2)
+        obj["corridor_station_end"] = round(min(stueck["length"], start + stueck["span"]), 2)
+        obj["chainage_line"] = stueck["line"]
+        obj["dem_service"] = plan["label"]
+        obj["dem_spacing_m"] = plan["spacing"]
+        obj["corridor_radius_m"] = props.corridor_radius
+        obj["corridor_length_m"] = round(stueck["length"], 1)
+        obj["utm_zone"] = plan["zone"]
+        parts.append(obj.name)
+        plan["verts"] += len(verts)
+        plan["faces"] += len(quads)
+        plan["gebaut"] += 1
 
-            if props.drape_mode == 'DIRECT':
-                self._drape(line, model, projection, zone, offset, props.z_offset)
-            elif props.drape_mode == 'SHRINKWRAP':
-                _apply_shrinkwrap(line, parts, props.z_offset)
-            total_verts += len(verts)
-            total_faces += len(faces)
-            missing_total += missing
-
-        missing_total += model.failed
-        if not created:
-            return None
-        info = "Gelände erzeugt: %d Punkte, %d Flächen in %d Abschnitt(en), Raster %g m, " \
-               "Korridor %g m" % (total_verts, total_faces, len(created), plan["spacing"],
-                                  props.corridor_radius)
+    def _abschluss(self, context, props, plan, abgebrochen):
+        if not plan["gebaut"]:
+            return 'WARNING', ("Keine Höhendaten im Korridor erhalten - liegt die Strecke im "
+                               "Gebiet des gewählten Dienstes?")
+        model = plan["model"]
+        info = ("Gelände erzeugt: %d Punkte, %d Flächen in %d Abschnitt(en), Raster %g m, "
+                "Korridor %g m" % (plan["verts"], plan["faces"], plan["gebaut"],
+                                   plan["spacing"], props.corridor_radius))
         if model.from_fallback:
             info += ", davon %d Punkte aus den weltweiten Ersatzdaten" % model.from_fallback
-        if missing_total:
-            info += " (%d Punkte ohne Höhenwert)" % missing_total
-        return info
+        missing = plan["missing"] + model.failed
+        if missing:
+            info += " (%d Punkte ohne Höhenwert)" % missing
+        return 'INFO', info
 
     @staticmethod
     def _drape(line, model, projection, zone, offset, z_offset):
@@ -796,87 +1103,6 @@ class RC_OT_import_terrain(Operator):
                     vertex.co = child_inverse @ Vector((world.x, world.y, height))
                 child.data.update()
         line.data.update_tag()
-
-    # ------------------------------------------------------------ interaktiv
-    def invoke(self, context, event):
-        props = context.scene.railway_chainage
-        self._plan = self._prepare(context, props)
-        if self._plan is None:
-            self.report({'ERROR'}, "Für dieses Gebiet gibt es keinen hinterlegten Höhendienst - "
-                                   "bitte einen Dienst von Hand wählen")
-            return {'CANCELLED'}
-        if not self._plan["jobs"]:
-            self.report({'ERROR'}, "Keine Kilometrierungslinie mit Punkten gefunden")
-            return {'CANCELLED'}
-
-        props.scan_info = ("Ebenes Gelände wird erzeugt …" if not self._plan["keys"]
-                           else "Höhendaten: %d Kacheln werden geladen … (Esc bricht ab)"
-                                % len(self._plan["keys"]))
-        self._fetcher = _TileFetcher(self._plan["model"], self._plan["keys"])
-        self._fetcher.start()
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.25, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        props = context.scene.railway_chainage
-        if event.type == 'ESC':
-            self._release(context)
-            props.scan_info = "Abgebrochen"
-            return {'CANCELLED'}
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-
-        if self._fetcher.running:
-            _zeige_fortschritt(context, props, self._fetcher)
-            return {'RUNNING_MODAL'}
-
-        self._release(context)
-        if self._fetcher.error is not None:
-            message = str(self._fetcher.error).splitlines()[0]
-            props.scan_info = message
-            self.report({'ERROR'}, message)
-            return {'CANCELLED'}
-
-        info = self._build(context, props, self._plan)
-        if info is None:
-            self.report({'WARNING'}, "Keine Höhendaten im Korridor erhalten - liegt die "
-                                     "Strecke im Gebiet des gewählten Dienstes?")
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        _redraw(context)
-        return {'FINISHED'}
-
-    def _release(self, context):
-        _fortschritt_beenden(context, context.scene.railway_chainage)
-        if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-
-    # ------------------------------------------------------------ aus Skripten
-    def execute(self, context):
-        props = context.scene.railway_chainage
-        plan = self._prepare(context, props)
-        if plan is None:
-            self.report({'ERROR'}, "Für dieses Gebiet gibt es keinen hinterlegten Höhendienst")
-            return {'CANCELLED'}
-        if not plan["jobs"]:
-            self.report({'ERROR'}, "Keine Kilometrierungslinie mit Punkten gefunden")
-            return {'CANCELLED'}
-        try:
-            plan["model"].load(plan["keys"])
-        except dgm.DgmError as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        info = self._build(context, props, plan)
-        if info is None:
-            self.report({'WARNING'}, "Keine Höhendaten im Korridor erhalten")
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        return {'FINISHED'}
 
 
 def _apply_shrinkwrap(line, terrains, offset):
@@ -1005,13 +1231,7 @@ class RC_OT_generate_rails(Operator):
         terrain = terrains[0] if terrains else None
         sampler = None
         if terrain is not None and props.rails_drape == 'DIRECT':
-            samplers = [builder.terrain_sampler(t) for t in terrains]
-            def sampler(x, y):
-                for sample in samplers:
-                    value = sample(x, y)
-                    if value is not None:
-                        return value
-                return None
+            sampler = builder.terrain_lookup(terrains)
 
         # Gemeinsam auswerten: Weichen können Strecken-/Bahnhofsgruppen verbinden.
         way_ids = set()
@@ -1117,54 +1337,15 @@ class RC_OT_generate_rails(Operator):
         return {'FINISHED'}
 
 
-class _MapFetcher:
-    """Lädt Kartenkacheln im Hintergrund - je Zoomstufe getrennt."""
-
-    def _fortschritt(self, message, fraction=None):
-        self.status = message
-        self.fraction = -1.0 if fraction is None else fraction
-
-
-    def __init__(self, source_key, by_zoom, tile_url=""):
-        self.source_key = source_key
-        self.tile_url = tile_url
-        self.by_zoom = by_zoom          # {zoom: [(x, y), …]}
-        self.tiles = {}                 # {zoom: {(x, y): …}}
-        self.error = None
-        self.status = "Kartenkacheln werden geladen …"
-        self.fraction = -1.0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        self._thread.start()
-
-    @property
-    def running(self):
-        return self._thread.is_alive()
-
-    def _run(self):
-        try:
-            for zoom, keys in self.by_zoom.items():
-                self.tiles[zoom] = maptexture.fetch_tiles(
-                    self.source_key, keys, zoom, progress=self._fortschritt,
-                    tile_url=self.tile_url)
-        except Exception as exc:                                  # noqa: BLE001
-            self.error = exc
-
-
-class RC_OT_map_texture(Operator):
+class RC_OT_map_texture(_Stueckweise, Operator):
     bl_idname = "railway_chainage.map_texture"
     bl_label = "Kartentextur laden"
     bl_description = ("Kartenbild entlang der Strecke auf das Korridorgelände legen - die "
                       "Textur folgt der Achse und bleibt dadurch klein")
     bl_options = {'REGISTER', 'UNDO'}
 
-    _timer = None
-    _fetcher = None
-    _plan = None
-
     @classmethod
-    def poll(cls, context):
+    def _bereit(cls, context):
         return bool(_terrain_objects(context))
 
     def _prepare(self, context, props):
@@ -1225,365 +1406,220 @@ class RC_OT_map_texture(Operator):
                                                 map_resolution(props), props.map_max_edge)
             lat, lon, width, height, length, step = grid
             middle = float(lat[lat.shape[0] // 2, lat.shape[1] // 2])
-            source = maptexture.SOURCES[props.map_source]
-            max_zoom = source[1] if not props.tile_url.strip() else 22
-            zoom = maptexture.choose_zoom(middle, step, max_zoom)
+            zoom = maptexture.zoom_for(map_source(props), middle, step)
             keys = builder.corridor_tile_keys(lat, lon, zoom)
-            jobs.append({"object": obj, "grid": grid, "zoom": zoom, "keys": keys})
+            jobs.append({"object": obj.name, "grid": grid, "zoom": zoom, "keys": keys})
         if not jobs and zu_gross:
             return {"too_large": zu_gross}
         return jobs
 
+    def _planen(self, context, props):
+        jobs = self._prepare(context, props)
+        if isinstance(jobs, dict) and jobs.get("too_large"):
+            return None, _zu_gross(jobs["too_large"])
+        if not jobs:
+            return None, "Kein passendes Korridorgelände gefunden – Auswahl und Gelände prüfen"
+        total = len({(job["zoom"],) + key for job in jobs for key in job["keys"]})
+        problem = check_tile_budget(props, total)
+        if problem:
+            return None, problem
+        return {"jobs": jobs, "source": map_source(props), "built": [], "gebaut": 0,
+                "luftbild": maptexture.new_report(),
+                "start": "Kartentextur: %d Kacheln für %d Abschnitt(e) werden geladen …"
+                         % (total, len(jobs))}, None
+
     @staticmethod
-    def _keys_by_zoom(jobs):
-        """Benötigte Kacheln, nach Zoomstufe gruppiert."""
-        by_zoom = {}
-        for job in jobs:
-            by_zoom.setdefault(job["zoom"], set()).update(job["keys"])
-        return {zoom: sorted(keys) for zoom, keys in by_zoom.items()}
+    def _erzeugen(plan, fortschritt, abbruch):
+        for number, job in enumerate(plan["jobs"], start=1):
+            if abbruch.is_set():
+                return
+            fortschritt("Kartentextur: Abschnitt %d von %d" % (number, len(plan["jobs"])),
+                        (number - 1) / float(len(plan["jobs"])))
+            bericht = maptexture.new_report()
+            yield job, maptexture.fetch_tiles(plan["source"], job["keys"], job["zoom"],
+                                              report=bericht, abbruch=abbruch), bericht
 
-    def _build(self, context, props, jobs, tiles_by_zoom):
-        built = []
-        cache = {}      # geladene Kacheln über alle Abschnitte hinweg wiederverwenden
-        for number, job in enumerate(jobs, start=1):
-            lat, lon, width, height, length, step = job["grid"]
-            name = "Karte %s %s" % (job["object"].name[:35], uuid.uuid4().hex[:12])
-            image = builder.corridor_texture(lat, lon, width, height, step,
-                                             props.map_source,
-                                             tiles_by_zoom.get(job["zoom"], {}),
-                                             job["zoom"], name=name,
-                                             tile_url=props.tile_url.strip(), cache=cache)
-            builder.apply_map_material(job["object"], image, name=name)
-            built.append("%d x %d Pixel, %.2f m/Pixel, Zoom %d" %
-                         (width, height, step, job["zoom"]))
-        if len(built) > 1:
-            return ["%d Abschnitte je %s" % (len(built), built[0])]
-        return built
+    def _aufbauen(self, context, props, plan, stueck):
+        job, tiles, bericht = stueck
+        quelle = bericht_uebernehmen(plan, bericht)
+        obj = bpy.data.objects.get(job["object"])
+        if obj is None:
+            return
+        lat, lon, width, height, length, step = job["grid"]
+        name = "Karte %s %s" % (obj.name[:35], uuid.uuid4().hex[:12])
+        image = builder.corridor_texture(lat, lon, width, height, step, plan["source"],
+                                         tiles, job["zoom"], name=name, credit=quelle)
+        builder.apply_map_material(obj, image, name=name)
+        plan["built"].append("%d x %d Pixel, %.2f m/Pixel, Zoom %d" %
+                             (width, height, step, job["zoom"]))
+        plan["gebaut"] += 1
 
-    def invoke(self, context, event):
-        props = context.scene.railway_chainage
-        jobs = self._prepare(context, props)
-        if isinstance(jobs, dict) and jobs.get("too_large"):
-            self.report({'ERROR'}, _zu_gross(jobs["too_large"]))
-            return {'CANCELLED'}
-        if not jobs:
-            self.report({'ERROR'}, "Kein passendes Korridorgelände gefunden – Auswahl und Gelände prüfen")
-            return {'CANCELLED'}
-        by_zoom = self._keys_by_zoom(jobs)
-        total = sum(len(keys) for keys in by_zoom.values())
-        pixels = sum(job["grid"][2] * job["grid"][3] for job in jobs)
-        problem = check_tile_budget(props, total, pixels)
-        if problem:
-            self.report({'ERROR'}, problem)
-            return {'CANCELLED'}
-
-        self._plan = jobs
-        props.scan_info = "Kartentextur: %d Kacheln werden geladen … (Esc bricht ab)" % total
-        self._fetcher = _MapFetcher(props.map_source, by_zoom, props.tile_url.strip())
-        self._fetcher.start()
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.25, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        props = context.scene.railway_chainage
-        if event.type == 'ESC':
-            self._release(context)
-            props.scan_info = "Abgebrochen"
-            return {'CANCELLED'}
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-        if self._fetcher.running:
-            _zeige_fortschritt(context, props, self._fetcher)
-            return {'RUNNING_MODAL'}
-
-        self._release(context)
-        if self._fetcher.error is not None:
-            message = str(self._fetcher.error).splitlines()[0]
-            props.scan_info = message
-            self.report({'ERROR'}, message)
-            return {'CANCELLED'}
-
-        built = self._build(context, props, self._plan, self._fetcher.tiles)
-        info = " | ".join(built) + " | Quelle: " + maptexture.credit(props.map_source)
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        _redraw(context)
-        return {'FINISHED'}
-
-    def _release(self, context):
-        _fortschritt_beenden(context, context.scene.railway_chainage)
-        if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-
-    def execute(self, context):
-        props = context.scene.railway_chainage
-        jobs = self._prepare(context, props)
-        if isinstance(jobs, dict) and jobs.get("too_large"):
-            self.report({'ERROR'}, _zu_gross(jobs["too_large"]))
-            return {'CANCELLED'}
-        if not jobs:
-            self.report({'ERROR'}, "Kein passendes Korridorgelände gefunden – Auswahl und Gelände prüfen")
-            return {'CANCELLED'}
-        by_zoom = self._keys_by_zoom(jobs)
-        total = sum(len(keys) for keys in by_zoom.values())
-        pixels = sum(job["grid"][2] * job["grid"][3] for job in jobs)
-        problem = check_tile_budget(props, total, pixels)
-        if problem:
-            self.report({'ERROR'}, problem)
-            return {'CANCELLED'}
-        tiles = {}
-        try:
-            for zoom, keys in by_zoom.items():
-                tiles[zoom] = maptexture.fetch_tiles(props.map_source, keys, zoom,
-                                                     tile_url=props.tile_url.strip())
-        except maptexture.MapError as exc:
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        built = self._build(context, props, jobs, tiles)
-        info = " | ".join(built) + " | Quelle: " + maptexture.credit(props.map_source)
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        return {'FINISHED'}
+    def _abschluss(self, context, props, plan, abgebrochen):
+        built = plan["built"]
+        if not built:
+            return 'WARNING', "Keine Kartentextur erzeugt"
+        quelle = maptexture.credit(plan["source"], plan["luftbild"])
+        kartenquelle_merken(context.scene, quelle)
+        teile = ["%d Abschnitte je %s" % (len(built), built[0])] if len(built) > 1 else built
+        return 'INFO', " | ".join(teile) + " | Quelle: " + quelle + luftbild_hinweis(plan)
 
 
-class _AreaFetcher:
-    """Lädt Höhen- und Kartendaten eines Gebiets im Hintergrund."""
-
-    def _fortschritt(self, message, fraction=None):
-        self.status = message
-        self.fraction = -1.0 if fraction is None else fraction
+# Größte Kantenlänge einer Kartentextur je Geländestück in Pixeln
+MAX_CHUNK_TEXTURE = 4096
 
 
-    def __init__(self, job):
-        self.job = job
-        self.error = None
-        self.status = "Daten werden geladen …"
-        self.fraction = -1.0
-        self.result = None
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        self._thread.start()
-
-    @property
-    def running(self):
-        return self._thread.is_alive()
-
-    def _run(self):
-        try:
-            job = self.job
-            job["model"].load(job["tiles"], progress=self._fortschritt)
-            if job["map_keys"]:
-                self.status = "Kartenkacheln werden geladen …"
-                job["map_tiles"] = maptexture.fetch_tiles(
-                    job["map_source"], job["map_keys"], job["map_zoom"],
-                    progress=self._fortschritt, tile_url=job["tile_url"])
-            self.result = True
-        except Exception as exc:                                  # noqa: BLE001
-            self.error = exc
+def tile_range(bbox, zoom, tile_size=256):
+    """Anzahl der Kartenkacheln, die ein geografisches Rechteck berührt - ohne das
+    Pixelgitter aufzubauen."""
+    (x0, y0), (x1, y1) = (maptexture.global_pixels(bbox[2], bbox[1], zoom, tile_size),
+                          maptexture.global_pixels(bbox[0], bbox[3], zoom, tile_size))
+    return (int(x1 // tile_size) - int(x0 // tile_size) + 1) * \
+        (int(y1 // tile_size) - int(y0 // tile_size) + 1)
 
 
-class RC_OT_import_area(Operator):
+class RC_OT_import_area(_Stueckweise, Operator):
     bl_idname = "railway_chainage.import_area"
     bl_label = "Gebiet als Fläche laden"
     bl_description = ("Geländemodell für das eingestellte Gebiet laden und mit der Karte "
-                      "belegen - ohne Bezug zu einer Strecke")
+                      "belegen - ohne Bezug zu einer Strecke. Große Gebiete entstehen "
+                      "Stück für Stück")
     bl_options = {'REGISTER', 'UNDO'}
 
-    _timer = None
-    _fetcher = None
-
-    def _prepare(self, context, props):
+    def _planen(self, context, props):
         bbox = get_bbox(props)
-        if props.terrain_source == 'FLAT':
-            zone = dgm.utm_zone((bbox[1] + bbox[3]) / 2.0)
-            spacing = float(props.flat_spacing)
-            model = dgm.FlatModel(props.flat_height, zone)
-            label = "ebene Fläche (ohne Höhenmodell)"
-        else:
-            key = props.dem_service
-            if key == 'AUTO':
-                key = dgm.service_for((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
-            if key is None:
-                return None
-            entry = dgm.SERVICES[key]
-            zone = entry["zone"]
-            label = entry["label"]
-            spacing = float(props.dem_spacing)
-            fallback = dgm.TerrainTiles(zoom=props.dem_fallback_zoom,
-                                        use_cache=props.use_cache) if props.dem_fill_gaps else None
-            model = dgm.HeightModel(entry["url"], entry["coverage"], zone, spacing,
-                                    use_cache=props.use_cache, axes=entry["axes"],
-                                    fallback=fallback, kind=entry.get("kind", "wcs"))
+        gewaehlt = _height_model(props, bbox)
+        if gewaehlt is None:
+            return None, "Für dieses Gebiet gibt es keinen hinterlegten Höhendienst"
+        model, zone, spacing, label = gewaehlt
 
         # Das Gelände wird entlang der Szenenachsen aufgebaut, nicht entlang der
         # UTM-Achsen - sonst steht der Ausschnitt um die Meridiankonvergenz
         # verdreht in der Szene.
         projection, _ = get_projection(context, props)
         lokal = corridor_mod.area_bounds_local(bbox, projection, spacing)
-        bounds = corridor_mod.local_bounds_utm(lokal, projection, zone, reserve=spacing)
-        size = model.tile_size
-        tiles = [] if props.terrain_source == 'FLAT' else sorted(
-            {(int(e // size), int(n // size))
-             for e in _steps(bounds[0], bounds[2], size)
-             for n in _steps(bounds[1], bounds[3], size)})
-
-        job = {"model": model, "tiles": tiles, "zone": zone, "bbox": bbox,
-               "spacing": spacing, "label": label, "bounds": bounds, "lokal": lokal,
-               "projection": projection,
-               "map_keys": [], "map_zoom": 0, "map_tiles": {},
-               "map_source": props.map_source, "tile_url": props.tile_url.strip()}
-
+        groesse = props.chunk_size
+        aufloesung = map_resolution(props)
         if props.area_with_map:
-            # Umfang zuerst rechnerisch prüfen - das Gitter selbst belegt je Pixel
-            # mehrere Fließkommawerte und darf gar nicht erst zu groß entstehen
-            vorab_w = min(int(props.map_max_edge),
-                          max(16, int(math.ceil((lokal[2] - lokal[0]) / map_resolution(props)))))
-            vorab_h = min(int(props.map_max_edge),
-                          max(16, int(math.ceil((lokal[3] - lokal[1]) / map_resolution(props)))))
-            if vorab_w * vorab_h > MAX_TEXTURE_PIXELS:
-                job["too_large"] = (vorab_w, vorab_h)
-                return job
-            lat, lon, width, height, step = builder.local_latlon_grid(
-                lokal, projection, map_resolution(props), props.map_max_edge)
-            middle = float(lat[lat.shape[0] // 2, lat.shape[1] // 2])
-            max_zoom = maptexture.SOURCES[props.map_source][1] if not job["tile_url"] else 22
-            zoom = maptexture.choose_zoom(middle, step, max_zoom)
-            job.update({"grid": (lat, lon, width, height, step), "map_zoom": zoom,
-                        "map_keys": builder.corridor_tile_keys(lat, lon, zoom)})
-        return job
+            # jede Textur bleibt unter MAX_CHUNK_TEXTURE Pixel Kantenlänge
+            groesse = min(groesse, MAX_CHUNK_TEXTURE * aufloesung)
+        columns, rows, chunks = corridor_mod.area_chunks(lokal, spacing, groesse)
 
-    def _build(self, context, props, job):
-        projection = job["projection"]
-        verts, faces, uvs, missing, bounds = corridor_mod.area_grid_local(
-            job["lokal"], job["zone"], job["spacing"], job["model"], projection)
-        if not verts:
-            return None
+        plan = {"model": model, "zone": zone, "spacing": spacing, "label": label,
+                "lokal": lokal, "projection": projection, "chunks": chunks,
+                "source": map_source(props), "map": props.area_with_map,
+                "resolution": aufloesung, "zoom": 0, "offset": None, "verts": 0,
+                "faces": 0, "missing": 0, "gebaut": 0, "pixel": None,
+                "flat": props.terrain_source == 'FLAT',
+                "probe": _needs_probe(context, props), "bezug": None,
+                "luftbild": maptexture.new_report()}
+        kacheln = 0
+        if props.area_with_map:
+            mitte = (bbox[0] + bbox[2]) / 2.0
+            plan["zoom"] = maptexture.zoom_for(plan["source"], mitte, aufloesung)
+            kacheln = tile_range(bbox, plan["zoom"])
+            problem = check_tile_budget(props, kacheln)
+            if problem:
+                return None, problem
+        plan["start"] = ("Gebiet: %d x %d Punkte in %d Stück(en)%s%s …"
+                         % (columns, rows, len(chunks),
+                            ", ca. %d Kartenkacheln" % kacheln if kacheln else "",
+                            _punkte_hinweis(columns * rows)))
+        return plan, None
 
-        offset = 0.0
-        if props.terrain_source == 'FLAT':
-            pass
-        elif props.dem_use_blosm_offset and "height_offset" in context.scene:
-            offset = float(context.scene["height_offset"])
-        elif props.dem_zero_level:
-            offset = min(v[2] for v in verts)
+    @staticmethod
+    def _erzeugen(plan, fortschritt, abbruch):
+        model, chunks, spacing = plan["model"], plan["chunks"], plan["spacing"]
+        x0, y0, x1, y1 = plan["lokal"]
+        if plan["probe"]:
+            fortschritt("Gebiet: Höhenbezug wird bestimmt …")
+            gx, gy = np.meshgrid(np.linspace(x0, x1, 100), np.linspace(y0, y1, 100))
+            lat, lon = plan["projection"].to_geographic_array(gx, gy)
+            _probe(plan, *dgm.wgs84_to_utm_array(lat, lon, plan["zone"]))
+        for number, chunk in enumerate(chunks, start=1):
+            if abbruch.is_set():
+                return
+            fortschritt("Gebiet: Stück %d von %d - Höhen" % (number, len(chunks)),
+                        (number - 1) / float(len(chunks)))
+            gx, gy, east, north = corridor_mod.area_chunk(plan["lokal"], spacing, chunk,
+                                                          plan["projection"], plan["zone"])
+            if not plan["flat"]:
+                keys = corridor_mod.tile_keys(east, north, model)
+                model.evict(set(keys))        # Kacheln früherer Stücke freigeben
+                model.load(keys)
+            heights = model.sample(east, north)
+            del east, north
+            c0, c1, r0, r1 = chunk
+            bounds = (x0 + c0 * spacing, y0 + r0 * spacing, x0 + c1 * spacing, y0 + r1 * spacing)
+            stueck = {"number": number, "x": gx, "y": gy, "z": heights, "bounds": bounds}
+            if plan["map"]:
+                fortschritt("Gebiet: Stück %d von %d - Karte" % (number, len(chunks)),
+                            (number - 0.5) / float(len(chunks)))
+                lat, lon, width, height, step = builder.local_latlon_grid(
+                    bounds, plan["projection"], plan["resolution"], MAX_CHUNK_TEXTURE)
+                keys = builder.corridor_tile_keys(lat, lon, plan["zoom"])
+                bericht = maptexture.new_report()
+                stueck.update(grid=(lat, lon, width, height, step), bericht=bericht,
+                              tiles=maptexture.fetch_tiles(plan["source"], keys, plan["zoom"],
+                                                           report=bericht, abbruch=abbruch))
+            yield stueck
 
+    def _aufbauen(self, context, props, plan, stueck):
         top = builder.ensure_collection(builder.TOP_COLLECTION, context.scene.collection)
-        obj = builder.create_area_terrain(context, "Gelände Gebiet", verts, faces, uvs,
-                                          top, offset)
-        if (props.dem_zero_level and props.terrain_source != 'FLAT'
-                and "height_offset" not in context.scene):
-            context.scene["height_offset"] = offset
-        obj["dem_service"] = job["label"]
-        obj["dem_spacing_m"] = job["spacing"]
-        obj["utm_zone"] = job["zone"]
+        sammlung = builder.ensure_collection("Gelände Gebiet", top)
+        if not plan["gebaut"] and not plan.get("geleert"):
+            builder.clear_generated(sammlung)      # ein neuer Lauf ersetzt den vorigen
+            plan["geleert"] = True
 
-        info = "Gebiet geladen: %d Punkte, %d Flächen, Raster %g m" % (
-            len(verts), len(faces), job["spacing"])
-        if job["model"].from_fallback:
-            info += ", davon %d aus Ersatzdaten" % job["model"].from_fallback
-        if missing:
-            info += " (%d ohne Höhenwert)" % missing
+        z = stueck["z"]
+        valid = ~np.isnan(z)
+        plan["missing"] += int((~valid).sum())
+        _index, quads = corridor_mod.grid_quads(valid)
+        if not len(quads):
+            return
+        if plan["offset"] is None:
+            plan["offset"] = _height_offset(context, props, z[valid], plan["bezug"])
+        bx0, by0, bx1, by1 = stueck["bounds"]
+        x, y = stueck["x"][valid], stueck["y"][valid]
+        verts = np.column_stack((x, y, z[valid] - plan["offset"]))
+        uvs = np.column_stack(((x - bx0) / max(1e-6, bx1 - bx0),
+                               (y - by0) / max(1e-6, by1 - by0)))
+        name = "Gelände Gebiet %03d" % stueck["number"]
+        obj = builder.mesh_from_arrays(name, verts, quads, sammlung, uvs, uv_name="Gebiet")
+        obj["height_offset"] = plan["offset"]
+        obj["dem_service"] = plan["label"]
+        obj["dem_spacing_m"] = plan["spacing"]
+        obj["utm_zone"] = plan["zone"]
+        plan["verts"] += len(verts)
+        plan["faces"] += len(quads)
+        plan["gebaut"] += 1
 
-        if props.area_with_map and job.get("grid"):
-            lat, lon, width, height, step = job["grid"]
-            image = builder.corridor_texture(lat, lon, width, height, step, props.map_source,
-                                             job["map_tiles"], job["map_zoom"],
-                                             name="Gebietskarte", tile_url=job["tile_url"])
-            builder.apply_map_material(obj, image, name="Gebietskarte")
-            info += " | Karte %d x %d Pixel, %.2f m/Pixel, Zoom %d" % (
-                width, height, step, job["map_zoom"])
-        return info
+        if plan["map"] and stueck.get("grid"):
+            lat, lon, width, height, step = stueck["grid"]
+            bildname = "Gebietskarte %03d" % stueck["number"]
+            quelle = bericht_uebernehmen(plan, stueck["bericht"])
+            image = builder.corridor_texture(lat, lon, width, height, step, plan["source"],
+                                             stueck["tiles"], plan["zoom"], name=bildname,
+                                             credit=quelle)
+            builder.apply_map_material(obj, image, name=bildname)
+            if plan["pixel"] is None or width * height > plan["pixel"][0] * plan["pixel"][1]:
+                plan["pixel"] = (width, height, step)
 
-    def invoke(self, context, event):
-        props = context.scene.railway_chainage
-        job = self._prepare(context, props)
-        if job is None:
-            self.report({'ERROR'}, "Für dieses Gebiet gibt es keinen hinterlegten Höhendienst")
-            return {'CANCELLED'}
-        if job.get("too_large"):
-            self.report({'ERROR'}, _zu_gross(job["too_large"]))
-            return {'CANCELLED'}
-        problem = check_tile_budget(props, len(job["map_keys"]),
-                                    job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
-        if problem:
-            self.report({'ERROR'}, problem)
-            return {'CANCELLED'}
-        props.scan_info = "Gebiet: %d Höhenkacheln, %d Kartenkacheln …" % (
-            len(job["tiles"]), len(job["map_keys"]))
-        self._fetcher = _AreaFetcher(job)
-        self._fetcher.start()
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.25, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        props = context.scene.railway_chainage
-        if event.type == 'ESC':
-            self._release(context)
-            props.scan_info = "Abgebrochen"
-            return {'CANCELLED'}
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-        if self._fetcher.running:
-            _zeige_fortschritt(context, props, self._fetcher)
-            return {'RUNNING_MODAL'}
-
-        self._release(context)
-        if self._fetcher.error is not None:
-            message = str(self._fetcher.error).splitlines()[0]
-            props.scan_info = message
-            self.report({'ERROR'}, message)
-            return {'CANCELLED'}
-        info = self._build(context, props, self._fetcher.job)
-        if info is None:
-            self.report({'WARNING'}, "Keine Höhendaten für dieses Gebiet erhalten")
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        _redraw(context)
-        return {'FINISHED'}
-
-    def _release(self, context):
-        _fortschritt_beenden(context, context.scene.railway_chainage)
-        if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-
-    def execute(self, context):
-        props = context.scene.railway_chainage
-        job = self._prepare(context, props)
-        if job is None:
-            self.report({'ERROR'}, "Für dieses Gebiet gibt es keinen hinterlegten Höhendienst")
-            return {'CANCELLED'}
-        if job.get("too_large"):
-            self.report({'ERROR'}, _zu_gross(job["too_large"]))
-            return {'CANCELLED'}
-        problem = check_tile_budget(props, len(job["map_keys"]),
-                                    job["grid"][2] * job["grid"][3] if job.get("grid") else 0)
-        if problem:
-            self.report({'ERROR'}, problem)
-            return {'CANCELLED'}
-        try:
-            job["model"].load(job["tiles"])
-            if job["map_keys"]:
-                job["map_tiles"] = maptexture.fetch_tiles(
-                    job["map_source"], job["map_keys"], job["map_zoom"],
-                    tile_url=job["tile_url"])
-        except Exception as exc:                                  # noqa: BLE001
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
-        info = self._build(context, props, job)
-        if info is None:
-            self.report({'WARNING'}, "Keine Höhendaten für dieses Gebiet erhalten")
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        return {'FINISHED'}
+    def _abschluss(self, context, props, plan, abgebrochen):
+        if not plan["gebaut"]:
+            return 'WARNING', "Keine Höhendaten für dieses Gebiet erhalten"
+        info = "Gebiet geladen: %d Punkte, %d Flächen in %d Stück(en), Raster %g m" % (
+            plan["verts"], plan["faces"], plan["gebaut"], plan["spacing"])
+        if plan["model"].from_fallback:
+            info += ", davon %d aus Ersatzdaten" % plan["model"].from_fallback
+        if plan["missing"]:
+            info += " (%d ohne Höhenwert)" % plan["missing"]
+        if plan["pixel"]:
+            quelle = maptexture.credit(plan["source"], plan["luftbild"])
+            kartenquelle_merken(context.scene, quelle)
+            info += " | Karte je Stück bis %d x %d Pixel, %.2f m/Pixel, Zoom %d | Quelle: %s%s" % (
+                plan["pixel"][0], plan["pixel"][1], plan["pixel"][2], plan["zoom"], quelle,
+                luftbild_hinweis(plan))
+        return 'INFO', info
 
 
 class RC_OT_clip_scene(Operator):
@@ -1645,34 +1681,6 @@ class RC_OT_select_routes(Operator):
         return {'FINISHED'}
 
 
-class RC_OT_from_blosm(Operator):
-    bl_idname = "railway_chainage.from_blosm"
-    bl_label = "Gebiet von BLOSM"
-    bl_description = "Das im BLOSM-Addon eingestellte Gebiet übernehmen"
-
-    @classmethod
-    def poll(cls, context):
-        return hasattr(context.scene, "blosm")
-
-    def execute(self, context):
-        props = context.scene.railway_chainage
-        blosm = getattr(context.scene, "blosm", None)
-        if blosm is None:
-            self.report({'ERROR'}, "BLOSM ist nicht installiert oder nicht aktiviert")
-            return {'CANCELLED'}
-        try:
-            props.min_lat, props.max_lat = blosm.minLat, blosm.maxLat
-            props.min_lon, props.max_lon = blosm.minLon, blosm.maxLon
-        except AttributeError:
-            self.report({'ERROR'}, "Im BLOSM-Addon ist kein Gebiet gesetzt")
-            return {'CANCELLED'}
-        props.area_mode = 'BBOX'
-        props.center_lat = (props.min_lat + props.max_lat) / 2.0
-        props.center_lon = (props.min_lon + props.max_lon) / 2.0
-        self.report({'INFO'}, "Gebiet von BLOSM übernommen")
-        return {'FINISHED'}
-
-
 class RC_OT_paste_bbox(Operator):
     bl_idname = "railway_chainage.paste_bbox"
     bl_label = "Aus Zwischenablage"
@@ -1716,7 +1724,7 @@ class RC_OT_paste_bbox(Operator):
             if m:
                 lat, lon = float(m.group(1)), float(m.group(2))
         if lat is None:
-            # 5) vier Zahlen: west,süd,ost,nord (z. B. aus BLOSM oder QGIS)
+            # 5) vier Zahlen: west,süd,ost,nord (z. B. aus der Auswahlseite oder QGIS)
             m = re.match(r"^\s*(%s)\s*[,;]\s*(%s)\s*[,;]\s*(%s)\s*[,;]\s*(%s)\s*$"
                          % (num, num, num, num), text)
             if m:
@@ -1749,9 +1757,10 @@ class RC_OT_paste_bbox(Operator):
 
 class RC_OT_open_map(Operator):
     bl_idname = "railway_chainage.open_map"
-    bl_label = "In eigener Karte ansehen"
-    bl_description = ("Das eingestellte Gebiet in der eigenen Kartenanwendung öffnen "
-                      "(Adresse im Feld darunter)")
+    bl_label = "In Overpass Turbo ansehen"
+    bl_description = ("Das eingestellte Gebiet in Overpass Turbo der gewählten Datenquelle "
+                      "öffnen. Geo-Box: über einen lokalen Zugang in Blender, der das "
+                      "Service-Konto aus „Datenquelle“ nutzt - keine Anmeldung im Browser")
 
     def execute(self, context):
         props = context.scene.railway_chainage
@@ -1763,33 +1772,36 @@ class RC_OT_open_map(Operator):
         while zoom > 3 and span > 360.0 / (2 ** zoom) * 1.5:
             zoom -= 1
 
-        url = props.map_view_url.strip()
-        if not url:
-            self.report({'ERROR'}, "Keine Adresse für die Kartenansicht eingetragen")
-            return {'CANCELLED'}
-        if "{lat}" in url or "{lon}" in url or "{zoom}" in url:
-            url = url.replace("{lat}", "%.6f" % lat).replace("{lon}", "%.6f" % lon) \
-                     .replace("{zoom}", str(zoom))
+        if simbox.active():
+            # Turbo der Geo-Box verlangt einen Token, den der Browser nicht hat - der
+            # lokale Zugang reicht Seite, Abfragen und Kacheln angemeldet weiter
+            try:
+                url = geoproxy.start() + "turbo/"
+            except OSError as exc:
+                self.report({'ERROR'}, "Lokaler Geo-Box-Zugang nicht startbar: %s" % exc)
+                return {'CANCELLED'}
+            quelle = "Overpass Turbo der Geo-Box (lokaler Zugang %s)" % url
         else:
-            # Overpass turbo versteht die Kartenposition als C=lat;lon;zoom
-            separator = "&" if "?" in url else "?"
-            url = "%s%sC=%.6f;%.6f;%d" % (url.rstrip("#"), separator, lat, lon, zoom)
+            url = simbox.turbo_url()
+            quelle = "Overpass Turbo (öffentlich)"
+        # Overpass Turbo versteht die Kartenposition als C=lat;lon;zoom
+        url = "%s?C=%.6f;%.6f;%d" % (url, lat, lon, zoom)
         bpy.ops.wm.url_open(url=url)
-        self.report({'INFO'}, "Kartenansicht geöffnet")
+        self.report({'INFO'}, quelle + " geöffnet")
         return {'FINISHED'}
 
 
 def _selector_tiles(props):
-    """Kacheladresse und Zoomgrenze für die Auswahlkarte.
+    """Kacheladresse und Zoomgrenze für die Auswahlkarte ohne lokalen Server.
 
     Ehrenamtlich betriebene Kartenserver bleiben außen vor - beim Herumfahren
-    auf der Karte kämen dort schnell hunderte Abrufe zusammen.
+    auf der Karte kämen dort schnell hunderte Abrufe zusammen. Karten der Geo-Box
+    brauchen eine Anmeldung, die der Browser nicht hat.
     """
-    eigen = props.tile_url.strip()
-    if eigen:
-        return eigen, 22
-    quelle = maptexture.SOURCES.get(props.map_source)
-    if quelle is None or props.map_source in maptexture.VOLUNTEER_SOURCES:
+    key = map_source(props)
+    quelle = maptexture.SOURCES.get(key)
+    if (quelle is None or key in maptexture.VOLUNTEER_SOURCES
+            or key in maptexture.GEOBOX_SOURCES):
         return selector.DEFAULT_TILES, 19
     return quelle[0], quelle[1]
 
@@ -1818,13 +1830,22 @@ class RC_OT_select_area(Operator):
 
     def _seite(self, props):
         bbox = get_bbox(props)
-        kacheln, max_zoom = _selector_tiles(props)
-        quelle = maptexture.SOURCES.get(props.map_source)
+        if simbox.active():
+            # Basiskarte und Ortssuche der Geo-Box über den lokalen Server, der den
+            # Token ergänzt - der Browser selbst ist nicht angemeldet
+            kacheln, max_zoom, suche = selector.GEOBOX_TILES, 19, selector.GEOBOX_SEARCH
+            quellenangabe = maptexture.SOURCES[maptexture.BASEMAP][4]
+        else:
+            kacheln, max_zoom = _selector_tiles(props)
+            suche = ""
+            if kacheln == selector.DEFAULT_TILES:
+                quellenangabe = maptexture.SOURCES['BASEMAP_DE'][4]
+            else:
+                quellenangabe = maptexture.credit(map_source(props))
         return selector.build_html(
             bbox[0], bbox[1], bbox[2], bbox[3],
-            tile_url=kacheln, max_zoom=max_zoom,
-            attribution=quelle[4] if quelle and not props.tile_url.strip() else "",
-            with_server=True)
+            tile_url=kacheln, max_zoom=max_zoom, search_url=suche,
+            attribution=quellenangabe, with_server=True)
 
     def invoke(self, context, event):
         props = context.scene.railway_chainage
@@ -1899,188 +1920,133 @@ class RC_OT_select_area(Operator):
         return {'FINISHED'}
 
 
-class RC_OT_select_area_blosm(Operator):
-    bl_idname = "railway_chainage.select_area_blosm"
-    bl_label = "BLOSM-Karte"
-    bl_description = ("Die Auswahlkarte des BLOSM-Addons (prochitecture.com) im Browser "
-                      "öffnen. Dort Rechteck aufziehen, Koordinaten kopieren und hier "
-                      "„Aus Zwischenablage“ wählen - benötigt eine Internetverbindung")
-
-    def execute(self, context):
-        version = bpy.app.version
-        bpy.ops.wm.url_open(url=selector.blosm_url(blender_version=version))
-        self.report({'INFO'}, "BLOSM-Auswahlkarte geöffnet - dort kopieren, hier "
-                              "„Aus Zwischenablage“")
-        return {'FINISHED'}
-
-
-class _BuildingFetcher:
-    """Lädt Gebäudegrundrisse im Hintergrund."""
-
-    def __init__(self, props, bbox):
-        self._props = props
-        self._bbox = bbox
-        self.data = None
-        self.error = None
-        self.status = "Gebäudedaten werden geladen …"
-        self.fraction = -1.0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def start(self):
-        self._thread.start()
-
-    @property
-    def running(self):
-        return self._thread.is_alive()
-
-    def _fortschritt(self, message, fraction=None):
-        self.status = message
-        self.fraction = -1.0 if fraction is None else fraction
-
-    def _run(self):
-        try:
-            self.data = overpass.fetch_buildings(
-                self._bbox, timeout=self._props.request_timeout,
-                use_cache=self._props.use_cache,
-                endpoint=overpass_endpoint(self._props),
-                with_parts=self._props.buildings_parts,
-                progress=self._fortschritt)
-        except Exception as exc:                                  # noqa: BLE001
-            self.error = exc
-
-
 def _terrain_samplers(context):
-    """Höhenabfragen über alle vom Addon erzeugten Geländeobjekte."""
+    """Höhenabfrage über alle vom Addon erzeugten Geländeobjekte."""
     flaechen = [o for o in context.scene.objects
                 if o.type == 'MESH' and o.get("dem_service")]
-    return [builder.terrain_sampler(o) for o in flaechen], flaechen
+    return builder.terrain_lookup(flaechen), flaechen
 
 
-class RC_OT_import_buildings(Operator):
+def _overpass_chunk(endpoint, run, plan):
+    """Ein Overpass-Abruf im Hintergrund; bei gescheiterter Geo-Box-Anmeldung einmalig
+    auf die öffentlichen Server ausweichen (wie :func:`overpass_query`)."""
+    if plan.get("ausweichen"):
+        endpoint = None
+    try:
+        return run(endpoint)
+    except overpass.AuthError as exc:
+        if not endpoint:
+            raise
+        plan["ausweichen"] = True
+        plan["hinweis"] = "öffentliche Overpass-Server (Geo-Box: %s)" % exc
+        return run(None)
+
+
+class RC_OT_import_buildings(_Stueckweise, Operator):
     bl_idname = "railway_chainage.import_buildings"
     bl_label = "Gebäude erzeugen"
     bl_description = ("Gebäudegrundrisse aus OpenStreetMap für das eingestellte Gebiet laden "
-                      "und als Baukörper erzeugen")
+                      "und als Baukörper erzeugen - Teilgebiet für Teilgebiet")
     bl_options = {'REGISTER', 'UNDO'}
 
-    _timer = None
-    _fetcher = None
-
-    # ------------------------------------------------------------ Aufbau
-    def _build(self, context, props, data):
+    def _planen(self, context, props):
         projection, _ = get_projection(context, props)
         bbox = get_bbox(props)
-        innerhalb = buildings.bbox_test(projection, bbox)
-
+        korridor = None
         if props.buildings_only_corridor:
             korridor = _corridor_from_lines(context, props.corridor_radius)
             if korridor is None:
                 return None, "Für „Nur im Korridor“ wird eine Kilometrierungslinie gebraucht"
-            im_gebiet = innerhalb
+        teile = overpass.split_bbox(bbox, overpass.BUILDING_SPAN)
+        lookup, gelaende = (_terrain_samplers(context) if props.buildings_drape
+                            else (None, []))
+        return {"projection": projection, "bbox": bbox, "korridor": korridor, "teile": teile,
+                "endpoint": overpass_endpoint(props), "timeout": props.request_timeout,
+                "cache": props.use_cache, "parts": props.buildings_parts,
+                "default_height": props.buildings_default_height,
+                "level_height": props.buildings_level_height,
+                "min_area": props.buildings_min_area, "lookup": lookup,
+                "gelaende": len(gelaende), "skirt": props.buildings_skirt,
+                "anzahl": 0, "flaeche": 0.0, "hoehe": 0.0, "mit_angabe": 0,
+                "ohne_gelaende": 0, "gebaut": 0,
+                "start": "Gebäude: %d Teilgebiet(e) werden geladen …" % len(teile)}, None
 
-            def innerhalb(x, y):                                  # noqa: F811
-                return im_gebiet(x, y) and korridor.contains(x, y)
+    @staticmethod
+    def _erzeugen(plan, fortschritt, abbruch):
+        # Erst zählen - nur zur Anzeige, wie viel kommt
+        fortschritt("Gebäude werden gezählt …")
+        try:
+            anzahl = _overpass_chunk(plan["endpoint"], lambda ep: overpass.count_buildings(
+                plan["bbox"], timeout=plan["timeout"], endpoint=ep), plan)
+        except overpass.OverpassError:
+            anzahl = None
+        vorab = "ca. %d Gebäude, " % anzahl if anzahl is not None else ""
 
-        haeuser = buildings.parse(data, projection,
-                                  default_height=props.buildings_default_height,
-                                  level_height=props.buildings_level_height,
-                                  min_area=props.buildings_min_area,
-                                  bbox_filter=innerhalb)
-        if not haeuser:
-            return None, "Im Gebiet sind keine Gebäude eingetragen"
-        if len(haeuser) > props.buildings_max:
-            return None, ("Das Gebiet enthält %d Gebäude (Grenze %d). Bitte das Gebiet "
-                          "verkleinern, die Mindestfläche erhöhen oder die Höchstzahl "
-                          "anheben" % (len(haeuser), props.buildings_max))
+        projection, teile = plan["projection"], plan["teile"]
+        gesamt = buildings.bbox_test(projection, plan["bbox"])
+        korridor = plan["korridor"]
+        for number, teil in enumerate(teile, start=1):
+            if abbruch.is_set():
+                return
+            fortschritt("Gebäude: %sTeilgebiet %d von %d" % (vorab, number, len(teile)),
+                        (number - 1) / float(len(teile)))
+            data = _overpass_chunk(plan["endpoint"], lambda ep: overpass.fetch_buildings(
+                teil, timeout=plan["timeout"], use_cache=plan["cache"], endpoint=ep,
+                with_parts=plan["parts"]), plan)
 
-        samplers = []
-        gelaende = []
-        if props.buildings_drape:
-            samplers, gelaende = _terrain_samplers(context)
+            def innerhalb(x, y, teil=teil):
+                # Schwerpunkt im Teilgebiet (halboffen) - Gebäude auf der Grenze kommen
+                # in beiden Antworten vor, werden aber nur einmal gebaut
+                lat, lon = projection.to_geographic(x, y)
+                if not (teil[0] <= lat < teil[2] or (lat == teil[2] == plan["bbox"][2])):
+                    return False
+                if not (teil[1] <= lon < teil[3] or (lon == teil[3] == plan["bbox"][3])):
+                    return False
+                return gesamt(x, y) and (korridor is None or korridor.contains(x, y))
 
+            haeuser = buildings.parse(data, projection,
+                                      default_height=plan["default_height"],
+                                      level_height=plan["level_height"],
+                                      min_area=plan["min_area"], bbox_filter=innerhalb)
+            del data
+            if haeuser:
+                yield number, haeuser
+
+    def _aufbauen(self, context, props, plan, stueck):
+        number, haeuser = stueck
         top = builder.ensure_collection(builder.TOP_COLLECTION, context.scene.collection)
         sammlung = builder.ensure_collection("Gebäude", top)
-        obj, ohne_gelaende = builder.create_buildings(
-            context, "Gebäude", haeuser, sammlung, samplers=samplers,
-            skirt=props.buildings_skirt)
+        if not plan["gebaut"]:
+            builder.clear_generated(sammlung)      # ein neuer Lauf ersetzt den vorigen
+        samplers = [plan["lookup"]] if plan["lookup"] is not None else []
+        obj, ohne = builder.create_buildings(
+            context, "Gebäude %03d" % number, haeuser, sammlung, samplers=samplers,
+            skirt=plan["skirt"])
         if obj is None:
-            return None, "Es konnte kein Gebäudekörper erzeugt werden"
-
+            return
         kennzahlen = buildings.statistics(haeuser)
         obj["osm_buildings"] = kennzahlen["anzahl"]
-        info = ("%d Gebäude erzeugt, %.1f ha Grundfläche, mittlere Höhe %.1f m; "
+        plan["anzahl"] += kennzahlen["anzahl"]
+        plan["flaeche"] += kennzahlen["flaeche"]
+        plan["hoehe"] += kennzahlen["hoehe"] * kennzahlen["anzahl"]
+        plan["mit_angabe"] += kennzahlen["mit_angabe"]
+        plan["ohne_gelaende"] += ohne
+        plan["gebaut"] += 1
+
+    def _abschluss(self, context, props, plan, abgebrochen):
+        if not plan["anzahl"]:
+            return 'WARNING', "Im Gebiet sind keine Gebäude eingetragen"
+        info = ("%d Gebäude in %d Teil(en) erzeugt, %.1f ha Grundfläche, mittlere Höhe %.1f m; "
                 "%d davon mit Höhenangabe aus OSM"
-                % (kennzahlen["anzahl"], kennzahlen["flaeche"] / 10000.0,
-                   kennzahlen["hoehe"], kennzahlen["mit_angabe"]))
-        if gelaende:
-            info += " | auf %d Geländeabschnitt(e) gesetzt" % len(gelaende)
-            if ohne_gelaende:
-                info += ", %d ohne Geländetreffer" % ohne_gelaende
-        return info, None
-
-    # ------------------------------------------------------------ interaktiv
-    def invoke(self, context, event):
-        props = context.scene.railway_chainage
-        self._fetcher = _BuildingFetcher(props, get_bbox(props))
-        self._fetcher.start()
-        props.scan_info = "Gebäudedaten werden geladen … (Esc bricht ab)"
-        wm = context.window_manager
-        self._timer = wm.event_timer_add(0.25, window=context.window)
-        wm.modal_handler_add(self)
-        return {'RUNNING_MODAL'}
-
-    def modal(self, context, event):
-        props = context.scene.railway_chainage
-        if event.type == 'ESC':
-            self._release(context)
-            props.scan_info = "Abgebrochen"
-            return {'CANCELLED'}
-        if event.type != 'TIMER':
-            return {'PASS_THROUGH'}
-        if self._fetcher.running:
-            _zeige_fortschritt(context, props, self._fetcher)
-            return {'RUNNING_MODAL'}
-
-        self._release(context)
-        if self._fetcher.error is not None:
-            message = str(self._fetcher.error).splitlines()[0]
-            props.scan_info = message
-            self.report({'ERROR'}, message)
-            return {'CANCELLED'}
-
-        info, problem = self._build(context, props, self._fetcher.data)
-        if problem:
-            props.scan_info = problem
-            self.report({'WARNING'}, problem)
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        _redraw(context)
-        return {'FINISHED'}
-
-    def _release(self, context):
-        _fortschritt_beenden(context, context.scene.railway_chainage)
-        if self._timer is not None:
-            context.window_manager.event_timer_remove(self._timer)
-            self._timer = None
-
-    # ------------------------------------------------------------ aus Skripten
-    def execute(self, context):
-        props = context.scene.railway_chainage
-        try:
-            data = overpass.fetch_buildings(
-                get_bbox(props), timeout=props.request_timeout, use_cache=props.use_cache,
-                endpoint=overpass_endpoint(props), with_parts=props.buildings_parts)
-        except Exception as exc:                                  # noqa: BLE001
-            self.report({'ERROR'}, str(exc).splitlines()[0])
-            return {'CANCELLED'}
-        info, problem = self._build(context, props, data)
-        if problem:
-            self.report({'WARNING'}, problem)
-            return {'CANCELLED'}
-        props.scan_info = info
-        self.report({'INFO'}, info)
-        return {'FINISHED'}
+                % (plan["anzahl"], plan["gebaut"], plan["flaeche"] / 10000.0,
+                   plan["hoehe"] / plan["anzahl"], plan["mit_angabe"]))
+        if plan["gelaende"]:
+            info += " | auf %d Geländeabschnitt(e) gesetzt" % plan["gelaende"]
+            if plan["ohne_gelaende"]:
+                info += ", %d ohne Geländetreffer" % plan["ohne_gelaende"]
+        if plan.get("hinweis"):
+            info += " | Quelle: " + plan["hinweis"]
+        return 'INFO', info
 
 
 class RC_OT_organize_tracks(Operator):
@@ -2094,6 +2060,110 @@ class RC_OT_organize_tracks(Operator):
         self.report({'INFO'}, "%d Gleisobjekte, %d einzelne Weichen" %
                     (stats["gleisobjekte"], stats["weichen"]))
         return {'FINISHED'}
+
+
+class RC_OT_simbox_test(Operator):
+    bl_idname = "railway_chainage.simbox_test"
+    bl_label = "Verbindung testen"
+    bl_description = ("Mit dem eingetragenen Service-Konto an der Geo-Box anmelden und jeden "
+                      "Dienst einmal abfragen: Overpass, Luftbilder, Höhen, Basiskarte, Ortssuche")
+
+    # Kleine Probeanfragen; der Ort spielt keine Rolle, er muss nur im Datenbereich liegen
+    PROBE = (49.7913, 9.9534)
+
+    def _dienste(self):
+        """(Name, Probeanfrage) je Dienst der Geo-Box."""
+        lat, lon = self.PROBE
+        overpass_abfrage = urllib.parse.urlencode({"data": "[out:json][timeout:15];node(%.4f,%.4f,"
+                                                           "%.4f,%.4f);out ids 1;"
+                                                           % (lat, lon, lat + 0.001, lon + 0.001)})
+        return (
+            ("Overpass", lambda: simbox.request(
+                simbox.overpass_url(), "application/json", data=overpass_abfrage.encode("ascii"),
+                content_type="application/x-www-form-urlencoded", what="Overpass")),
+            ("Luftbilder", lambda: simbox.catalogue(refresh=True)),
+            ("Höhen", lambda: simbox.sample_elevation([self.PROBE])),
+            ("Basiskarte", lambda: simbox.request(
+                simbox.basemap_template().format(z=12, x=2161, y=1392), "image/png",
+                what="Basiskarte")),
+            ("Ortssuche", lambda: simbox.request(
+                simbox.search_url() + "?format=json&limit=1&q=Berlin", "application/json",
+                what="Ortssuche")),
+        )
+
+    _timer = None
+    _thread = None
+    _ergebnis = None
+
+    @staticmethod
+    def _zugang_neu_lesen(context):
+        from . import props as props_mod
+        prefs = props_mod.preferences(context)
+        if prefs is not None:
+            props_mod._zugang_setzen(prefs)       # geänderte .env-Datei neu einlesen
+
+    def _pruefen(self):
+        """Anmeldung und alle Dienste prüfen - ohne bpy, läuft im Hintergrund.
+
+        Rückgabe (Text, ok); ok ist None, wenn schon die Anmeldung scheitert.
+        """
+        try:
+            simbox.token(force=True)
+        except Exception as exc:                                  # noqa: BLE001
+            return str(exc), None
+
+        erreichbar, fehler = [], []
+        for name, probe in self._dienste():
+            try:
+                probe()
+                erreichbar.append(name)
+            except urllib.error.HTTPError as exc:
+                fehler.append("%s (HTTP %s)" % (name, exc.code))
+            except Exception as exc:                              # noqa: BLE001
+                code = re.search(r"HTTP \d+", str(exc))
+                fehler.append("%s (%s)" % (name, code.group(0) if code else exc))
+
+        text = "Angemeldet als „%s“" % simbox.client_id()
+        if erreichbar:
+            text += " - erreichbar: " + ", ".join(erreichbar)
+        if fehler:
+            text += " - Fehler: " + "; ".join(fehler)
+        return text, not fehler
+
+    def _melden(self, context, text, ok):
+        simbox.set_status(text, ok=bool(ok))
+        self.report({'ERROR'} if ok is None else {'INFO'} if ok else {'WARNING'}, text)
+        _redraw(context)
+        return {'CANCELLED'} if ok is None else {'FINISHED'}
+
+    def execute(self, context):
+        self._zugang_neu_lesen(context)
+        return self._melden(context, *self._pruefen())
+
+    def invoke(self, context, event):
+        # Die Probeabrufe können bei einem hängenden Server Minuten dauern - im
+        # Hintergrund, damit Blender bedienbar bleibt
+        self._zugang_neu_lesen(context)
+        simbox.set_status("Verbindung wird geprüft …", ok=None)
+
+        def lauf():
+            self._ergebnis = self._pruefen()
+
+        self._thread = threading.Thread(target=lauf, daemon=True)
+        self._thread.start()
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        _redraw(context)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type != 'TIMER' or self._thread.is_alive():
+            return {'PASS_THROUGH'}
+        context.window_manager.event_timer_remove(self._timer)
+        self._timer = None
+        text, ok = self._ergebnis or ("Verbindungstest ohne Ergebnis", None)
+        return self._melden(context, text, ok)
 
 
 class RC_OT_clear_cache(Operator):
@@ -2111,9 +2181,9 @@ class RC_OT_clear_cache(Operator):
 classes = (RC_OT_scan, RC_OT_generate, RC_OT_import_terrain, RC_OT_import_area,
            RC_OT_map_texture, RC_OT_import_buildings,
            RC_OT_shrinkwrap, RC_OT_generate_rails, RC_OT_clip_scene,
-           RC_OT_select_routes, RC_OT_from_blosm, RC_OT_paste_bbox,
-           RC_OT_open_map, RC_OT_select_area, RC_OT_select_area_blosm,
-           RC_OT_clear_cache, RC_OT_organize_tracks)
+           RC_OT_select_routes, RC_OT_paste_bbox,
+           RC_OT_open_map, RC_OT_select_area,
+           RC_OT_clear_cache, RC_OT_organize_tracks, RC_OT_simbox_test)
 
 
 def register():

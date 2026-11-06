@@ -21,7 +21,7 @@ on:
   workflow_call:
     inputs:
       extension_dir:
-        description: Extension folder; a pattern such as plugins/Umgebung-* must match exactly one
+        description: Extension folder, such as plugins/bii_blender_tools; a pattern must match exactly one
         type: string
         required: true
       tag_prefix:

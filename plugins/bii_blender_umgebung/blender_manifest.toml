@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
-id = "railway_chainage"
-version = "1.25.0"
+id = "bii_blender_umgebung"
+version = "1.29.0"
 name = "BII Umgebung"
 tagline = "Kilometrierung, Gleisachsen, Gelände und Gebäude aus OSM-Daten"
 maintainer = "Stefan Brauner"
@@ -15,11 +15,13 @@ blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
-network = "Bahn- und Höhendaten aus offenen Diensten laden"
+network = "Bahn-, Höhen- und Kartendaten aus Online-Diensten laden"
 
 [build]
 paths_exclude_pattern = [
   "__pycache__/",
   "/.git/",
   "*.zip",
+  "/.env",
+  "/.env.local",
 ]

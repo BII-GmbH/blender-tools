@@ -1,5 +1,5 @@
-# Releases BII Umgebung as umgebung-v<version>, with the version from
-# plugins/Umgebung-*/blender_manifest.toml. Raise that version first, then run it on main from
+# Releases BII Umgebung as bii_blender_umgebung-v<version>, with the version from
+# plugins/bii_blender_umgebung/blender_manifest.toml. Raise that version first, then run it on main from
 # Actions > Release BII Umgebung > Run workflow. See release-extension.yml.
 
 name: Release BII Umgebung
@@ -19,7 +19,7 @@ jobs:
   release:
     uses: ./.github/workflows/release-extension.yml
     with:
-      extension_dir: plugins/Umgebung-*
-      tag_prefix: umgebung
+      extension_dir: plugins/bii_blender_umgebung
+      tag_prefix: bii_blender_umgebung
       title: BII Umgebung
       prerelease: ${{ inputs.prerelease }}

@@ -296,3 +296,146 @@ def area_grid_local(local, zone, spacing, model, projection, progress=None):
         if right is not None and up is not None and diagonal is not None:
             faces.append((i, right, diagonal, up))
     return verts, faces, uvs, missing, (x0, y0, x0 + width, y0 + height)
+
+
+# ------------------------------------------------- Stückweiser Aufbau
+#
+# Große Gebiete und lange Korridore werden nicht mehr als ein Gitter aufgebaut,
+# sondern Stück für Stück: Je Stück werden nur die dafür nötigen Höhenkacheln
+# geladen, das Mesh entsteht direkt aus numpy-Arrays, und danach wird der
+# Speicher wieder frei. So hängt der Spitzenverbrauch an der Stückgröße, nicht
+# an der Gebietsgröße.
+
+import numpy as np  # noqa: E402
+
+# Höchstzahl Rasterschritte je Stückkante (1000 x 1000 = 1 Mio Punkte je Stück)
+MAX_CHUNK_CELLS = 1000
+
+
+def tile_keys(east, north, model):
+    """Wie :func:`tiles_for`, aber für numpy-Arrays von Gitterpunkten."""
+    rand = dgm.TILE_EDGE
+    size = model.tile_size
+    codes = set()
+    for de, dn in ((0.0, 0.0), (0.0, -rand), (-rand, 0.0), (-rand, -rand)):
+        ti = np.floor((east + de) / size).astype(np.int64)
+        tj = np.floor((north + dn) / size).astype(np.int64)
+        codes.update(np.unique(dgm.tile_code(ti, tj)).tolist())
+    return sorted(dgm.tile_decode(c) for c in codes)
+
+
+def grid_quads(valid):
+    """Vierecke eines regelmäßigen Gitters (Zeilen x Spalten), dessen Punkte ``valid``
+    sind. Rückgabe (neue Vertexnummer je Gitterpunkt oder -1, Vierecke F x 4)."""
+    rows, cols = valid.shape
+    index = np.full(valid.shape, -1, dtype=np.int64)
+    index[valid] = np.arange(int(valid.sum()))
+    a = index[:-1, :-1]
+    b = index[:-1, 1:]
+    c = index[1:, 1:]
+    d = index[1:, :-1]
+    ok = (a >= 0) & (b >= 0) & (c >= 0) & (d >= 0)
+    quads = np.stack((a[ok], b[ok], c[ok], d[ok]), axis=1)
+    return index, quads
+
+
+def area_chunks(local, spacing, chunk_size):
+    """Teilt das Szenenrechteck in Stücke. Rückgabe (Spalten, Zeilen, Stücke).
+
+    Jedes Stück ist (c0, c1, r0, r1) - Gitterindizes einschließlich der
+    Endpunkte; benachbarte Stücke teilen sich die Randreihe, damit das Gelände
+    ohne Lücke durchläuft.
+    """
+    x0, y0, x1, y1 = local
+    columns = max(2, int(round((x1 - x0) / spacing)) + 1)
+    rows = max(2, int(round((y1 - y0) / spacing)) + 1)
+    per = max(2, min(MAX_CHUNK_CELLS, int(round(chunk_size / spacing))))
+
+    def grenzen(zellen):
+        # gleichmäßig verteilt - kein schmaler Reststreifen am Rand
+        anzahl = max(1, int(math.ceil(zellen / float(per))))
+        return np.round(np.linspace(0, zellen, anzahl + 1)).astype(int).tolist()
+
+    spalten, zeilen = grenzen(columns - 1), grenzen(rows - 1)
+    chunks = [(c0, c1, r0, r1)
+              for r0, r1 in zip(zeilen[:-1], zeilen[1:])
+              for c0, c1 in zip(spalten[:-1], spalten[1:])]
+    return columns, rows, chunks
+
+
+def area_chunk(local, spacing, chunk, projection, zone):
+    """Gitterpunkte eines Stücks: lokale x/y und UTM east/north (Zeilen x Spalten)."""
+    x0, y0 = local[0], local[1]
+    c0, c1, r0, r1 = chunk
+    xs = x0 + np.arange(c0, c1 + 1) * spacing
+    ys = y0 + np.arange(r0, r1 + 1) * spacing
+    gx, gy = np.meshgrid(xs, ys)
+    lat, lon = projection.to_geographic_array(gx, gy)
+    east, north = dgm.wgs84_to_utm_array(lat, lon, zone)
+    return gx, gy, east, north
+
+
+def corridor_segment_count(length, segment_length):
+    if segment_length and segment_length > 0.0 and length > segment_length:
+        return max(1, int(math.ceil(length / segment_length)))
+    return 1
+
+
+def corridor_segment(area, spacing, index, count):
+    """Gitter eines Korridorabschnitts (Stationen ``index``/``count`` der Achse).
+
+    Geprüft werden nur Punkte in der Nähe des Achsstücks; zugeordnet wird jede
+    Fläche nach der Station ihrer Mitte, damit die Abschnitte lückenlos
+    aneinandergrenzen. Rückgabe (east, north, Korridorkoordinaten N x 2,
+    Vierecke F x 4) - Vertices ohne Höhen.
+    """
+    from .railgeom import slice_by_stations
+    total = area.length
+    span = total / count if count else total
+    rand = area.radius + 2.0 * spacing
+    stueck = slice_by_stations(area.points, area.stations,
+                               index * span - rand, (index + 1) * span + rand)
+    if len(stueck) < 2:
+        return None
+    kandidaten = grid_points(Corridor(stueck, area.radius), spacing)
+    if not kandidaten:
+        return None
+    schluessel = sorted(kandidaten)
+    nummer = {key: i for i, key in enumerate(schluessel)}
+    coords = np.zeros((len(schluessel), 2))
+    for i, key in enumerate(schluessel):
+        located = area.locate(*kandidaten[key])
+        if located:
+            coords[i] = located
+
+    quads = []
+    for (col, row), i in nummer.items():
+        right = nummer.get((col + 1, row))
+        up = nummer.get((col, row + 1))
+        diagonal = nummer.get((col + 1, row + 1))
+        if right is not None and up is not None and diagonal is not None:
+            quads.append((i, right, diagonal, up))
+    if not quads:
+        return None
+    quads = np.array(quads, dtype=np.int64)
+    middle = coords[quads, 0].mean(axis=1)
+    zugehoerig = np.clip((middle / span).astype(np.int64), 0, count - 1) if span else \
+        np.zeros(len(quads), dtype=np.int64)
+    quads = quads[zugehoerig == index]
+    if not len(quads):
+        return None
+    east = np.array([kandidaten[k][0] for k in schluessel])
+    north = np.array([kandidaten[k][1] for k in schluessel])
+    return east, north, coords, quads
+
+
+def compact(quads, keep):
+    """Nur Vierecke, deren Ecken alle ``keep`` sind; Vertices neu durchnummeriert.
+
+    Rückgabe (Vertexauswahl, Vierecke mit neuen Nummern)."""
+    quads = quads[keep[quads].all(axis=1)]
+    used = np.zeros(len(keep), dtype=bool)
+    used[quads.reshape(-1)] = True
+    neu = np.full(len(keep), -1, dtype=np.int64)
+    neu[used] = np.arange(int(used.sum()))
+    return used, neu[quads]

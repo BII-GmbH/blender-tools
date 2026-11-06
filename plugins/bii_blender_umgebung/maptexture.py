@@ -50,6 +50,18 @@ SOURCES['BKG_ORM'] = (SOURCES['BASEMAP_DE'][0], 19, 256, SOURCES['OSM_ORM'][3],
 VOLUNTEER_SOURCES = {'OSM', 'OSM_ORM', 'BKG_ORM', 'TOPO'}
 VOLUNTEER_LIMIT = 250
 
+# Luftbilder der eigenen Geo-Box: keine URL-Vorlage, sondern ein angemeldeter
+# WMS-Abruf je Kachel (siehe simbox.py). Die Quellenangabe hängt davon ab,
+# welche Landes-Orthophotos die geladenen Kacheln tatsächlich liefern.
+IMAGERY = 'SIMBOX_LUFTBILD'
+SOURCES[IMAGERY] = ("simbox:imagery", 19, 256, None, "Luftbilder: Geo-Box (simbox)")
+# Basiskarte der Geo-Box (OpenStreetMap, Protomaps-Stil). Die Adresse hängt von der
+# Server-Adresse im Panel „Datenquelle“ ab und wird erst beim Abruf eingesetzt.
+BASEMAP = 'SIMBOX_BASEMAP'
+SOURCES[BASEMAP] = ("simbox:basemap", 19, 256, None,
+                    "© OpenStreetMap-Mitwirkende, © Protomaps (Basiskarte der Geo-Box)")
+GEOBOX_SOURCES = (IMAGERY, BASEMAP)
+
 _TLS_CONTEXT = None
 
 
@@ -94,6 +106,20 @@ def choose_zoom(lat, resolution, max_zoom, tile_size=256):
     return max_zoom
 
 
+def zoom_range(source_key):
+    """(kleinste, größte) Zoomstufe einer Quelle."""
+    if source_key == IMAGERY:
+        from . import simbox
+        return simbox.IMAGERY_MIN_ZOOM, simbox.IMAGERY_MAX_ZOOM
+    return 1, SOURCES[source_key][1]
+
+
+def zoom_for(source_key, lat, resolution):
+    """Zoomstufe für die gewünschte Auflösung, innerhalb der Grenzen der Quelle."""
+    smallest, largest = zoom_range(source_key)
+    return max(smallest, choose_zoom(lat, resolution, largest))
+
+
 def global_pixels(lat, lon, zoom, tile_size=256):
     """Geografische Koordinate -> globale Pixelkoordinate der Kachelpyramide."""
     n = 2 ** zoom * tile_size
@@ -108,13 +134,26 @@ def cache_dir():
     return folder
 
 
-def tile_path(source_key, layer, zoom, x, y):
-    return os.path.join(cache_dir(), "%s_%s_%d_%d_%d.png" % (source_key, layer, zoom, x, y))
+def tile_path(source_key, layer, zoom, x, y, extension="png"):
+    return os.path.join(cache_dir(), "%s_%s_%d_%d_%d.%s" % (source_key, layer, zoom, x, y, extension))
 
 
 def download_tile(url, path, timeout=30):
     """Lädt eine Kachel, sofern sie nicht bereits im Zwischenspeicher liegt."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
+        return path
+    from . import simbox
+    if simbox.is_geo_url(url):
+        # Geo-Box: angemeldet, mit Wiederholung bei 401/429/503
+        try:
+            data, _headers = simbox.request(url, "image/png,image/*;q=0.8", timeout=timeout,
+                                            what="Geo-Box-Basiskarte")
+        except simbox.SimboxError as exc:
+            raise MapError(str(exc))
+        except urllib.error.HTTPError as exc:
+            raise MapError("Geo-Box-Basiskarte antwortet mit HTTP %s" % exc.code)
+        with open(path, "wb") as handle:
+            handle.write(data)
         return path
     request = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
@@ -133,18 +172,43 @@ def download_tile(url, path, timeout=30):
     return path
 
 
-def fetch_tiles(source_key, keys, zoom, progress=None, tile_url=""):
+def new_report():
+    """Bericht eines Kartenabrufs: beteiligte Luftbild-Datensätze und Kacheln ohne Bild."""
+    return {"sources": set(), "missing": 0}
+
+
+def fetch_tiles(source_key, keys, zoom, progress=None, report=None, abbruch=None):
     """Lädt alle benötigten Kacheln. Rückgabe {(x, y): {layer: pfad}}.
 
-    ``tile_url`` überschreibt die Quelle durch einen eigenen Kachelserver.
+    ``report`` (aus :func:`new_report`) sammelt bei Luftbildern die Quellen und
+    Lücken - Grundlage der Quellenangabe. ``abbruch`` (``threading.Event``) beendet
+    den Abruf vorzeitig; die Rückgabe ist dann unvollständig.
     """
     template, _max_zoom, _size, overlay, _credit = SOURCES[source_key]
-    if tile_url:
-        template, overlay = tile_url, None
-        source_key = "custom"
+    if source_key == BASEMAP:
+        from . import simbox
+        template = simbox.basemap_template()
+    elif source_key == IMAGERY:
+        from . import simbox
+        try:
+            paths, sources, missing = simbox.fetch_imagery_tiles(
+                keys, zoom, lambda x, y: tile_path(IMAGERY, "base", zoom, x, y, "jpg"), progress,
+                abbruch=abbruch)
+        except simbox.SimboxError as exc:
+            raise MapError(str(exc))
+        if report is not None:
+            report["sources"].update(sources)
+            report["missing"] += missing
+        try:
+            simbox.catalogue()      # Quellenangaben vorab laden, nicht im Hauptthread
+        except Exception:                                         # noqa: BLE001
+            pass
+        return {key: {"base": path} for key, path in paths.items()}
     result = {}
     total = len(keys)
     for number, (x, y) in enumerate(keys):
+        if abbruch is not None and abbruch.is_set():
+            break
         if progress and (number % 5 == 0 or number == total - 1):
             progress("Kartenkacheln: %d von %d" % (number + 1, total),
                      (number + 1) / float(total or 1))
@@ -158,5 +222,9 @@ def fetch_tiles(source_key, keys, zoom, progress=None, tile_url=""):
     return result
 
 
-def credit(source_key):
+def credit(source_key, report=None):
+    """Quellenangabe; bei Luftbildern aus den Datensätzen in ``report``."""
+    if source_key == IMAGERY:
+        from . import simbox
+        return simbox.attribution(report["sources"] if report else ())
     return SOURCES[source_key][4]

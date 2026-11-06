@@ -5,8 +5,15 @@ Lizenz dl-de/by-2-0). Der Dienst liefert GeoTIFF in ETRS89/UTM; die Rasterweite
 wird serverseitig über SCALEFACTOR gewählt, sodass nur die tatsächlich
 benötigte Datenmenge übertragen wird.
 
-Das Modul kommt ohne bpy und ohne Fremdbibliotheken aus - der GeoTIFF-Leser
-deckt die vom Dienst gelieferten unkomprimierten Raster ab.
+Das Modul kommt ohne bpy aus und braucht außer numpy (in Blender enthalten)
+keine Fremdbibliotheken - der GeoTIFF-Leser deckt die vom Dienst gelieferten
+unkomprimierten und LZW-komprimierten Raster ab.
+
+Höhenraster liegen als numpy-Arrays (float32, NaN = kein Wert) im Speicher:
+ein Bruchteil dessen, was Python-Listen mit einzelnen Zahlobjekten belegen.
+Alle Modelle bieten neben ``height_at`` (ein Punkt) auch ``sample`` (ganze
+Arrays) und ``evict`` (nicht mehr gebrauchte Kacheln freigeben) - damit lässt
+sich ein großes Gebiet Stück für Stück aufbauen.
 """
 
 import gzip
@@ -15,9 +22,14 @@ import math
 import os
 import struct
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
 
 USER_AGENT = "blender-railway-chainage/1.3 (Blender add-on)"
 
@@ -124,6 +136,87 @@ def utm_to_wgs84(east, north, zone=32):
     return math.degrees(lat), math.degrees(lon)
 
 
+def _krueger(n):
+    big_a = 1.0 / (1.0 + n) * (1.0 + n ** 2 / 4.0 + n ** 4 / 64.0)
+    alpha = (n / 2.0 - 2.0 * n ** 2 / 3.0 + 5.0 * n ** 3 / 16.0,
+             13.0 * n ** 2 / 48.0 - 3.0 * n ** 3 / 5.0,
+             61.0 * n ** 3 / 240.0)
+    beta = (n / 2.0 - 2.0 * n ** 2 / 3.0 + 37.0 * n ** 3 / 96.0,
+            n ** 2 / 48.0 + n ** 3 / 15.0,
+            17.0 * n ** 3 / 480.0)
+    delta = (2.0 * n - 2.0 * n ** 2 / 3.0 - 2.0 * n ** 3,
+             7.0 * n ** 2 / 3.0 - 8.0 * n ** 3 / 5.0,
+             56.0 * n ** 3 / 15.0)
+    return big_a, alpha, beta, delta
+
+
+def wgs84_to_utm_array(lat, lon, zone=32):
+    """Wie :func:`wgs84_to_utm`, aber für numpy-Arrays."""
+    a, f = _grs80()
+    n = f / (2.0 - f)
+    big_a, alpha, _beta, _delta = _krueger(n)
+    big_a *= a
+    phi = np.radians(lat)
+    lam = np.radians(lon) - math.radians(zone * 6 - 183)
+    c = 2.0 * math.sqrt(n) / (1.0 + n)
+    t = np.sinh(np.arctanh(np.sin(phi)) - c * np.arctanh(c * np.sin(phi)))
+    xi = np.arctan(t / np.cos(lam))
+    eta = np.arctanh(np.sin(lam) / np.hypot(1.0, t))
+    east = eta.copy()
+    north = xi.copy()
+    for j in range(3):
+        k = 2 * (j + 1)
+        east += alpha[j] * np.cos(k * xi) * np.sinh(k * eta)
+        north += alpha[j] * np.sin(k * xi) * np.cosh(k * eta)
+    return 500000.0 + 0.9996 * big_a * east, 0.9996 * big_a * north
+
+
+def utm_to_wgs84_array(east, north, zone=32):
+    """Wie :func:`utm_to_wgs84`, aber für numpy-Arrays."""
+    a, f = _grs80()
+    n = f / (2.0 - f)
+    big_a, _alpha, beta, delta = _krueger(n)
+    big_a *= a
+    xi = np.asarray(north, dtype=np.float64) / (0.9996 * big_a)
+    eta = (np.asarray(east, dtype=np.float64) - 500000.0) / (0.9996 * big_a)
+    xi_, eta_ = xi.copy(), eta.copy()
+    for j in range(3):
+        k = 2 * (j + 1)
+        xi_ -= beta[j] * np.sin(k * xi) * np.cosh(k * eta)
+        eta_ -= beta[j] * np.cos(k * xi) * np.sinh(k * eta)
+    chi = np.arcsin(np.clip(np.sin(xi_) / np.cosh(eta_), -1.0, 1.0))
+    lat = chi.copy()
+    for j in range(3):
+        lat += delta[j] * np.sin(2 * (j + 1) * chi)
+    lon = math.radians(zone * 6 - 183) + np.arctan(np.sinh(eta_) / np.cos(xi_))
+    return np.degrees(lat), np.degrees(lon)
+
+
+def group_by_key(keys):
+    """Indizes je Schlüsselwert: [(Schlüssel, Indexarray), …] - in einem Durchgang
+    statt einer Maske über alle Punkte je Schlüssel."""
+    keys = np.asarray(keys).ravel()
+    if not keys.size:
+        return []
+    order = np.argsort(keys, kind="stable")
+    sortiert = keys[order]
+    grenzen = np.flatnonzero(np.diff(sortiert)) + 1
+    starts = np.concatenate(([0], grenzen))
+    ends = np.concatenate((grenzen, [len(sortiert)]))
+    return [(int(sortiert[s]), order[s:e]) for s, e in zip(starts, ends)]
+
+
+def tile_code(i, j):
+    """Kachelindex (i, j) als eine Zahl - zum Gruppieren mit :func:`group_by_key`."""
+    return (np.asarray(i, dtype=np.int64) << 32) + (np.asarray(j, dtype=np.int64) & 0xFFFFFFFF)
+
+
+def tile_decode(code):
+    i = code >> 32
+    j = code & 0xFFFFFFFF
+    return int(i), int(j - (1 << 32) if j >= (1 << 31) else j)
+
+
 # ------------------------------------------------------------------ GeoTIFF
 
 _TYPE_SIZE = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8}
@@ -178,19 +271,17 @@ def _lzw_decode(data):
 def _undo_predictor(data, width, samples, bits, byteorder):
     """Horizontale Differenzbildung (TIFF-Predictor 2) rückgängig machen."""
     step = bits // 8
+    dtype = np.dtype({1: "u1", 2: "u2", 4: "u4", 8: "u8"}[step]).newbyteorder(
+        ">" if byteorder == "big" else "<")
     row_length = width * samples * step
-    result = bytearray(data)
-    for row_start in range(0, len(result), row_length):
-        row = result[row_start:row_start + row_length]
-        if len(row) < row_length:
-            break
-        for index in range(samples * step, row_length, step):
-            previous = int.from_bytes(row[index - samples * step:index - samples * step + step],
-                                      byteorder)
-            current = int.from_bytes(row[index:index + step], byteorder)
-            row[index:index + step] = ((current + previous) % (1 << bits)).to_bytes(step, byteorder)
-        result[row_start:row_start + row_length] = row
-    return bytes(result)
+    rows = len(data) // row_length
+    if not rows:
+        return bytes(data)
+    zeilen = np.frombuffer(data, dtype=dtype, count=rows * width * samples)
+    zeilen = zeilen.reshape(rows, width, samples).astype(dtype.newbyteorder("="))
+    # Summe je Zeile; vorzeichenlose Ganzzahlen laufen wie im TIFF modulo 2^bits über
+    summen = np.cumsum(zeilen, axis=1, dtype=zeilen.dtype)
+    return summen.astype(dtype).tobytes() + bytes(data[rows * row_length:])
 
 
 class GeoTiff:
@@ -237,6 +328,7 @@ class GeoTiff:
         if self.fmt is None:
             raise DgmError("Rasterformat %d bit / Typ %d wird nicht unterstützt" % key)
         self.values = self._read_pixels()
+        self.data = None        # Rohdaten freigeben - nur das Raster wird noch gebraucht
 
     def _int(self, tag):
         item = self.tags.get(tag)
@@ -268,7 +360,8 @@ class GeoTiff:
         if not offsets or not counts:
             raise DgmError("TIFF ohne Bilddaten")
         step = self.bits // 8
-        values = []
+        dtype = np.dtype(self.bo + self.fmt)
+        teile = []
         offs = self._values(273)
         cnts = self._values(279)
         order = "big" if self.bo == ">" else "little"
@@ -278,9 +371,15 @@ class GeoTiff:
                 chunk = _lzw_decode(chunk)
                 if self.predictor == 2:
                     chunk = _undo_predictor(chunk, self.width, 1, self.bits, order)
-            values.extend(struct.unpack(self.bo + self.fmt * (len(chunk) // step),
-                                        chunk[:len(chunk) // step * step]))
-        return values
+            teile.append(np.frombuffer(chunk, dtype=dtype, count=len(chunk) // step))
+        values = np.concatenate(teile).astype(np.float32) if teile else \
+            np.zeros(0, dtype=np.float32)
+        if self.nodata is not None:
+            values[values == np.float32(self.nodata)] = np.nan
+        if len(values) < self.width * self.height:
+            values = np.concatenate((values, np.full(self.width * self.height - len(values),
+                                                     np.nan, dtype=np.float32)))
+        return values[:self.width * self.height].reshape(self.height, self.width)
 
     def _values(self, tag):
         typ, num, raw = self.tags[tag]
@@ -310,13 +409,33 @@ class GeoTiff:
         corners = []
         for r in (r0, r1):
             for c in (c0, c1):
-                v = self.values[r * self.width + c]
-                if self.nodata is not None and v == self.nodata:
+                v = float(self.values[r, c])
+                if v != v:
                     return None
-                corners.append(float(v))
+                corners.append(v)
         top = corners[0] + (corners[1] - corners[0]) * fc
         bottom = corners[2] + (corners[3] - corners[2]) * fc
         return top + (bottom - top) * fr
+
+    def sample(self, east, north, tolerance=0.0):
+        """Wie :meth:`height_at` für Arrays; NaN außerhalb oder ohne Daten."""
+        col = (east - self.origin[0]) / self.scale[0]
+        row = (self.origin[1] - north) / self.scale[1]
+        inside = ((col >= -tolerance) & (row >= -tolerance)
+                  & (col <= self.width - 1 + tolerance) & (row <= self.height - 1 + tolerance))
+        col = np.clip(col, 0.0, self.width - 1.0)
+        row = np.clip(row, 0.0, self.height - 1.0)
+        c0 = col.astype(np.int64)
+        r0 = row.astype(np.int64)
+        c1 = np.minimum(c0 + 1, self.width - 1)
+        r1 = np.minimum(r0 + 1, self.height - 1)
+        fc, fr = col - c0, row - r0
+        v = self.values
+        top = v[r0, c0] + (v[r0, c1] - v[r0, c0]) * fc
+        bottom = v[r1, c0] + (v[r1, c1] - v[r1, c0]) * fc
+        result = top + (bottom - top) * fr
+        result[~inside] = np.nan
+        return result
 
 
 # ----------------------------------------------------------------- Download
@@ -501,6 +620,35 @@ class HeightModel:
             if value is not None:
                 self.from_fallback += 1
         return value
+
+    def sample(self, east, north):
+        """Höhen für Arrays (NaN = kein Wert) - gleiche Regeln wie :meth:`height_at`."""
+        form = np.shape(east)
+        east = np.asarray(east, dtype=np.float64).ravel()
+        north = np.asarray(north, dtype=np.float64).ravel()
+        result = np.full(east.shape, np.nan)
+        kacheln = [t for t in self.tiles.values() if t is not None]
+        # erst innerhalb der Stützstellen, dann im Streifen zwischen zwei Kacheln
+        for toleranz in (0.0, 1.0):
+            for kachel in kacheln:
+                offen = np.flatnonzero(np.isnan(result))
+                if not offen.size:
+                    break
+                werte = kachel.sample(east[offen], north[offen], toleranz)
+                treffer = ~np.isnan(werte)
+                result[offen[treffer]] = werte[treffer]
+        if self.fallback is not None:
+            for index in np.flatnonzero(np.isnan(result)):
+                lat, lon = utm_to_wgs84(float(east[index]), float(north[index]), self.zone)
+                value = self.fallback.height_at(lat, lon)
+                if value is not None:
+                    result[index] = value
+                    self.from_fallback += 1
+        return result.reshape(form)
+
+    def evict(self, keep):
+        """Nur die Kacheln in ``keep`` behalten; der Rest wird freigegeben."""
+        self.tiles = {k: v for k, v in self.tiles.items() if k in keep}
 
 
 # =====================================================================
@@ -705,3 +853,200 @@ class FlatModel:
 
     def height_at(self, east, north):
         return self.height
+
+    def sample(self, east, north):
+        return np.full(np.shape(east), self.height)
+
+    def evict(self, keep):
+        pass
+
+
+# =====================================================================
+#  Höhen über die eigene Geo-Box
+# =====================================================================
+
+GEOBOX_LABEL = ("Geo-Box: amtliche DGM (Deutschland, Österreich, Schweiz), "
+                "sonst Copernicus GLO-30")
+GEOBOX_BATCH = 10000            # Höchstzahl Punkte je Abruf (/osm/elevation/sample)
+GEOBOX_PARALLEL = 4             # gleichzeitige Kachelabrufe
+
+
+class GeoBoxHeights:
+    """Höhenmodell aus dem Höhendienst der Geo-Box (``POST /osm/elevation/sample``).
+
+    Dieselbe Schnittstelle wie :class:`HeightModel`. Je Kachel wird ein Raster in
+    der gewünschten Weite abgefragt; dazwischen wird bilinear interpoliert. Die
+    Geo-Box wählt selbst das feinste Landes-DGM und füllt Lücken mit GLO-30 -
+    ein eigener Ersatz ist daher nicht nötig.
+    """
+
+    def __init__(self, zone, spacing, tile_size=1000.0, use_cache=True):
+        self.zone = zone
+        self.step = max(1.0, float(spacing))
+        self.tile_size = tile_size
+        self.use_cache = use_cache
+        self.tiles = {}
+        self.failed = 0
+        self.from_fallback = 0
+        self.kind = "geobox"
+        self.count = int(round(tile_size / self.step)) + 1
+
+    def tile_key(self, east, north):
+        return int(east // self.tile_size), int(north // self.tile_size)
+
+    def _cache(self, i, j):
+        from . import simbox
+        key = hashlib.sha1(("%s|%d|%d|%d|%g|%g" % (simbox.base_url(), self.zone, i, j,
+                                                    self.step, self.tile_size))
+                           .encode("utf-8")).hexdigest()[:20]
+        folder = os.path.join(tempfile.gettempdir(), "blender_railway_chainage", "geobox_dgm")
+        os.makedirs(folder, exist_ok=True)
+        return os.path.join(folder, "%s.bin.gz" % key)
+
+    def _read_cache(self, path):
+        try:
+            if (self.use_cache and os.path.exists(path)
+                    and time.time() - os.path.getmtime(path) < CACHE_TTL):
+                with gzip.open(path, "rb") as handle:
+                    data = handle.read()
+                if len(data) == 4 * self.count * self.count:
+                    return np.frombuffer(data, dtype="<f4").astype(np.float32).reshape(
+                        self.count, self.count)
+        except OSError:
+            pass
+        return None
+
+    def _write_cache(self, path, values):
+        try:
+            with gzip.open(path, "wb", compresslevel=3) as handle:
+                handle.write(values.astype("<f4").tobytes())
+        except OSError:
+            pass
+
+    def _fetch(self, key):
+        """Eine Kachel: aus dem Zwischenspeicher oder von der Geo-Box (läuft parallel)."""
+        from . import simbox
+        i, j = key
+        path = self._cache(i, j)
+        values = self._read_cache(path)
+        if values is not None:
+            return values
+        offsets = np.arange(self.count) * self.step
+        east, north = np.meshgrid(i * self.tile_size + offsets, j * self.tile_size + offsets)
+        lat, lon = utm_to_wgs84_array(east.ravel(), north.ravel(), self.zone)
+        points = list(zip(lat.tolist(), lon.tolist()))
+        values = np.empty(len(points), dtype=np.float32)
+        try:
+            for start in range(0, len(points), GEOBOX_BATCH):
+                heights, _answer = simbox.sample_elevation(points[start:start + GEOBOX_BATCH])
+                values[start:start + len(heights)] = [np.nan if h is None else h
+                                                      for h in heights]
+        except simbox.SimboxError as exc:
+            raise DgmError(str(exc))
+        values = values.reshape(self.count, self.count)
+        self._write_cache(path, values)
+        return values
+
+    def load(self, keys, progress=None):
+        keys = [k for k in keys if k not in self.tiles]
+        total = len(keys)
+        if not total:
+            return
+        fertig = [0]
+        sperre = threading.Lock()
+
+        def eine(key):
+            values = self._fetch(key)
+            with sperre:
+                fertig[0] += 1
+                if progress:
+                    progress("Höhendaten (Geo-Box): Kachel %d von %d" % (fertig[0], total),
+                             fertig[0] / float(total))
+            return key, values
+
+        # wenige gleichzeitige Abrufe: deutlich schneller, ohne den Dienst zu überlasten.
+        # Bei einem Fehler die übrigen Kacheln verwerfen statt sie noch zu laden.
+        pool = ThreadPoolExecutor(max_workers=GEOBOX_PARALLEL)
+        try:
+            for key, values in pool.map(eine, keys):
+                self.tiles[key] = values
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
+
+    def _node(self, values, col, row):
+        col = min(self.count - 1, max(0, col))
+        row = min(self.count - 1, max(0, row))
+        value = float(values[row, col])
+        return None if value != value else value
+
+    def height_at(self, east, north):
+        key = self.tile_key(east, north)
+        values = self.tiles.get(key)
+        if values is None:
+            return None
+        fx = (east - key[0] * self.tile_size) / self.step
+        fy = (north - key[1] * self.tile_size) / self.step
+        c0, r0 = int(math.floor(fx)), int(math.floor(fy))
+        tx, ty = fx - c0, fy - r0
+        h00 = self._node(values, c0, r0)
+        h10 = self._node(values, c0 + 1, r0)
+        h01 = self._node(values, c0, r0 + 1)
+        h11 = self._node(values, c0 + 1, r0 + 1)
+        if None in (h00, h10, h01, h11):
+            nearest = [h for h in (h00, h10, h01, h11) if h is not None]
+            return nearest[0] if nearest else None
+        return ((h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty)
+                + (h01 * (1.0 - tx) + h11 * tx) * ty)
+
+    def sample(self, east, north):
+        """Höhen für Arrays (NaN = kein Wert) - gleiche Regeln wie :meth:`height_at`."""
+        form = np.shape(east)
+        east = np.asarray(east, dtype=np.float64).ravel()
+        north = np.asarray(north, dtype=np.float64).ravel()
+        result = np.full(east.shape, np.nan)
+        ti = np.floor(east / self.tile_size).astype(np.int64)
+        tj = np.floor(north / self.tile_size).astype(np.int64)
+        last = self.count - 1
+        for code, idx in group_by_key(tile_code(ti, tj)):
+            key = tile_decode(code)
+            values = self.tiles.get(key)
+            if values is None:
+                continue
+            fx = (east[idx] - key[0] * self.tile_size) / self.step
+            fy = (north[idx] - key[1] * self.tile_size) / self.step
+            c0 = np.floor(fx).astype(np.int64)
+            r0 = np.floor(fy).astype(np.int64)
+            tx, ty = fx - c0, fy - r0
+            c1, r1 = np.clip(c0 + 1, 0, last), np.clip(r0 + 1, 0, last)
+            c0, r0 = np.clip(c0, 0, last), np.clip(r0, 0, last)
+            h00, h10 = values[r0, c0], values[r0, c1]
+            h01, h11 = values[r1, c0], values[r1, c1]
+            werte = ((h00 * (1.0 - tx) + h10 * tx) * (1.0 - ty)
+                     + (h01 * (1.0 - tx) + h11 * tx) * ty)
+            # fehlt eine Ecke: der erste vorhandene Eckwert, wie in height_at
+            for ecke in (h11, h01, h10, h00):
+                lücke = np.isnan(werte)
+                werte[lücke] = ecke[lücke]
+            result[idx] = werte
+        return result.reshape(form)
+
+    def evict(self, keep):
+        """Nur die Kacheln in ``keep`` behalten; der Rest wird freigegeben."""
+        self.tiles = {k: v for k, v in self.tiles.items() if k in keep}
+
+    def probe_min(self, east, north):
+        """Tiefster Wert einer groben Stichprobe (ein Abruf) - der Höhenbezug für ein
+        Gebiet, das Stück für Stück entsteht. None ohne Werte."""
+        from . import simbox
+        east = np.asarray(east, dtype=np.float64).ravel()
+        north = np.asarray(north, dtype=np.float64).ravel()
+        if len(east) > GEOBOX_BATCH:
+            auswahl = np.linspace(0, len(east) - 1, GEOBOX_BATCH).astype(np.int64)
+            east, north = east[auswahl], north[auswahl]
+        lat, lon = utm_to_wgs84_array(east, north, self.zone)
+        try:
+            heights, _answer = simbox.sample_elevation(list(zip(lat.tolist(), lon.tolist())))
+        except simbox.SimboxError as exc:
+            raise DgmError(str(exc))
+        werte = [h for h in heights if h is not None]
+        return min(werte) if werte else None

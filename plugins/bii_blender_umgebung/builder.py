@@ -56,16 +56,29 @@ def clear_generated(collection):
     Nur Objekte mit der Markierung werden gelöscht - eigene Objekte des
     Anwenders in derselben Sammlung bleiben unangetastet.
     """
+    materials = set()
     for obj in list(collection.objects):
         if not obj.get(MARKER):
             continue
         data = obj.data
+        materials.update(slot.material for slot in obj.material_slots if slot.material)
         bpy.data.objects.remove(obj)
         if data is not None and data.users == 0:
             if isinstance(data, bpy.types.Curve):
                 bpy.data.curves.remove(data)
             elif isinstance(data, bpy.types.Mesh):
                 bpy.data.meshes.remove(data)
+    # Kartenmaterialien samt Bild freigeben, sobald nichts sie mehr nutzt - sonst
+    # blieben die Texturen jedes früheren Laufs bis zum Speichern im Arbeitsspeicher
+    for material in materials:
+        if material.users:
+            continue
+        images = {node.image for node in (material.node_tree.nodes if material.node_tree else ())
+                  if node.type == 'TEX_IMAGE' and node.image is not None}
+        bpy.data.materials.remove(material)
+        for image in images:
+            if not image.users:
+                bpy.data.images.remove(image)
 
 
 def unique_name(base):
@@ -331,6 +344,38 @@ def create_terrain_segments(context, name, verts, faces, coords, collection,
     return objects
 
 
+def mesh_from_arrays(name, verts, quads, collection, uvs=None, uv_name="UVMap"):
+    """Mesh-Objekt direkt aus numpy-Arrays (Vertices N x 3, Vierecke F x 4, UV je Vertex).
+
+    Über ``foreach_set`` statt ``from_pydata`` - ohne Millionen Python-Tupel und
+    um ein Vielfaches schneller.
+    """
+    import numpy as np
+    verts = np.ascontiguousarray(verts, dtype=np.float32)
+    quads = np.ascontiguousarray(quads, dtype=np.int32)
+    mesh = bpy.data.meshes.new(name)
+    mesh.vertices.add(len(verts))
+    mesh.vertices.foreach_set("co", verts.reshape(-1))
+    mesh.loops.add(quads.size)
+    mesh.loops.foreach_set("vertex_index", quads.reshape(-1))
+    mesh.polygons.add(len(quads))
+    mesh.polygons.foreach_set("loop_start", np.arange(0, quads.size, 4, dtype=np.int32))
+    if uvs is not None:
+        layer = mesh.uv_layers.new(name=uv_name)
+        uv_loops = np.asarray(uvs, dtype=np.float32)[quads.reshape(-1)]
+        layer.data.foreach_set("uv", uv_loops.reshape(-1))
+        mesh.uv_layers.active = layer
+    mesh.update(calc_edges=True)
+    try:
+        mesh.shade_smooth()
+    except AttributeError:
+        mesh.polygons.foreach_set("use_smooth", np.ones(len(quads), dtype=bool))
+    obj = bpy.data.objects.new(unique_name(name), mesh)
+    obj[MARKER] = True
+    collection.objects.link(obj)
+    return obj
+
+
 def create_terrain(context, name, verts, faces, collection, height_offset=0.0):
     """Legt das Geländemodell als Mesh an."""
     mesh = bpy.data.meshes.new(name)
@@ -528,7 +573,11 @@ def _load_tile_array(np, path, cache):
     """Kachel als uint8-Array (oben links zuerst)."""
     if path in cache:
         return cache[path]
-    image = bpy.data.images.load(path, check_existing=False)
+    try:
+        image = bpy.data.images.load(path, check_existing=False)
+    except RuntimeError:
+        cache[path] = np.zeros((0, 0, 4), dtype=np.uint8)   # unlesbare Datei
+        return cache[path]
     try:
         image.colorspace_settings.name = 'Non-Color'
         width, height = image.size
@@ -601,35 +650,45 @@ def corridor_tile_keys(lat, lon, zoom, tile_size=256, step=4):
 
 
 def corridor_texture(lat, lon, width, height, step, source_key, tiles, zoom, tile_size=256,
-                     name="Korridorkarte", tile_url="", cache=None):
-    """Baut das Texturbild aus den geladenen Kacheln. Rückgabe Bild."""
+                     name="Korridorkarte", cache=None, credit=None):
+    """Baut das Texturbild aus den geladenen Kacheln. Rückgabe Bild.
+
+    ``credit`` ist die Quellenangabe dieses Bildes (Vorgabe: die der Quelle).
+    """
     import numpy as np
-    from . import maptexture
+    from . import dgm, maptexture
 
     n = 2 ** zoom * tile_size
-    px = (lon + 180.0) / 360.0 * n
-    py = (1.0 - np.arcsinh(np.tan(np.radians(lat))) / np.pi) / 2.0 * n
+    px = ((lon + 180.0) / 360.0 * n).ravel()
+    py = ((1.0 - np.arcsinh(np.tan(np.radians(lat))) / np.pi) / 2.0 * n).ravel()
 
     tile_x = np.floor(px / tile_size).astype(np.int64)
     tile_y = np.floor(py / tile_size).astype(np.int64)
 
-    out = np.zeros((height, width, 4), dtype=np.uint8)
-    out[..., 3] = 255
+    out = np.zeros((height * width, 4), dtype=np.uint8)
+    out[:, 3] = 255
     if cache is None:
         cache = {}
-    for (kx, ky), layers in tiles.items():
-        mask = (tile_x == kx) & (tile_y == ky)
-        if not mask.any():
+    # Pixel einmal nach Kachel sortieren - statt je Kachel eine Maske über das ganze Bild
+    for code, mask in dgm.group_by_key(dgm.tile_code(tile_x, tile_y)):
+        kx, ky = dgm.tile_decode(code)
+        layers = tiles.get((kx, ky))
+        if not layers:
             continue
         cols = np.clip((px[mask] - kx * tile_size).astype(np.int64), 0, tile_size - 1)
         rows = np.clip((py[mask] - ky * tile_size).astype(np.int64), 0, tile_size - 1)
         base = _load_tile_array(np, layers["base"], cache)
+        if base.size == 0:
+            continue                # unlesbare Kachel: Stelle bleibt leer statt abzubrechen
         scale = base.shape[0] / float(tile_size)
         patch = base[np.clip((rows * scale).astype(np.int64), 0, base.shape[0] - 1),
                      np.clip((cols * scale).astype(np.int64), 0, base.shape[1] - 1)]
         overlay_path = layers.get("overlay")
         if overlay_path:
             over = _load_tile_array(np, overlay_path, cache)
+            if over.size == 0:
+                overlay_path = None
+        if overlay_path:
             oscale = over.shape[0] / float(tile_size)
             opatch = over[np.clip((rows * oscale).astype(np.int64), 0, over.shape[0] - 1),
                           np.clip((cols * oscale).astype(np.int64), 0, over.shape[1] - 1)]
@@ -647,9 +706,13 @@ def corridor_texture(lat, lon, width, height, step, source_key, tiles, zoom, til
     # Zeile 0 des Puffers entspricht dem seitlichen Abstand -radius und damit v = 0 -
     # genau die Zeile, die Blender zuerst erwartet. Ein zusätzliches Spiegeln würde
     # die Textur quer zur Strecke verkehrt herum auflegen.
-    image.pixels.foreach_set((out.astype(np.float32) / 255.0).reshape(-1))
+    pixels = out.reshape(-1).astype(np.float32)
+    del out
+    pixels *= 1.0 / 255.0
+    image.pixels.foreach_set(pixels)
+    del pixels
     image.pack()
-    image["quelle"] = "eigener Kachelserver" if tile_url else maptexture.credit(source_key)
+    image["quelle"] = credit or maptexture.credit(source_key)
     image["zoom"] = zoom
     image["aufloesung_m_px"] = round(step, 3)
     return image
@@ -666,8 +729,9 @@ def apply_corridor_uv(obj, coords, radius, length, uv_name="Korridor", station_o
     layer = mesh.uv_layers.get(uv_name) or mesh.uv_layers.new(name=uv_name)
     mesh.uv_layers.active = layer
 
-    stations = np.array([c[0] for c in coords], dtype=np.float32) - station_offset
-    offsets = np.array([c[1] for c in coords], dtype=np.float32)
+    coords = np.asarray(coords, dtype=np.float64).reshape(-1, 2)
+    stations = (coords[:, 0] - station_offset).astype(np.float32)
+    offsets = coords[:, 1].astype(np.float32)
     u = np.clip(stations / max(length, 1e-6), 0.0, 1.0)
     v = np.clip((offsets + radius) / (2.0 * radius), 0.0, 1.0)
 
@@ -1126,3 +1190,29 @@ def local_latlon_grid(local_bounds, projection, resolution, max_edge):
     lon = np.degrees(np.arctan(np.sinh(grid_x) / np.cos(d))) + projection.lon
     lat = np.degrees(np.arcsin(np.clip(np.sin(d) / np.cosh(grid_x), -1.0, 1.0)))
     return lat, lon, width, height, step
+
+
+def terrain_lookup(terrain_objects):
+    """Eine Höhenabfrage (x, y) -> Höhe über viele Geländestücke.
+
+    Gefragt werden nur Stücke, deren Grundriss den Punkt enthält, und deren
+    BVH-Baum entsteht erst beim ersten Treffer - bei einem in viele Stücke
+    geteilten Gebiet spart das Zeit und Speicher.
+    """
+    eintraege = []
+    for obj in terrain_objects:
+        ecken = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+        eintraege.append([min(e.x for e in ecken), min(e.y for e in ecken),
+                          max(e.x for e in ecken), max(e.y for e in ecken), obj, None])
+
+    def sample(x, y):
+        for eintrag in eintraege:
+            if eintrag[0] <= x <= eintrag[2] and eintrag[1] <= y <= eintrag[3]:
+                if eintrag[5] is None:
+                    eintrag[5] = terrain_sampler(eintrag[4])
+                value = eintrag[5](x, y)
+                if value is not None:
+                    return value
+        return None
+
+    return sample
