@@ -22,3 +22,8 @@ op.embed_textures = True
     # Write the preset file
     with open(preset_path, 'w') as f:
         f.write(preset_contents)
+
+def unregister():
+    # Nothing is registered with Blender. The preset file stays, like the
+    # presets users save themselves.
+    pass

@@ -1,4 +1,4 @@
-# Umgebung – Bahnstrecken-Umgebung für Blender
+# BII Umgebung – Bahnstrecken-Umgebung für Blender
 
 Erzeugt entlang von Bahnstrecken eine **Kilometrierungslinie** und beschriftet sie
 standardmäßig alle **100 m** mit dem Kilometerwert. Die Gleise selbst werden bewusst

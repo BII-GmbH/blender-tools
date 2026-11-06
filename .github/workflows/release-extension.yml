@@ -1,0 +1,192 @@
+# Shared release job for the Blender extensions in this repo. It is not run
+# directly: each release-<plugin>.yml calls it with that plugin's folder and
+# tag prefix.
+#
+# It builds the extension in extension_dir with scripts/build_extension.py
+# and publishes the zips as the GitHub release <tag_prefix>-v<version>,
+# with <version> from the extension's blender_manifest.toml. It runs only on
+# the default branch. It stops if that release exists for another commit, so
+# raise the version first; for the same commit it is a re-run, which uploads
+# the zips again. The release notes list the commits that changed
+# extension_dir since the plugin's previous release.
+#
+# It then puts the zips into the rolling release "all-plugins", replacing
+# that plugin's older zips there. all-plugins is the only release marked
+# Latest, so /releases/latest always has the current version of every
+# plugin. Pre-releases do not go into all-plugins.
+
+name: Release extension (shared)
+
+on:
+  workflow_call:
+    inputs:
+      extension_dir:
+        description: Extension folder; a pattern such as plugins/Umgebung-* must match exactly one
+        type: string
+        required: true
+      tag_prefix:
+        description: Release tags are <tag_prefix>-v<version>
+        type: string
+        required: true
+      title:
+        description: Release title, followed by the version
+        type: string
+        required: true
+      prerelease:
+        type: boolean
+        default: false
+
+env:
+  BLENDER_URL: https://download.blender.org/release/Blender5.2/blender-5.2.2-linux-x64.tar.xz
+  BUNDLE_TAG: all-plugins
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # Plugin releases running at the same time would race on all-plugins.
+    concurrency:
+      group: release-all-plugins
+      cancel-in-progress: false
+    steps:
+      - name: Stop unless on the default branch
+        env:
+          REF: ${{ github.ref }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          if [ "$REF" != "refs/heads/$DEFAULT_BRANCH" ]; then
+            echo "::error::Releases are made from $DEFAULT_BRANCH only, not from $REF. Run the workflow on $DEFAULT_BRANCH."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # all commits and tags, for the release notes
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Read version
+        id: version
+        env:
+          EXTENSION_DIR: ${{ inputs.extension_dir }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+        run: |
+          dirs=( $EXTENSION_DIR )
+          if [ ${#dirs[@]} -ne 1 ] || [ ! -f "${dirs[0]}/blender_manifest.toml" ]; then
+            echo "::error::$EXTENSION_DIR must match exactly one folder with a blender_manifest.toml, found: ${dirs[*]}"
+            exit 1
+          fi
+          dir=${dirs[0]}
+          read -r id version < <(python -c "import sys, tomllib; m = tomllib.load(open(sys.argv[1], 'rb')); print(m['id'], m['version'])" "$dir/blender_manifest.toml")
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          echo "id=$id" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG_PREFIX-v$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check for an existing release
+        id: existing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          DIR: ${{ steps.version.outputs.dir }}
+        run: |
+          tagged=$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)
+          if [ -n "$tagged" ] && [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG exists for another commit. Raise the version in $DIR/blender_manifest.toml."
+            exit 1
+          fi
+          # Same commit: a re-run after a failed step. Upload the zips again
+          # instead of creating the release.
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "::notice::$TAG exists for this commit; uploading its zips again."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Blender
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libgl1 libegl1
+          mkdir blender
+          curl -sSL "$BLENDER_URL" | tar -xJ -C blender --strip-components=1
+
+      - name: Build
+        env:
+          DIR: ${{ steps.version.outputs.dir }}
+        run: python scripts/build_extension.py "$DIR" --blender blender/blender --output dist
+
+      - name: Write release notes
+        if: steps.existing.outputs.release == 'false'
+        env:
+          DIR: ${{ steps.version.outputs.dir }}
+          TAG_PREFIX: ${{ inputs.tag_prefix }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          # Previous release of this plugin only; other plugins' tags have other prefixes.
+          previous=$(git tag --list "$TAG_PREFIX-v*" --sort=-v:refname | grep -vxF "$TAG" | head -n 1 || true)
+          {
+            echo "Download the zip (for your system, if there are several) and install it in Blender with"
+            echo "Edit > Preferences > Get Extensions > Install from Disk."
+            echo
+            if [ -n "$previous" ]; then
+              echo "## Changes since $previous"
+              range="$previous..HEAD"
+            else
+              echo "## Changes"
+              range="HEAD"
+            fi
+            echo
+            git log --no-merges --format='- %s (%h)' -n 100 $range -- "$DIR"
+          } > notes.md
+          cat notes.md
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          TITLE: ${{ inputs.title }} ${{ steps.version.outputs.version }}
+          PRERELEASE: ${{ inputs.prerelease && '--prerelease' || '' }}
+          EXISTS: ${{ steps.existing.outputs.release }}
+        run: |
+          if [ "$EXISTS" = true ]; then
+            gh release upload "$TAG" dist/*.zip --clobber
+          else
+            # Not Latest: that mark stays on all-plugins.
+            gh release create "$TAG" dist/*.zip --target "$GITHUB_SHA" --title "$TITLE" \
+              --notes-file notes.md --latest=false $PRERELEASE
+          fi
+
+      - name: Update all-plugins release
+        if: ${{ !inputs.prerelease }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ID: ${{ steps.version.outputs.id }}
+        run: |
+          if ! gh release view "$BUNDLE_TAG" > /dev/null 2>&1; then
+            gh release create "$BUNDLE_TAG" --target "$GITHUB_SHA" --title "All plugins" --notes "Created."
+          fi
+
+          # Upload first, then remove this plugin's older zips, so a zip of
+          # it is there at all times. Zips are named <id>-<version>[-<platform>].zip.
+          gh release upload "$BUNDLE_TAG" dist/*.zip --clobber
+          new=$(cd dist && ls *.zip)
+          # grep exits 1 when nothing matches, which pipefail would turn into a failure.
+          old=$(gh release view "$BUNDLE_TAG" --json assets --jq '.assets[].name' |
+                grep -E "^${ID}-[0-9]" | grep -vxF "$new" || true)
+          for name in $old; do
+            gh release delete-asset "$BUNDLE_TAG" "$name" --yes
+          done
+
+          {
+            echo "The latest version of every plugin in this repository. Each plugin's release workflow updates this release."
+            echo
+            echo "Download the zip of the plugin you need (for BII Import, the one for your system) and install it in Blender with"
+            echo "Edit > Preferences > Get Extensions > Install from Disk. The changes of each version are in the plugin's own release."
+            echo
+            echo "## Files"
+            echo
+            gh release view "$BUNDLE_TAG" --json assets --jq '.assets[].name' | sort | sed 's/^/- /'
+          } > bundle.md
+          gh release edit "$BUNDLE_TAG" --notes-file bundle.md --latest
