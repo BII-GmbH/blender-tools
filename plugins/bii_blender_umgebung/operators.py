@@ -290,7 +290,7 @@ def luftbilder_vorbereiten(props):
         return None
     if not simbox.has_credentials():
         return ("Für Luftbilder der Geo-Box fehlt der Zugang: Client-ID und Secret unter "
-                "Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Umgebung eintragen")
+                "Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung eintragen")
     maptexture.reset_imagery_report()
     return None
 

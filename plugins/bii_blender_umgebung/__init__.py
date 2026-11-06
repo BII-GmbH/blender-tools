@@ -7,7 +7,7 @@ Kilometerwerte als Beschriftung - keine Schienengeometrie.
 # Für Blender-Versionen vor 4.2 (klassische Add-ons). Ab 4.2 gilt das
 # blender_manifest.toml der Erweiterung.
 bl_info = {
-    "name": "Umgebung",
+    "name": "BII Umgebung",
     "author": "Stefan Brauner",
     "version": (1, 26, 0),
     "blender": (3, 3, 0),

@@ -1,4 +1,4 @@
-# Umgebung – Bahnstrecken-Umgebung für Blender
+# BII Umgebung – Bahnstrecken-Umgebung für Blender
 
 Erzeugt entlang von Bahnstrecken eine **Kilometrierungslinie** und beschriftet sie
 standardmäßig alle **100 m** mit dem Kilometerwert. Die Gleise selbst werden bewusst
@@ -16,7 +16,7 @@ Blender 4.2 oder neuer:
 
 1. `Bearbeiten ▸ Einstellungen ▸ Erweiterungen (Add-ons)`
 2. Oben rechts `▾ ▸ Install from Disk…`
-3. `railway_chainage-1.18.0.zip` auswählen – die Erweiterung wird aktiviert.
+3. `railway_chainage-<Version>.zip` auswählen (aus den [Releases](https://github.com/BII-GmbH/blender-tools/releases) oder den Ordner `bii_blender_umgebung` selbst zippen) – die Erweiterung wird aktiviert.
 
 Das Panel liegt in der 3D-Ansicht in der Seitenleiste (Taste **N**) im Reiter
 **Umgebung**. Jeder Abschnitt trägt ein Symbol in der Überschrift, damit sich die
@@ -303,7 +303,7 @@ jede Kartenkachel einzeln als Bildausschnitt ab, vier gleichzeitig.
 Abrufe beantwortet sie mit `401`. Das Addon nutzt dafür ein Service-Konto (Keycloak,
 Realm `simbox`, Client-Credentials). Der Betreiber richtet es nach dem Vorbild
 `simbox-geo-cm` ein, das Secret kommt über den Passwortmanager. Eingetragen wird es
-unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Umgebung** (*Client-ID*, voreingestellt
+unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung** (*Client-ID*, voreingestellt
 `simbox-geo-blender`, und *Secret*); **Verbindung testen** meldet sich an und ruft den
 Luftbild-Katalog ab. Das Secret steht damit in den Blender-Einstellungen, nicht in der
 .blend-Datei. Ersatzweise liest das Addon die Umgebungsvariablen
