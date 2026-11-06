@@ -16,7 +16,9 @@ Blender 4.2 oder neuer:
 
 1. `Bearbeiten ▸ Einstellungen ▸ Erweiterungen (Add-ons)`
 2. Oben rechts `▾ ▸ Install from Disk…`
-3. `railway_chainage-<Version>.zip` auswählen (aus den [Releases](https://github.com/BII-GmbH/blender-tools/releases) oder den Ordner `bii_blender_umgebung` selbst zippen) – die Erweiterung wird aktiviert.
+3. `bii_blender_umgebung-<Version>.zip` auswählen (aus den [Releases](https://github.com/BII-GmbH/blender-tools/releases) oder den Ordner `bii_blender_umgebung` selbst zippen) – die Erweiterung wird aktiviert.
+
+Ältere Versionen hießen intern `railway_chainage` (Zip-Datei `railway_chainage-<Version>.zip`). Ist diese alte Version installiert, sie zuerst entfernen: Beide registrieren dieselben Befehle. Das Client-Secret danach im Panel **Datenquelle** neu eintragen; Szenen in .blend-Dateien bleiben unverändert nutzbar.
 
 Das Panel liegt in der 3D-Ansicht in der Seitenleiste (Taste **N**) im Reiter
 **Umgebung**. Jeder Abschnitt trägt ein Symbol in der Überschrift, damit sich die

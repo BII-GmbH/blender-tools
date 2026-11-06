@@ -8,6 +8,8 @@ Dieses Blender-Addon baut die Umgebung einer Bahnstrecke aus offenen Daten auf: 
 2. Den Ordner `bii_blender_umgebung` zippen oder eine Zip-Datei aus den [Releases](https://github.com/BII-GmbH/blender-tools/releases) laden, dann in Blender unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ Von Festplatte installieren…** die Zip-Datei auswählen.
 3. Blender neu starten. Das Addon liegt in der Seitenleiste der 3D-Ansicht (Taste **N**), Reiter **Umgebung**.
 
+Ältere Versionen hießen intern `railway_chainage` (Zip-Datei `railway_chainage-<Version>.zip`). Ist diese alte Version installiert, sie zuerst entfernen: Beide registrieren dieselben Befehle. Das Client-Secret danach im Panel **Datenquelle** neu eintragen; Szenen in .blend-Dateien bleiben unverändert nutzbar.
+
 ## Benutzung
 
 1. **Gebiet**: Gebiet festlegen, z. B. mit **Gebiet auswählen** auf einer Karte.
@@ -26,4 +28,4 @@ Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (
 1. `version` in [blender_manifest.toml](blender_manifest.toml) erhöhen und nach `main` pushen.
 2. Auf GitHub: Actions > Release BII Umgebung > Run workflow, auf `main`.
 
-Das veröffentlicht das Release `bii_blender_umgebung-v<version>` mit der Datei `railway_chainage-<version>.zip`.
+Das veröffentlicht das Release `bii_blender_umgebung-v<version>` mit der Datei `bii_blender_umgebung-<version>.zip`.
