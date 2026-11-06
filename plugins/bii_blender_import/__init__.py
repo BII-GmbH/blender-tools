@@ -14,10 +14,16 @@
 # Extension metadata (name, version, Blender version, OCP wheels) is in
 # blender_manifest.toml.
 
-from . import import_step
+from . import import_plan, import_step, plan_georef
+
 
 def register():
     import_step.register()
+    import_plan.register()
+    plan_georef.register()
+
 
 def unregister():
+    plan_georef.unregister()
+    import_plan.unregister()
     import_step.unregister()
