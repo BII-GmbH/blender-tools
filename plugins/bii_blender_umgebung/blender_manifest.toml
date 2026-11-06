@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "railway_chainage"
-version = "1.26.0"
+version = "1.29.0"
 name = "BII Umgebung"
 tagline = "Kilometrierung, Gleisachsen, Gelände und Gebäude aus OSM-Daten"
 maintainer = "Stefan Brauner"
@@ -22,4 +22,6 @@ paths_exclude_pattern = [
   "__pycache__/",
   "/.git/",
   "*.zip",
+  "/.env",
+  "/.env.local",
 ]

@@ -32,6 +32,10 @@ class OverpassError(Exception):
     pass
 
 
+class AuthError(OverpassError):
+    """Anmeldung an der Geo-Box gescheitert (kein oder falscher Zugang)."""
+
+
 def build_query(bbox, track_types, timeout=180, with_milestones=True):
     """bbox = (min_lat, min_lon, max_lat, max_lon); track_types = Liste von railway-Werten."""
     south, west, north, east = bbox
@@ -79,30 +83,67 @@ def _write_cache(path, data):
         pass
 
 
-def _request(endpoint, query, timeout):
-    from . import simbox
+def _request(endpoint, query, timeout, progress=None):
+    """Eine Abfrage per POST (Formularfeld ``data``).
+
+    Für die eigene Geo-Box mit Token: bei ``401`` einmal mit neuem Token
+    wiederholen, bei ``429``/``503`` die Wartezeit aus ``Retry-After`` abwarten.
+    """
+    from . import maptexture, simbox
+    geo = simbox.is_geo_url(endpoint)
     payload = urllib.parse.urlencode({"data": query}).encode("utf-8")
-    headers = {
-        "User-Agent": USER_AGENT,
-        "Accept": "application/json",
-        "Accept-Encoding": "gzip",
-    }
-    try:
-        # Die eigene Geo-Box beantwortet nur angemeldete Abfragen
-        headers.update(simbox.auth_headers(endpoint))
-    except simbox.SimboxError as exc:
-        raise OverpassError(str(exc))
-    req = urllib.request.Request(endpoint, data=payload, headers=headers)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        raw = resp.read()
-        if resp.headers.get("Content-Encoding") == "gzip":
-            raw = gzip.decompress(raw)
+    refreshed = False       # nach einem 401 genau einmal einen neuen Token holen
+    renew = False
+    for attempt in range(4):
+        headers = {
+            "User-Agent": simbox.USER_AGENT if geo else USER_AGENT,
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+        }
+        if geo:
+            try:
+                headers["Authorization"] = "Bearer " + simbox.token(force=renew)
+                renew = False
+            except simbox.SimboxError as exc:
+                raise AuthError(str(exc))
+        req = urllib.request.Request(endpoint, data=payload, headers=headers)
+        try:
+            # derselbe Zertifikatsspeicher wie bei den Kartenabrufen (Windows, Firmen-Proxy)
+            with urllib.request.urlopen(req, timeout=timeout,
+                                        context=maptexture.tls_context()) as resp:
+                raw = resp.read()
+                if resp.headers.get("Content-Encoding") == "gzip":
+                    raw = gzip.decompress(raw)
+            break
+        except urllib.error.HTTPError as exc:
+            if geo and exc.code == 401:
+                if not refreshed:
+                    refreshed = renew = True        # Token abgelaufen: einmal neu holen
+                    continue
+                raise AuthError("Geo-Box lehnt den Token ab (HTTP 401) - das Service-Konto "
+                                "braucht Zugriff auf simbox-geo")
+            if geo and exc.code in (429, 503) and attempt < 3:
+                wait = simbox.retry_after(exc.headers)
+                if progress:
+                    progress("Geo-Box ausgelastet - neuer Versuch in %.0f s" % wait, None)
+                time.sleep(wait)
+                continue
+            raise
     text = raw.decode("utf-8", errors="replace")
     if not text.lstrip().startswith("{"):
         # Overpass meldet Fehler als HTML-Seite
         snippet = " ".join(text.split())[:300]
         raise OverpassError("Unerwartete Antwort vom Server: %s" % snippet)
     return json.loads(text)
+
+
+def _split_for(bbox, endpoint, max_span):
+    """Kacheln für eine Abfrage. Die Geo-Box bekommt das Gebiet als eine Abfrage -
+    so wünscht es ihr Betreiber, und sie beantwortet auch große Gebiete in Sekunden."""
+    from . import simbox
+    if endpoint and simbox.is_geo_url(endpoint):
+        return [bbox]
+    return split_bbox(bbox, max_span=max_span)
 
 
 # groesste Kantenlaenge einer Einzelabfrage in Grad - darueber wird gekachelt
@@ -132,8 +173,8 @@ def merge(responses):
 
 def fetch(bbox, track_types, timeout=180, use_cache=True, endpoint=None, with_milestones=True,
           progress=None):
-    """Laedt Bahndaten fuer die bbox - bei grossen Gebieten kachelweise."""
-    tiles = split_bbox(bbox)
+    """Laedt Bahndaten fuer die bbox - bei grossen Gebieten kachelweise (ausser Geo-Box)."""
+    tiles = _split_for(bbox, endpoint, MAX_SPAN)
     if len(tiles) > 1:
         responses = []
         for number, tile in enumerate(tiles):
@@ -170,15 +211,19 @@ def _fetch_raw(query, timeout, use_cache, endpoint, progress):
             progress("Frage Overpass-Server ab (%d/%d): %s" % (i + 1, len(endpoints), ep),
                      None)
         try:
-            data = _request(ep, query, timeout)
+            data = _request(ep, query, timeout, progress)
         except urllib.error.HTTPError as exc:
-            reason = {429: "Zu viele Anfragen (Rate-Limit)",
+            reason = {401: "Anmeldung abgelehnt - Client-ID und Secret prüfen",
+                      429: "Zu viele Anfragen (Rate-Limit)",
+                      503: "Server vorübergehend nicht verfügbar",
                       504: "Server ueberlastet (Timeout)"}.get(exc.code, exc.reason)
             errors.append("%s: HTTP %s - %s" % (ep, exc.code, reason))
             continue
         except (urllib.error.URLError, OSError) as exc:
             errors.append("%s: %s" % (ep, exc))
             continue
+        except AuthError:
+            raise                                   # kein anderer Server hilft dabei
         except OverpassError as exc:
             errors.append("%s: %s" % (ep, exc))
             continue
@@ -187,10 +232,13 @@ def _fetch_raw(query, timeout, use_cache, endpoint, progress):
             _write_cache(path, data)
         return data
 
-    raise OverpassError(
-        "Keine Daten erhalten. Bitte Gebiet verkleinern oder später erneut versuchen.\n"
-        + "\n".join(errors)
-    )
+    # Der eigentliche Grund gehört in die erste Zeile - nur sie erscheint in Blender
+    if len(errors) == 1:
+        first = "Keine Daten vom Overpass-Server: %s" % errors[0].split(": ", 1)[-1]
+    else:
+        first = ("Keine Daten von den öffentlichen Overpass-Servern (zuletzt: %s). Bitte Gebiet "
+                 "verkleinern oder später erneut versuchen" % errors[-1].split(": ", 1)[-1])
+    raise OverpassError(first + "\n" + "\n".join(errors))
 
 
 # ------------------------------------------------------------------ Gebäude
@@ -211,8 +259,8 @@ def build_building_query(bbox, timeout=180, with_parts=False):
 
 def fetch_buildings(bbox, timeout=180, use_cache=True, endpoint=None, with_parts=False,
                     progress=None):
-    """Lädt Gebäudegrundrisse für die bbox - bei großen Gebieten kachelweise."""
-    tiles = split_bbox(bbox, max_span=BUILDING_SPAN)
+    """Lädt Gebäudegrundrisse für die bbox - bei großen Gebieten kachelweise (außer Geo-Box)."""
+    tiles = _split_for(bbox, endpoint, BUILDING_SPAN)
     if len(tiles) == 1:
         return _fetch_raw(build_building_query(bbox, timeout, with_parts),
                           timeout, use_cache, endpoint, progress)
@@ -224,6 +272,25 @@ def fetch_buildings(bbox, timeout=180, use_cache=True, endpoint=None, with_parts
         responses.append(_fetch_raw(build_building_query(tile, timeout, with_parts),
                                     timeout, use_cache, endpoint, None))
     return merge(responses)
+
+
+def count_buildings(bbox, timeout=60, endpoint=None):
+    """Anzahl der Gebäude im Gebiet - eine kleine Abfrage vor dem eigentlichen Laden.
+
+    Rückgabe die Zahl oder None, wenn der Server keine Zählung liefert.
+    """
+    south, west, north, east = bbox
+    area = "%.7f,%.7f,%.7f,%.7f" % (south, west, north, east)
+    query = ('[out:json][timeout:%d];(way["building"](%s);'
+             'rel["building"]["type"="multipolygon"](%s););out count;' % (int(timeout), area, area))
+    data = _fetch_raw(query, timeout, False, endpoint, None)
+    for element in data.get("elements", ()):
+        if element.get("type") == "count":
+            try:
+                return int((element.get("tags") or {}).get("total"))
+            except (TypeError, ValueError):
+                return None
+    return None
 
 
 def clear_cache():

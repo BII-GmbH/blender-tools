@@ -19,7 +19,7 @@ Weichen und Kreuzungen werden als V-förmige Meshes angelegt; Übergänge zwisch
 
 ## Hinweise
 
-Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (© OpenStreetMap-Mitwirkende) und von amtlichen deutschen Diensten. Gelände mit 1 m Auflösung gibt es nur für Baden-Württemberg, Bayern und Nordrhein-Westfalen. Luftbilder und der eigene Overpass-Server brauchen ein Service-Konto der Geo-Box: Client-ID und Secret unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung** eintragen. Die ausführliche Anleitung steht in [README.de.md](README.de.md).
+Das Addon braucht eine Internetverbindung; die Daten stammen aus OpenStreetMap (© OpenStreetMap-Mitwirkende) und von amtlichen deutschen Diensten. Gelände mit 1 m Auflösung gibt es nur für Baden-Württemberg, Bayern und Nordrhein-Westfalen. Server und Zugang stehen an einer Stelle: im Panel **Datenquelle** ganz oben. Voreingestellt ist die Geo-Box (geo.simbox.site, Client-ID simbox-geo-dev); nur das Client-Secret muss einmal eingetragen werden - im Panel oder als `.env`-Datei (Vorlage `.env.example`, als `.env` in den Addon-Ordner legen oder unter „Zugangsdatei“ auswählen). Alle Abrufe (Strecken, Gebäude, Gelände, Karten, Ortssuche) folgen dieser Einstellung. Die ausführliche Anleitung steht in [README.de.md](README.de.md).
 
 ## Release
 

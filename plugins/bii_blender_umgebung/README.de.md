@@ -85,11 +85,19 @@ aus einem weit entfernten Gebiet, liegt die Kilometrierung entsprechend weit vom
 Weltursprung entfernt – das ist beabsichtigt und hält verschiedene Importe zueinander
 lagerichtig.
 
-**Eigener OSM-Server:** Unter *Strecken* lässt sich zwischen den öffentlichen
-Overpass-Servern und einer **eigenen Instanz** umschalten. Voreingestellt ist die
-eigene Geo-Box (`https://geo.simbox.site/overpass/api/interpreter`, DACH, täglich
-aktualisiert); für sie meldet sich das Addon mit dem Service-Konto an (siehe
-*Zugang zur Geo-Box*). Eine andere Instanz trägt man im Feld *Adresse* ein.
+**OSM-Server:** Unter *Strecken Auswahl* stehen drei Wege zur Wahl:
+
+- **Geo-Box** (Voreinstellung): die eigene Overpass-Instanz
+  `https://geo.simbox.site/overpass/api/interpreter` mit ganz DACH, täglich aktualisiert.
+  Auch große Gebiete gehen dort als **eine** Abfrage raus und sind in Sekunden da (30 ×
+  40 km um Würzburg: etwa 2 s). Das Addon meldet sich mit dem Service-Konto an (siehe
+  *Zugang zur Geo-Box*), verwendet den Token bis kurz vor Ablauf weiter, holt bei `401`
+  einmal einen neuen und wartet bei `429`/`503` die Zeit aus `Retry-After` ab. Ohne
+  eingetragenen Zugang oder für Gebiete außerhalb von DACH nimmt es die öffentlichen
+  Server und sagt das in der Meldung.
+- **Öffentlich**: die frei zugänglichen Overpass-Server – geteilt, gedrosselt und für
+  große Gebiete langsam. Große Gebiete werden dort in Teilabfragen zerlegt.
+- **Eigener Server**: eine andere Instanz, Adresse im Feld darunter.
 
 ### 2. Strecken suchen
 
@@ -147,7 +155,7 @@ Wird das Gebiet nach dem Suchen geändert, meldet **Kilometrierung erzeugen**, d
 erneut gesucht werden muss – nachgeladen wird dort bewusst nicht, damit Blender
 während einer Serverabfrage nie blockiert.
 
-### 4. Darstellung und Erzeugen
+### 4. Darstellung
 
 **Darstellung** ist ein eingeklapptes Unterpanel von *Kilometrierung* – es gehört
 inhaltlich dazu und steht deshalb dort statt als eigener Abschnitt. Einstellbar sind
@@ -300,12 +308,12 @@ jede Kartenkachel einzeln als Bildausschnitt ab, vier gleichzeitig.
   das Kartenbild (`quelle`) und in die Szene (`kartenquelle`).
 
 **Zugang zur Geo-Box:** Alle Dienste der Geo-Box verlangen eine Anmeldung; anonyme
-Abrufe beantwortet sie mit `401`. Das Addon nutzt dafür ein Service-Konto (Keycloak,
-Realm `simbox`, Client-Credentials). Der Betreiber richtet es nach dem Vorbild
-`simbox-geo-cm` ein, das Secret kommt über den Passwortmanager. Eingetragen wird es
-unter **Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung** (*Client-ID*, voreingestellt
-`simbox-geo-blender`, und *Secret*); **Verbindung testen** meldet sich an und ruft den
-Luftbild-Katalog ab. Das Secret steht damit in den Blender-Einstellungen, nicht in der
+Abrufe beantwortet sie mit `401`. Das Addon nutzt dafür ein **Service-Konto** (Keycloak,
+Realm `simbox`, Client-Credentials) – nicht den persönlichen Login. Client-ID ist
+`simbox-geo-dev`; das Client-Secret gibt der Betreiber separat heraus (nicht per Mail
+oder Chat im Klartext, nie ins Repository). Eingetragen wird beides unter
+**Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung**; **Verbindung testen** meldet sich an
+und ruft den Luftbild-Katalog ab. Das Secret steht damit in den Blender-Einstellungen, nicht in der
 .blend-Datei. Ersatzweise liest das Addon die Umgebungsvariablen
 `SIMBOX_GEO_CLIENT_ID` und `SIMBOX_GEO_CLIENT_SECRET`.
 

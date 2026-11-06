@@ -55,6 +55,12 @@ VOLUNTEER_LIMIT = 250
 # welche Landes-Orthophotos die geladenen Kacheln tatsächlich liefern.
 IMAGERY = 'SIMBOX_LUFTBILD'
 SOURCES[IMAGERY] = ("simbox:imagery", 19, 256, None, "Luftbilder: Geo-Box (simbox)")
+# Basiskarte der Geo-Box (OpenStreetMap, Protomaps-Stil). Die Adresse hängt von der
+# Server-Adresse im Panel „Datenquelle“ ab und wird erst beim Abruf eingesetzt.
+BASEMAP = 'SIMBOX_BASEMAP'
+SOURCES[BASEMAP] = ("simbox:basemap", 19, 256, None,
+                    "© OpenStreetMap-Mitwirkende, © Protomaps (Basiskarte der Geo-Box)")
+GEOBOX_SOURCES = (IMAGERY, BASEMAP)
 _imagery_sources = set()
 _imagery_missing = [0]
 
@@ -102,19 +108,17 @@ def choose_zoom(lat, resolution, max_zoom, tile_size=256):
     return max_zoom
 
 
-def zoom_range(source_key, tile_url=""):
+def zoom_range(source_key):
     """(kleinste, größte) Zoomstufe einer Quelle."""
-    if tile_url:
-        return 1, 22
     if source_key == IMAGERY:
         from . import simbox
         return simbox.IMAGERY_MIN_ZOOM, simbox.IMAGERY_MAX_ZOOM
     return 1, SOURCES[source_key][1]
 
 
-def zoom_for(source_key, lat, resolution, tile_url=""):
+def zoom_for(source_key, lat, resolution):
     """Zoomstufe für die gewünschte Auflösung, innerhalb der Grenzen der Quelle."""
-    smallest, largest = zoom_range(source_key, tile_url)
+    smallest, largest = zoom_range(source_key)
     return max(smallest, choose_zoom(lat, resolution, largest))
 
 
@@ -140,6 +144,19 @@ def download_tile(url, path, timeout=30):
     """Lädt eine Kachel, sofern sie nicht bereits im Zwischenspeicher liegt."""
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return path
+    from . import simbox
+    if simbox.is_geo_url(url):
+        # Geo-Box: angemeldet, mit Wiederholung bei 401/429/503
+        try:
+            data, _headers = simbox.request(url, "image/png,image/*;q=0.8", timeout=timeout,
+                                            what="Geo-Box-Basiskarte")
+        except simbox.SimboxError as exc:
+            raise MapError(str(exc))
+        except urllib.error.HTTPError as exc:
+            raise MapError("Geo-Box-Basiskarte antwortet mit HTTP %s" % exc.code)
+        with open(path, "wb") as handle:
+            handle.write(data)
+        return path
     request = urllib.request.Request(url, headers={
         "User-Agent": USER_AGENT,
         "Accept": "image/png,image/*;q=0.8",
@@ -157,15 +174,12 @@ def download_tile(url, path, timeout=30):
     return path
 
 
-def fetch_tiles(source_key, keys, zoom, progress=None, tile_url=""):
-    """Lädt alle benötigten Kacheln. Rückgabe {(x, y): {layer: pfad}}.
-
-    ``tile_url`` überschreibt die Quelle durch einen eigenen Kachelserver.
-    """
+def fetch_tiles(source_key, keys, zoom, progress=None):
+    """Lädt alle benötigten Kacheln. Rückgabe {(x, y): {layer: pfad}}."""
     template, _max_zoom, _size, overlay, _credit = SOURCES[source_key]
-    if tile_url:
-        template, overlay = tile_url, None
-        source_key = "custom"
+    if source_key == BASEMAP:
+        from . import simbox
+        template = simbox.basemap_template()
     elif source_key == IMAGERY:
         from . import simbox
         try:

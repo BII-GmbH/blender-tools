@@ -38,3 +38,23 @@ class TransverseMercator:
         lon = math.atan(math.sinh(x) / math.cos(d))
         lat = math.asin(math.sin(d) / math.cosh(x))
         return math.degrees(lat), self.lon + math.degrees(lon)
+
+    def to_geographic_array(self, x, y):
+        """Wie :meth:`to_geographic`, aber für numpy-Arrays."""
+        import numpy as np
+        x = np.asarray(x, dtype=np.float64) / (self.k * self.radius)
+        y = np.asarray(y, dtype=np.float64) / (self.k * self.radius)
+        d = y + self.lat_rad
+        lon = np.arctan(np.sinh(x) / np.cos(d))
+        lat = np.arcsin(np.clip(np.sin(d) / np.cosh(x), -1.0, 1.0))
+        return np.degrees(lat), self.lon + np.degrees(lon)
+
+    def from_geographic_array(self, lat, lon):
+        """Wie :meth:`from_geographic`, aber für numpy-Arrays."""
+        import numpy as np
+        lat = np.radians(np.asarray(lat, dtype=np.float64))
+        lon = np.radians(np.asarray(lon, dtype=np.float64) - self.lon)
+        b = np.clip(np.sin(lon) * np.cos(lat), -0.999999999, 0.999999999)
+        x = 0.5 * self.k * self.radius * np.log((1.0 + b) / (1.0 - b))
+        y = self.k * self.radius * (np.arctan(np.tan(lat) / np.cos(lon)) - self.lat_rad)
+        return x, y

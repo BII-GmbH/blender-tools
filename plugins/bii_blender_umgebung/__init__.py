@@ -9,7 +9,7 @@ Kilometerwerte als Beschriftung - keine Schienengeometrie.
 bl_info = {
     "name": "BII Umgebung",
     "author": "Stefan Brauner",
-    "version": (1, 26, 0),
+    "version": (1, 29, 0),
     "blender": (3, 3, 0),
     "location": "3D-Ansicht > Seitenleiste (N) > Umgebung",
     "description": "Umgebung zu Bahnstrecken aufbauen: Kilometrierungslinie, Gleisachsen, "
@@ -20,11 +20,11 @@ bl_info = {
 import importlib
 import sys
 
-from . import (buildings, builder, corridor, dgm, maptexture, operators, overpass,
-               projection, props, railgeom, selector, simbox, tracknetwork, ui)
+from . import (buildings, builder, corridor, dgm, geoproxy, maptexture, operators, overpass,
+               projection, props, railgeom, selector, simbox, tracknetwork, uitext, ui)
 
-_modules = (projection, simbox, overpass, railgeom, tracknetwork, dgm, corridor, maptexture,
-            selector, buildings, builder, props, operators, ui)
+_modules = (projection, simbox, geoproxy, overpass, railgeom, tracknetwork, dgm, corridor, maptexture,
+            selector, buildings, builder, uitext, props, operators, ui)
 
 
 def _reload():
@@ -47,6 +47,7 @@ def register():
 
 
 def unregister():
+    geoproxy.stop()
     ui.unregister()
     operators.unregister()
     props.unregister()
