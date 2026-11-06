@@ -498,13 +498,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def _geo(self, parsed):
         """Basiskarte und Ortssuche der Geo-Box, angemeldet weitergereicht."""
-        from . import simbox
+        from . import geoproxy, simbox
+        if not geoproxy.local_request_allowed(self):
+            # sonst könnte jede Webseite im Browser den Token mitbenutzen
+            self._send(403, "text/plain; charset=utf-8", b"Nur fuer die lokale Auswahlseite")
+            return
         if parsed.path == "/geo/search":
             url, accept, art = (simbox.search_url() + "?" + parsed.query,
                                 "application/json", "application/json; charset=utf-8")
         else:
             teile = parsed.path[len("/geo/tiles/"):].rsplit(".", 1)[0].split("/")
-            if not parsed.path.startswith("/geo/tiles/") or len(teile) != 3                     or not all(t.isdigit() for t in teile):
+            if (not parsed.path.startswith("/geo/tiles/") or len(teile) != 3
+                    or not all(t.isdigit() for t in teile)):
                 self._send(404, "text/plain; charset=utf-8", b"nicht gefunden")
                 return
             z, x, y = (int(t) for t in teile)

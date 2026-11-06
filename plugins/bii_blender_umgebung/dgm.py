@@ -964,10 +964,14 @@ class GeoBoxHeights:
                              fertig[0] / float(total))
             return key, values
 
-        # wenige gleichzeitige Abrufe: deutlich schneller, ohne den Dienst zu überlasten
-        with ThreadPoolExecutor(max_workers=GEOBOX_PARALLEL) as pool:
+        # wenige gleichzeitige Abrufe: deutlich schneller, ohne den Dienst zu überlasten.
+        # Bei einem Fehler die übrigen Kacheln verwerfen statt sie noch zu laden.
+        pool = ThreadPoolExecutor(max_workers=GEOBOX_PARALLEL)
+        try:
             for key, values in pool.map(eine, keys):
                 self.tiles[key] = values
+        finally:
+            pool.shutdown(wait=True, cancel_futures=True)
 
     def _node(self, values, col, row):
         col = min(self.count - 1, max(0, col))

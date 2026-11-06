@@ -58,7 +58,8 @@ def _version():
 USER_AGENT = "Umgebung-Blender/%s (Blender add-on; simbox Geo-Box)" % _version()
 ORIGIN_SHIFT = 20037508.342789244
 
-_lock = threading.Lock()
+_lock = threading.Lock()            # schützt _credentials und _token, nie über Netzabrufe
+_fetch_lock = threading.Lock()      # ein Token-Abruf zur Zeit
 _credentials = {"enabled": True, "base": DEFAULT_BASE, "token_url": DEFAULT_TOKEN_URL,
                 "client_id": "", "secret": ""}
 _token = {"value": None, "expires": 0.0, "key": None}
@@ -108,8 +109,11 @@ def configure(client_id, secret, base=DEFAULT_BASE, token_url=DEFAULT_TOKEN_URL,
     """Zentrale Einstellung setzen (Hauptthread).
 
     Reihenfolge je Wert: ``.env``-Datei, dann Feld im Panel „Datenquelle“, dann
-    Umgebungsvariable, dann Voreinstellung. Alle Abrufe des Addons - Overpass,
-    Gebäude, Karten, Luftbilder, Höhen und Ortssuche - lesen nur diese Werte.
+    Umgebungsvariable, dann Voreinstellung. Die Felder für Server, Anmelde-Adresse
+    und Client-ID haben Voreinstellungen und sind daher nie leer - von den
+    Umgebungsvariablen wirkt praktisch nur ``SIMBOX_GEO_CLIENT_SECRET``. Alle Abrufe
+    des Addons - Overpass, Gebäude, Karten, Luftbilder, Höhen und Ortssuche - lesen
+    nur diese Werte.
     """
     env, fehler = {}, ""
     if env_file:
@@ -188,7 +192,7 @@ def elevation_url():
 
 def turbo_url():
     """Overpass Turbo der gewählten Datenquelle (Geo-Box: Anmeldung im Browser)."""
-    return base_url() + "/turbo/" if enabled() else PUBLIC_TURBO_URL
+    return base_url() + "/turbo/" if active() else PUBLIC_TURBO_URL
 
 
 def _tls_context():
@@ -197,16 +201,32 @@ def _tls_context():
 
 
 def token(force=False):
-    """Gültiger Zugriffstoken; wird bei Bedarf neu geholt."""
+    """Gültiger Zugriffstoken; wird bei Bedarf neu geholt.
+
+    Der Abruf beim Anmeldedienst läuft außerhalb von ``_lock``: :func:`configure`
+    im Hauptthread wartet so nie auf das Netz. ``_fetch_lock`` sorgt dafür, dass
+    parallele Abrufthreads nur einmal einen neuen Token holen.
+    """
+    def gespeichert(key):
+        if (not force and _token["value"] and _token["key"] == key
+                and time.time() < _token["expires"] - 30.0):
+            return _token["value"]
+        return None
+
     with _lock:
         key = (_credentials["client_id"], _credentials["secret"])
         token_url = _credentials["token_url"]
         if not key[1]:
             raise SimboxError("Für die Geo-Box ist kein Zugang eingetragen - bitte Client-ID und "
                               "Secret im Panel „Datenquelle“ hinterlegen")
-        if (not force and _token["value"] and _token["key"] == key
-                and time.time() < _token["expires"] - 30.0):
-            return _token["value"]
+        value = gespeichert(key)
+    if value:
+        return value
+    with _fetch_lock:
+        with _lock:
+            value = gespeichert(key) if not force else None
+        if value:
+            return value                    # ein anderer Thread war schneller
         # wie in der Anleitung zur Geo-Box: Client-ID und Secret im Formular
         body = urllib.parse.urlencode({"grant_type": "client_credentials",
                                        "client_id": key[0], "client_secret": key[1]}).encode()
@@ -225,8 +245,11 @@ def token(force=False):
         value = answer.get("access_token")
         if not value:
             raise SimboxError("Anmeldedienst lieferte keinen Token")
-        _token.update({"value": value, "key": key,
-                       "expires": time.time() + float(answer.get("expires_in", 300))})
+        with _lock:
+            # Zugang inzwischen geändert: Token nur zurückgeben, nicht speichern
+            if (_credentials["client_id"], _credentials["secret"]) == key:
+                _token.update({"value": value, "key": key,
+                               "expires": time.time() + float(answer.get("expires_in", 300))})
         return value
 
 
@@ -398,16 +421,23 @@ def fetch_imagery_tile(zoom, x, y, path, size=256):
     return path, sources
 
 
-def fetch_imagery_tiles(keys, zoom, path_for, progress=None):
-    """Lädt viele Kacheln parallel. Rückgabe ({(x, y): pfad}, Quell-IDs, Anzahl ohne Bild)."""
+def fetch_imagery_tiles(keys, zoom, path_for, progress=None, abbruch=None):
+    """Lädt viele Kacheln parallel. Rückgabe ({(x, y): pfad}, Quell-IDs, Anzahl ohne Bild).
+
+    Bei einem Fehler oder gesetztem ``abbruch`` werden noch nicht begonnene Kacheln
+    verworfen; nur die laufenden (höchstens ``IMAGERY_WORKERS``) werden abgewartet.
+    """
     from concurrent.futures import ThreadPoolExecutor, as_completed
     token()                                   # Anmeldung vorab prüfen, nicht je Kachel
     result, sources, missing = {}, set(), 0
     total = len(keys)
-    with ThreadPoolExecutor(max_workers=IMAGERY_WORKERS) as pool:
+    pool = ThreadPoolExecutor(max_workers=IMAGERY_WORKERS)
+    try:
         futures = {pool.submit(fetch_imagery_tile, zoom, x, y, path_for(x, y)): (x, y)
                    for x, y in keys}
         for number, future in enumerate(as_completed(futures), start=1):
+            if abbruch is not None and abbruch.is_set():
+                break
             path, ids = future.result()
             if path is None:
                 missing += 1
@@ -416,6 +446,8 @@ def fetch_imagery_tiles(keys, zoom, path_for, progress=None):
             sources |= ids
             if progress and (number % 5 == 0 or number == total):
                 progress("Luftbilder: %d von %d" % (number, total), number / float(total or 1))
+    finally:
+        pool.shutdown(wait=True, cancel_futures=True)
     return result, sources, missing
 
 

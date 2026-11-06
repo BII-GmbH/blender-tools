@@ -36,6 +36,22 @@ _lock = threading.Lock()
 _server = {"instance": None, "thread": None}
 
 
+def local_request_allowed(handler):
+    """Nur Anfragen der lokalen Seite dieses Servers selbst - keine fremden Webseiten.
+
+    Prüft ``Host`` (gegen DNS-Rebinding), ``Origin`` und ``Sec-Fetch-Site``. Gilt für
+    jeden lokalen Server, der Anfragen mit dem Token der Geo-Box weiterreicht.
+    """
+    port = handler.server.server_address[1]
+    own_hosts = ("127.0.0.1:%d" % port, "localhost:%d" % port)
+    if handler.headers.get("Host", "") not in own_hosts:
+        return False
+    origin = handler.headers.get("Origin")
+    if origin and origin not in ("http://" + h for h in own_hosts):
+        return False
+    return handler.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     server_version = "UmgebungGeoProxy/1.0"
@@ -58,20 +74,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _text(self, code, text):
         self._send(code, "text/plain; charset=utf-8", text.encode("utf-8"))
 
-    def _allowed(self):
-        """Nur Anfragen dieser lokalen Seite selbst - keine fremden Webseiten."""
-        port = self.server.server_address[1]
-        own_hosts = ("127.0.0.1:%d" % port, "localhost:%d" % port)
-        if self.headers.get("Host", "") not in own_hosts:
-            return False
-        origin = self.headers.get("Origin")
-        if origin and origin not in ("http://" + h for h in own_hosts):
-            return False
-        return self.headers.get("Sec-Fetch-Site", "same-origin") in ("same-origin", "none")
-
     def _forward(self, method):
         from . import simbox
-        if not self._allowed():
+        if not local_request_allowed(self):
             self._text(403, "Nur für die lokale Turbo-Seite")
             return
         path = self.path

@@ -17,9 +17,10 @@ from . import (buildings, builder, corridor as corridor_mod, dgm, geoproxy, mapt
                overpass, railgeom, selector, tracknetwork)
 from .projection import TransverseMercator
 
-# Obergrenze fuer die Summe aller Kartentexturen (RGBA, rund 4 Byte je Pixel)
-# Beim Aufbau eines Texturgitters fallen je Pixel mehrere Zwischenwerte an;
-# die Grenze muss daher deutlich unter dem reinen Bildspeicher liegen.
+# Obergrenze je Kartentextur (RGBA, rund 4 Byte je Pixel). Jede Textur wird
+# einzeln gebaut und später nach Unity übernommen, daher gilt die Grenze je Bild,
+# nicht für die Summe. Beim Aufbau eines Texturgitters fallen je Pixel mehrere
+# Zwischenwerte an; die Grenze liegt daher deutlich unter dem reinen Bildspeicher.
 MAX_TEXTURE_PIXELS = 25_000_000
 
 # Zwischenspeicher zwischen "Strecken suchen" und "Kilometrierung erzeugen"
@@ -347,21 +348,36 @@ def _zu_gross(masse):
             % (masse[0], masse[1], masse[0] * masse[1] / 1e6, MAX_TEXTURE_PIXELS / 1e6))
 
 
-def luftbilder_vorbereiten(props):
-    """Vor einem Luftbild-Abruf die Quellenliste leeren. Rückgabe Fehlertext oder None."""
-    if map_source(props) == maptexture.IMAGERY:
-        maptexture.reset_imagery_report()
-    return None
+def bericht_uebernehmen(plan, bericht):
+    """Kartenbericht eines Stücks in den Lauf übernehmen (Hauptthread).
+
+    Rückgabe die Quellenangabe dieses Stücks - bei Luftbildern genau die
+    Datensätze, die seine Kacheln geliefert haben.
+    """
+    gesamt = plan["luftbild"]
+    gesamt["sources"].update(bericht["sources"])
+    gesamt["missing"] += bericht["missing"]
+    return maptexture.credit(plan["source"], bericht)
 
 
-def luftbild_hinweis(props):
+def luftbild_hinweis(plan):
     """Ergänzung der Meldung, wenn Kacheln ohne Luftbild geblieben sind."""
-    if map_source(props) == maptexture.IMAGERY and maptexture.imagery_missing():
-        return " | %d Kachel(n) ohne Luftbild (außerhalb der Abdeckung)" % maptexture.imagery_missing()
+    fehlend = plan["luftbild"]["missing"]
+    if plan["source"] == maptexture.IMAGERY and fehlend:
+        return " | %d Kachel(n) ohne Luftbild (außerhalb der Abdeckung)" % fehlend
     return ""
 
 
-def check_tile_budget(props, count, pixels=0):
+def kartenquelle_merken(scene, quelle):
+    """Quellenangabe in ``scene["kartenquelle"]`` ergänzen, nicht ersetzen - die Pflicht
+    zur Namensnennung gilt für jede Karte, die in der Szene liegt."""
+    teile = [t for t in str(scene.get("kartenquelle", "")).split(" | ") if t]
+    if quelle not in teile:
+        teile.append(quelle)
+    scene["kartenquelle"] = " | ".join(teile)
+
+
+def check_tile_budget(props, count):
     """Prueft, ob ein Abruf gegenueber der Kartenquelle vertretbar ist.
 
     Rueckgabe: Fehlertext oder None. Ehrenamtlich betriebene Dienste (OSM,
@@ -378,10 +394,6 @@ def check_tile_budget(props, count, pixels=0):
     if grenze is not None and count > grenze:
         return ("Dafür wären %d Kartenkacheln nötig (Grenze %d). Bitte die Auflösung gröber "
                 "wählen oder das Gebiet verkleinern" % (count, grenze))
-    if pixels and pixels > MAX_TEXTURE_PIXELS:
-        return ("Die Texturen ergäben zusammen %.0f Millionen Pixel (Grenze %.0f Mio). "
-                "Bitte die Auflösung gröber wählen"
-                % (pixels / 1e6, MAX_TEXTURE_PIXELS / 1e6))
     return None
 
 
@@ -726,6 +738,10 @@ class _Hintergrund:
             return None
 
 
+# Laufender stückweiser Befehl (bl_idname) - nur zur Laufzeit, nie in der .blend-Datei
+_LAEUFT = {"op": None}
+
+
 class _Stueckweise:
     """Gemeinsamer Ablauf: im Hintergrund laden, im Hauptthread Stück für Stück aufbauen.
 
@@ -744,6 +760,17 @@ class _Stueckweise:
     _worker = None
     _plan = None
 
+    @classmethod
+    def poll(cls, context):
+        # Nur ein stückweiser Lauf zur Zeit: ein zweiter würde z. B. die Stücke des
+        # ersten wegräumen, während dieser noch weitere anlegt
+        return _LAEUFT["op"] is None and cls._bereit(context)
+
+    @classmethod
+    def _bereit(cls, context):
+        """Voraussetzungen der Unterklasse (statt ``poll``)."""
+        return True
+
     def invoke(self, context, event):
         props = context.scene.railway_chainage
         plan, fehler = self._planen(context, props)
@@ -751,6 +778,7 @@ class _Stueckweise:
             self.report({'ERROR'}, fehler)
             return {'CANCELLED'}
         self._plan = plan
+        _LAEUFT["op"] = self.bl_idname
         props.scan_info = plan.get("start", "Daten werden geladen …") + " (Esc bricht ab)"
         self._worker = _Hintergrund(
             lambda fortschritt, abbruch: self._erzeugen(plan, fortschritt, abbruch)).start()
@@ -784,10 +812,16 @@ class _Stueckweise:
         return {'RUNNING_MODAL'}
 
     def _release(self, context):
+        _LAEUFT["op"] = None
         _fortschritt_beenden(context, context.scene.railway_chainage)
         if self._timer is not None:
             context.window_manager.event_timer_remove(self._timer)
             self._timer = None
+
+    def cancel(self, context):
+        # Blender beendet den Lauf selbst (Datei laden, Fenster schließen)
+        self._worker.abbruch.set()
+        self._release(context)
 
     def execute(self, context):
         props = context.scene.railway_chainage
@@ -899,7 +933,7 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
-    def poll(cls, context):
+    def _bereit(cls, context):
         return bool(_chainage_lines(context))
 
     def _planen(self, context, props):
@@ -976,7 +1010,10 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
                     self._drape(line, plan["model"], plan["projection"], plan["zone"],
                                 plan["offset"] or 0.0, props.z_offset)
                 elif props.drape_mode == 'SHRINKWRAP':
-                    _apply_shrinkwrap(line, parts, props.z_offset)
+                    # über Namen: ein Rückgängig während des Laufs entfernt Objekte
+                    objekte = [o for o in map(bpy.data.objects.get, parts) if o is not None]
+                    if objekte:
+                        _apply_shrinkwrap(line, objekte, props.z_offset)
             return
 
         z = stueck["z"]
@@ -1007,7 +1044,7 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
         obj["corridor_radius_m"] = props.corridor_radius
         obj["corridor_length_m"] = round(stueck["length"], 1)
         obj["utm_zone"] = plan["zone"]
-        parts.append(obj)
+        parts.append(obj.name)
         plan["verts"] += len(verts)
         plan["faces"] += len(quads)
         plan["gebaut"] += 1
@@ -1308,7 +1345,7 @@ class RC_OT_map_texture(_Stueckweise, Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
-    def poll(cls, context):
+    def _bereit(cls, context):
         return bool(_terrain_objects(context))
 
     def _prepare(self, context, props):
@@ -1383,10 +1420,11 @@ class RC_OT_map_texture(_Stueckweise, Operator):
         if not jobs:
             return None, "Kein passendes Korridorgelände gefunden – Auswahl und Gelände prüfen"
         total = len({(job["zoom"],) + key for job in jobs for key in job["keys"]})
-        problem = check_tile_budget(props, total) or luftbilder_vorbereiten(props)
+        problem = check_tile_budget(props, total)
         if problem:
             return None, problem
         return {"jobs": jobs, "source": map_source(props), "built": [], "gebaut": 0,
+                "luftbild": maptexture.new_report(),
                 "start": "Kartentextur: %d Kacheln für %d Abschnitt(e) werden geladen …"
                          % (total, len(jobs))}, None
 
@@ -1397,17 +1435,20 @@ class RC_OT_map_texture(_Stueckweise, Operator):
                 return
             fortschritt("Kartentextur: Abschnitt %d von %d" % (number, len(plan["jobs"])),
                         (number - 1) / float(len(plan["jobs"])))
-            yield job, maptexture.fetch_tiles(plan["source"], job["keys"], job["zoom"])
+            bericht = maptexture.new_report()
+            yield job, maptexture.fetch_tiles(plan["source"], job["keys"], job["zoom"],
+                                              report=bericht, abbruch=abbruch), bericht
 
     def _aufbauen(self, context, props, plan, stueck):
-        job, tiles = stueck
+        job, tiles, bericht = stueck
+        quelle = bericht_uebernehmen(plan, bericht)
         obj = bpy.data.objects.get(job["object"])
         if obj is None:
             return
         lat, lon, width, height, length, step = job["grid"]
         name = "Karte %s %s" % (obj.name[:35], uuid.uuid4().hex[:12])
         image = builder.corridor_texture(lat, lon, width, height, step, plan["source"],
-                                         tiles, job["zoom"], name=name)
+                                         tiles, job["zoom"], name=name, credit=quelle)
         builder.apply_map_material(obj, image, name=name)
         plan["built"].append("%d x %d Pixel, %.2f m/Pixel, Zoom %d" %
                              (width, height, step, job["zoom"]))
@@ -1417,10 +1458,10 @@ class RC_OT_map_texture(_Stueckweise, Operator):
         built = plan["built"]
         if not built:
             return 'WARNING', "Keine Kartentextur erzeugt"
-        quelle = maptexture.credit(plan["source"])
-        context.scene["kartenquelle"] = quelle
+        quelle = maptexture.credit(plan["source"], plan["luftbild"])
+        kartenquelle_merken(context.scene, quelle)
         teile = ["%d Abschnitte je %s" % (len(built), built[0])] if len(built) > 1 else built
-        return 'INFO', " | ".join(teile) + " | Quelle: " + quelle + luftbild_hinweis(props)
+        return 'INFO', " | ".join(teile) + " | Quelle: " + quelle + luftbild_hinweis(plan)
 
 
 # Größte Kantenlänge einer Kartentextur je Geländestück in Pixeln
@@ -1469,13 +1510,14 @@ class RC_OT_import_area(_Stueckweise, Operator):
                 "resolution": aufloesung, "zoom": 0, "offset": None, "verts": 0,
                 "faces": 0, "missing": 0, "gebaut": 0, "pixel": None,
                 "flat": props.terrain_source == 'FLAT',
-                "probe": _needs_probe(context, props), "bezug": None}
+                "probe": _needs_probe(context, props), "bezug": None,
+                "luftbild": maptexture.new_report()}
         kacheln = 0
         if props.area_with_map:
             mitte = (bbox[0] + bbox[2]) / 2.0
             plan["zoom"] = maptexture.zoom_for(plan["source"], mitte, aufloesung)
             kacheln = tile_range(bbox, plan["zoom"])
-            problem = check_tile_budget(props, kacheln) or luftbilder_vorbereiten(props)
+            problem = check_tile_budget(props, kacheln)
             if problem:
                 return None, problem
         plan["start"] = ("Gebiet: %d x %d Punkte in %d Stück(en)%s%s …"
@@ -1515,8 +1557,10 @@ class RC_OT_import_area(_Stueckweise, Operator):
                 lat, lon, width, height, step = builder.local_latlon_grid(
                     bounds, plan["projection"], plan["resolution"], MAX_CHUNK_TEXTURE)
                 keys = builder.corridor_tile_keys(lat, lon, plan["zoom"])
-                stueck.update(grid=(lat, lon, width, height, step),
-                              tiles=maptexture.fetch_tiles(plan["source"], keys, plan["zoom"]))
+                bericht = maptexture.new_report()
+                stueck.update(grid=(lat, lon, width, height, step), bericht=bericht,
+                              tiles=maptexture.fetch_tiles(plan["source"], keys, plan["zoom"],
+                                                           report=bericht, abbruch=abbruch))
             yield stueck
 
     def _aufbauen(self, context, props, plan, stueck):
@@ -1552,8 +1596,10 @@ class RC_OT_import_area(_Stueckweise, Operator):
         if plan["map"] and stueck.get("grid"):
             lat, lon, width, height, step = stueck["grid"]
             bildname = "Gebietskarte %03d" % stueck["number"]
+            quelle = bericht_uebernehmen(plan, stueck["bericht"])
             image = builder.corridor_texture(lat, lon, width, height, step, plan["source"],
-                                             stueck["tiles"], plan["zoom"], name=bildname)
+                                             stueck["tiles"], plan["zoom"], name=bildname,
+                                             credit=quelle)
             builder.apply_map_material(obj, image, name=bildname)
             if plan["pixel"] is None or width * height > plan["pixel"][0] * plan["pixel"][1]:
                 plan["pixel"] = (width, height, step)
@@ -1568,11 +1614,11 @@ class RC_OT_import_area(_Stueckweise, Operator):
         if plan["missing"]:
             info += " (%d ohne Höhenwert)" % plan["missing"]
         if plan["pixel"]:
-            quelle = maptexture.credit(plan["source"])
-            context.scene["kartenquelle"] = quelle
+            quelle = maptexture.credit(plan["source"], plan["luftbild"])
+            kartenquelle_merken(context.scene, quelle)
             info += " | Karte je Stück bis %d x %d Pixel, %.2f m/Pixel, Zoom %d | Quelle: %s%s" % (
                 plan["pixel"][0], plan["pixel"][1], plan["pixel"][2], plan["zoom"], quelle,
-                luftbild_hinweis(props))
+                luftbild_hinweis(plan))
         return 'INFO', info
 
 
@@ -2045,17 +2091,26 @@ class RC_OT_simbox_test(Operator):
                 what="Ortssuche")),
         )
 
-    def execute(self, context):
+    _timer = None
+    _thread = None
+    _ergebnis = None
+
+    @staticmethod
+    def _zugang_neu_lesen(context):
         from . import props as props_mod
         prefs = props_mod.preferences(context)
         if prefs is not None:
             props_mod._zugang_setzen(prefs)       # geänderte .env-Datei neu einlesen
+
+    def _pruefen(self):
+        """Anmeldung und alle Dienste prüfen - ohne bpy, läuft im Hintergrund.
+
+        Rückgabe (Text, ok); ok ist None, wenn schon die Anmeldung scheitert.
+        """
         try:
             simbox.token(force=True)
         except Exception as exc:                                  # noqa: BLE001
-            simbox.set_status(str(exc), ok=False)
-            self.report({'ERROR'}, str(exc))
-            return {'CANCELLED'}
+            return str(exc), None
 
         erreichbar, fehler = [], []
         for name, probe in self._dienste():
@@ -2073,10 +2128,42 @@ class RC_OT_simbox_test(Operator):
             text += " - erreichbar: " + ", ".join(erreichbar)
         if fehler:
             text += " - Fehler: " + "; ".join(fehler)
-        simbox.set_status(text, ok=not fehler)
-        self.report({'WARNING'} if fehler else {'INFO'}, text)
+        return text, not fehler
+
+    def _melden(self, context, text, ok):
+        simbox.set_status(text, ok=bool(ok))
+        self.report({'ERROR'} if ok is None else {'INFO'} if ok else {'WARNING'}, text)
         _redraw(context)
-        return {'FINISHED'}
+        return {'CANCELLED'} if ok is None else {'FINISHED'}
+
+    def execute(self, context):
+        self._zugang_neu_lesen(context)
+        return self._melden(context, *self._pruefen())
+
+    def invoke(self, context, event):
+        # Die Probeabrufe können bei einem hängenden Server Minuten dauern - im
+        # Hintergrund, damit Blender bedienbar bleibt
+        self._zugang_neu_lesen(context)
+        simbox.set_status("Verbindung wird geprüft …", ok=None)
+
+        def lauf():
+            self._ergebnis = self._pruefen()
+
+        self._thread = threading.Thread(target=lauf, daemon=True)
+        self._thread.start()
+        wm = context.window_manager
+        self._timer = wm.event_timer_add(0.25, window=context.window)
+        wm.modal_handler_add(self)
+        _redraw(context)
+        return {'RUNNING_MODAL'}
+
+    def modal(self, context, event):
+        if event.type != 'TIMER' or self._thread.is_alive():
+            return {'PASS_THROUGH'}
+        context.window_manager.event_timer_remove(self._timer)
+        self._timer = None
+        text, ok = self._ergebnis or ("Verbindungstest ohne Ergebnis", None)
+        return self._melden(context, text, ok)
 
 
 class RC_OT_clear_cache(Operator):

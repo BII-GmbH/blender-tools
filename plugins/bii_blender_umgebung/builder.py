@@ -56,16 +56,29 @@ def clear_generated(collection):
     Nur Objekte mit der Markierung werden gelöscht - eigene Objekte des
     Anwenders in derselben Sammlung bleiben unangetastet.
     """
+    materials = set()
     for obj in list(collection.objects):
         if not obj.get(MARKER):
             continue
         data = obj.data
+        materials.update(slot.material for slot in obj.material_slots if slot.material)
         bpy.data.objects.remove(obj)
         if data is not None and data.users == 0:
             if isinstance(data, bpy.types.Curve):
                 bpy.data.curves.remove(data)
             elif isinstance(data, bpy.types.Mesh):
                 bpy.data.meshes.remove(data)
+    # Kartenmaterialien samt Bild freigeben, sobald nichts sie mehr nutzt - sonst
+    # blieben die Texturen jedes früheren Laufs bis zum Speichern im Arbeitsspeicher
+    for material in materials:
+        if material.users:
+            continue
+        images = {node.image for node in (material.node_tree.nodes if material.node_tree else ())
+                  if node.type == 'TEX_IMAGE' and node.image is not None}
+        bpy.data.materials.remove(material)
+        for image in images:
+            if not image.users:
+                bpy.data.images.remove(image)
 
 
 def unique_name(base):
@@ -637,8 +650,11 @@ def corridor_tile_keys(lat, lon, zoom, tile_size=256, step=4):
 
 
 def corridor_texture(lat, lon, width, height, step, source_key, tiles, zoom, tile_size=256,
-                     name="Korridorkarte", cache=None):
-    """Baut das Texturbild aus den geladenen Kacheln. Rückgabe Bild."""
+                     name="Korridorkarte", cache=None, credit=None):
+    """Baut das Texturbild aus den geladenen Kacheln. Rückgabe Bild.
+
+    ``credit`` ist die Quellenangabe dieses Bildes (Vorgabe: die der Quelle).
+    """
     import numpy as np
     from . import dgm, maptexture
 
@@ -696,7 +712,7 @@ def corridor_texture(lat, lon, width, height, step, source_key, tiles, zoom, til
     image.pixels.foreach_set(pixels)
     del pixels
     image.pack()
-    image["quelle"] = maptexture.credit(source_key)
+    image["quelle"] = credit or maptexture.credit(source_key)
     image["zoom"] = zoom
     image["aufloesung_m_px"] = round(step, 3)
     return image

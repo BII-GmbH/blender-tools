@@ -462,9 +462,9 @@ class RC_Props(PropertyGroup):
                     "Auflösung ergibt sich zusätzlich aus der Streckenlänge und der "
                     "Bildbegrenzung")
     map_max_edge: IntProperty(
-        name="max. Bildbreite", default=16384, min=1024, max=32768,
-        description="Obergrenze für die Pixelbreite der Textur. Grafikkarten unterstützen "
-                    "meist bis 16384 Pixel")
+        name="max. Bildbreite", default=16384, min=1024, max=16384,
+        description="Obergrenze für die Pixelbreite jeder Textur. Unity und die meisten "
+                    "Grafikkarten nehmen höchstens 16384 Pixel")
     map_max_tiles: IntProperty(
         name="max. Kacheln", default=500, min=10, max=5000,
         description="Sicherheitsgrenze für die Zahl der Kartenkacheln, die geladen werden. "
@@ -589,7 +589,8 @@ def draw_data_source(layout, prefs):
     layout.operator("railway_chainage.simbox_test", icon='CHECKMARK')
     text, ok = simbox.status()
     if text:
-        uitext.label(layout.box(), text, icon='CHECKMARK' if ok else 'ERROR')
+        icon = 'SORTTIME' if ok is None else 'CHECKMARK' if ok else 'ERROR'
+        uitext.label(layout.box(), text, icon=icon)
 
 
 class RC_AddonPreferences(bpy.types.AddonPreferences):

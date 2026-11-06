@@ -61,8 +61,6 @@ BASEMAP = 'SIMBOX_BASEMAP'
 SOURCES[BASEMAP] = ("simbox:basemap", 19, 256, None,
                     "© OpenStreetMap-Mitwirkende, © Protomaps (Basiskarte der Geo-Box)")
 GEOBOX_SOURCES = (IMAGERY, BASEMAP)
-_imagery_sources = set()
-_imagery_missing = [0]
 
 _TLS_CONTEXT = None
 
@@ -174,8 +172,18 @@ def download_tile(url, path, timeout=30):
     return path
 
 
-def fetch_tiles(source_key, keys, zoom, progress=None):
-    """Lädt alle benötigten Kacheln. Rückgabe {(x, y): {layer: pfad}}."""
+def new_report():
+    """Bericht eines Kartenabrufs: beteiligte Luftbild-Datensätze und Kacheln ohne Bild."""
+    return {"sources": set(), "missing": 0}
+
+
+def fetch_tiles(source_key, keys, zoom, progress=None, report=None, abbruch=None):
+    """Lädt alle benötigten Kacheln. Rückgabe {(x, y): {layer: pfad}}.
+
+    ``report`` (aus :func:`new_report`) sammelt bei Luftbildern die Quellen und
+    Lücken - Grundlage der Quellenangabe. ``abbruch`` (``threading.Event``) beendet
+    den Abruf vorzeitig; die Rückgabe ist dann unvollständig.
+    """
     template, _max_zoom, _size, overlay, _credit = SOURCES[source_key]
     if source_key == BASEMAP:
         from . import simbox
@@ -184,11 +192,13 @@ def fetch_tiles(source_key, keys, zoom, progress=None):
         from . import simbox
         try:
             paths, sources, missing = simbox.fetch_imagery_tiles(
-                keys, zoom, lambda x, y: tile_path(IMAGERY, "base", zoom, x, y, "jpg"), progress)
+                keys, zoom, lambda x, y: tile_path(IMAGERY, "base", zoom, x, y, "jpg"), progress,
+                abbruch=abbruch)
         except simbox.SimboxError as exc:
             raise MapError(str(exc))
-        _imagery_sources.update(sources)
-        _imagery_missing[0] += missing
+        if report is not None:
+            report["sources"].update(sources)
+            report["missing"] += missing
         try:
             simbox.catalogue()      # Quellenangaben vorab laden, nicht im Hauptthread
         except Exception:                                         # noqa: BLE001
@@ -197,6 +207,8 @@ def fetch_tiles(source_key, keys, zoom, progress=None):
     result = {}
     total = len(keys)
     for number, (x, y) in enumerate(keys):
+        if abbruch is not None and abbruch.is_set():
+            break
         if progress and (number % 5 == 0 or number == total - 1):
             progress("Kartenkacheln: %d von %d" % (number + 1, total),
                      (number + 1) / float(total or 1))
@@ -210,18 +222,9 @@ def fetch_tiles(source_key, keys, zoom, progress=None):
     return result
 
 
-def credit(source_key):
+def credit(source_key, report=None):
+    """Quellenangabe; bei Luftbildern aus den Datensätzen in ``report``."""
     if source_key == IMAGERY:
         from . import simbox
-        return simbox.attribution(_imagery_sources)
+        return simbox.attribution(report["sources"] if report else ())
     return SOURCES[source_key][4]
-
-
-def reset_imagery_report():
-    """Vor einem Abruf: gesammelte Luftbild-Quellen und Lücken zurücksetzen."""
-    _imagery_sources.clear()
-    _imagery_missing[0] = 0
-
-
-def imagery_missing():
-    return _imagery_missing[0]

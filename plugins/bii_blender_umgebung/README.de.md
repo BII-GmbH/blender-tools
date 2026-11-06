@@ -38,7 +38,7 @@ der nur vom eigenen Rechner aus erreichbar ist.
 
 ### 1. Gebiet festlegen
 
-Wie bei BLOSM über Koordinaten:
+Über Koordinaten:
 
 * **Bounding Box** – vier Eckkoordinaten, oder
 * **Mittelpunkt + Radius** – ein Punkt und die halbe Kantenlänge.
@@ -48,10 +48,8 @@ Hilfsschaltflächen:
 | Schaltfläche | Funktion |
 |---|---|
 | **Gebiet auswählen** | Öffnet eine Karte im Browser und übernimmt das Gebiet mit einem Klick direkt nach Blender – siehe unten |
-| **BLOSM-Karte** | Öffnet die Auswahlkarte des BLOSM-Addons (prochitecture.com). Dort *Show selection rectangle*, Rechteck setzen, Koordinaten kopieren – anschließend hier *Aus Zwischenablage*. Braucht eine Internetverbindung |
 | **Aus Zwischenablage** | Übernimmt das kopierte Gebiet. Versteht außerdem kopierte Adressen: OpenStreetMap (`#map=…` oder `?bbox=…`), Google Maps (`@lat,lon,17z`), vier Zahlen als `west,süd,ost,nord` oder ein Koordinatenpaar `48.1, 9.79` |
-| **Gebiet von BLOSM** | Übernimmt das im BLOSM-Addon eingestellte Gebiet |
-| **In eigener Karte ansehen** | Öffnet das Gebiet in der eigenen Kartenanwendung. Die Adresse steht im Feld darunter (Voreinstellung: die eigene Overpass-Turbo-Instanz `https://turbo.simbox.site/`, VPN und simbox-Anmeldung). Enthält sie `{lat}`, `{lon}` oder `{zoom}`, werden diese ersetzt; sonst wird für Overpass Turbo automatisch `C=lat;lon;zoom` angehängt |
+| **In Overpass Turbo ansehen** | Öffnet das Gebiet in Overpass Turbo der gewählten Datenquelle. Mit Geo-Box und eingetragenem Zugang über einen lokalen Zugang in Blender (`http://127.0.0.1:8771/turbo/`), der das Service-Konto nutzt – keine Anmeldung im Browser. Sonst das öffentliche Overpass Turbo |
 
 #### Gebiet auf der Karte auswählen
 
@@ -313,11 +311,13 @@ jede Kartenkachel einzeln als Bildausschnitt ab, vier gleichzeitig.
 Abrufe beantwortet sie mit `401`. Das Addon nutzt dafür ein **Service-Konto** (Keycloak,
 Realm `simbox`, Client-Credentials) – nicht den persönlichen Login. Client-ID ist
 `simbox-geo-dev`; das Client-Secret gibt der Betreiber separat heraus (nicht per Mail
-oder Chat im Klartext, nie ins Repository). Eingetragen wird beides unter
-**Bearbeiten ▸ Einstellungen ▸ Add-ons ▸ BII Umgebung**; **Verbindung testen** meldet sich an
-und ruft den Luftbild-Katalog ab. Das Secret steht damit in den Blender-Einstellungen, nicht in der
-.blend-Datei. Ersatzweise liest das Addon die Umgebungsvariablen
-`SIMBOX_GEO_CLIENT_ID` und `SIMBOX_GEO_CLIENT_SECRET`.
+oder Chat im Klartext, nie ins Repository). Eingetragen wird es im Panel
+**Datenquelle** ganz oben im Reiter *Umgebung* oder per `.env`-Datei (Feld
+„Zugangsdatei“); **Verbindung testen** meldet sich an und fragt jeden Dienst einmal ab.
+Das Secret steht damit in den Blender-Einstellungen, nicht in der .blend-Datei.
+Ersatzweise liest das Addon das Secret aus der Umgebungsvariablen
+`SIMBOX_GEO_CLIENT_SECRET`; Server, Anmelde-Adresse und Client-ID kommen aus dem Panel
+oder der `.env`-Datei.
 
 **Kartenqualität** wird als Stufe gewählt – Übersicht (4 m/Px), Mittel (2 m), Standard
 (1 m), Detail (0,5 m), Maximal (0,25 m) oder ein eigener Wert. Direkt darunter steht,
