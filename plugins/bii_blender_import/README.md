@@ -1,6 +1,6 @@
 # BII Import
 
-Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses.
+Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses or by their Kilometrierung, and join sheets at their match lines.
 
 ## Install
 
@@ -108,6 +108,37 @@ The coordinates go through WGS84 with the 7-parameter transformations PROJ uses 
 ### Align to Scene
 
 For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
+
+### Place by Kilometrierung
+
+For DB Lagepläne without grid crosses: they show the Kilometrierung of the Strecke (hectometer labels like 5,3 / 5,4 / 5,5 along the track) and landmarks with their km, such as "EÜ (Weg) 5240/5,504/1616" for a bridge on Strecke 5240 at km 5,504. The scene needs the Kilometrierung line of that Strecke from BII Umgebung (a curve "KM-Linie 5240 ..." with its tick marks). Sidebar > BII Import > Plan > Kilometrierung:
+
+1. Enter the Strecke (5240). Empty works when the scene has only one Strecke. The panel shows the km range of its Kilometrierung lines.
+2. Move the plan roughly into place by hand (optional: two km points far apart fix it from anywhere).
+3. Click + and then points on the plan track: hectometer marks, landmarks. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
+4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
+
+Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation, often a few meters off along the track): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
+
+The panel shows the residual of each point and warns:
+
+- when two km points lie farther apart on the plan than on the Strecke, or closer (a wrong km, or a wrong Maßstab; the warning names both points),
+- when the residuals are large (over 2 m RMS) or one point is far off,
+- when the points do not fix the rotation (all close together) or the position along the track (only points without km): the plan keeps its current rotation or position there,
+- when a km is not on the Kilometrierung lines of the scene.
+
+Two km points far apart fix the plan. One km point and a few track points far from it also do; there the track points fix the rotation and the km point the position along the track.
+
+### Neighbor sheets (Anschlussblatt)
+
+Long Strecken come as several sheets that join at dashed match lines ("Anschlussblatt 2"). File > Import > Plan Sheets imports several files at once with the same Maßstab, side by side in name order (Blatt 2 before Blatt 10), centered on the 3D cursor. The sidebar has the same under Plan > Neighbor Sheets > Import Plan Sheets.
+
+1. Place one sheet, by grid crosses, by Kilometrierung or by hand.
+2. Select the next sheet and click Attach to Neighbor. Click where the track crosses the match line on this sheet, then a second point on the match line; then the same crossing on the neighbor sheet, and a second point on its match line. The sheet snaps to its neighbor: the crossings meet, the match lines lie on each other, and the sheets lie on opposite sides of the line (so the order of the second clicks does not matter). With Two Shared Points, both clicks on each sheet are the same two places instead, for example two Weichen both sheets show.
+3. The attachment is kept. Placing a sheet places the sheets attached to it, and the ones attached to those (Place Attached Sheets does it by hand; Snap to Neighbor snaps this sheet again).
+4. Refine each sheet with its own km points (Align by Kilometrierung). The match line to its neighbor takes part in the fit with Neighbor Weight, so the sheets stay joined. A sheet placed by its own km points stays when its neighbor moves; align it again, or use Place Attached Sheets with Also Sheets Placed by km.
+
+All sheets of a chain should have the same Maßstab; Attach warns otherwise.
 
 The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3-Clause, PDFium BSD-3-Clause) for PDF files.
 
