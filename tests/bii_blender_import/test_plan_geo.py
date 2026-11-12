@@ -113,6 +113,59 @@ class FitTest(unittest.TestCase):
         for got, want in zip(plan_geo.fit_similarity_weighted(points), TRUE_FIT):
             self.assertAlmostEqual(got, want, places=4)
 
+    def test_value_with_weight_zero_is_left_out(self):
+        # A point whose Hochwert was not entered yet (0 in the field) must not
+        # pull the fit towards Hochwert 0.
+        grid = _grid_points(TRUE_FIT, SHEET)
+        points = [(x, y, e, 1.0, n, 1.0) for (x, y), (e, n) in zip(SHEET[:3], grid[:3])]
+        (x, y), (e, _) = SHEET[3], grid[3]
+        points.append((x, y, e, 1.0, 0, 0.0))
+        for got, want in zip(plan_geo.fit_similarity_weighted(points), TRUE_FIT):
+            self.assertAlmostEqual(got, want, places=4)
+
+
+class FixesScaleAndRotationTest(unittest.TestCase):
+
+    def _points(self, sheet, read_e=True, read_n=True):
+        grid = _grid_points(TRUE_FIT, sheet)
+        return [(x, y, e, float(read_e), n, float(read_n)) for (x, y), (e, n) in zip(sheet, grid)]
+
+    def test_two_full_points_fix_it(self):
+        self.assertTrue(plan_geo.fixes_scale_and_rotation(self._points(SHEET[:2])))
+
+    def test_one_full_point_does_not(self):
+        self.assertFalse(plan_geo.fixes_scale_and_rotation(self._points(SHEET[:1] * 2)))
+
+    def test_rechtswerte_of_two_crosses_in_a_row_do_not(self):
+        # Only Rechtswerte read, from 2 crosses: the rotation is left to the guesses.
+        self.assertFalse(plan_geo.fixes_scale_and_rotation(
+            self._points(SHEET[:2], read_n=False)))
+
+    def test_rechtswerte_of_three_crosses_in_a_line_do_not(self):
+        line = [(0.1, 0.1), (0.3, 0.1), (0.5, 0.1)]
+        self.assertFalse(plan_geo.fixes_scale_and_rotation(self._points(line, read_n=False)))
+
+    def test_rechtswerte_of_three_crosses_not_in_a_line_do(self):
+        self.assertTrue(plan_geo.fixes_scale_and_rotation(
+            self._points(SHEET[:3], read_n=False)))
+
+
+class RoundToGridTest(unittest.TestCase):
+
+    def test_finer_grid_than_the_read_values_suggest(self):
+        # Crosses read at 3588000 and 3589000 suggest 1000 m; a prediction of
+        # 3588300.4 lies on the 100 m grid, not on the 1000 m one.
+        self.assertEqual(plan_geo.round_to_grid(3588300.4, 1000), 3588300)
+
+    def test_coarse_grid_when_near(self):
+        self.assertEqual(plan_geo.round_to_grid(3588997.0, 1000), 3589000)
+
+    def test_off_every_grid_rounds_to_meters(self):
+        self.assertEqual(plan_geo.round_to_grid(3588333.4, 1000), 3588333)
+
+    def test_no_spacing(self):
+        self.assertEqual(plan_geo.round_to_grid(3588300.4, 0), 3588300)
+
 
 class CheckAxesTest(unittest.TestCase):
 
@@ -159,6 +212,11 @@ class CheckCoordinatesTest(unittest.TestCase):
         info, warnings = plan_geo.check_coordinates('ETRS89', [(390000, 5820000)], 33)
         self.assertEqual(warnings, [])
         self.assertIn("UTM zone 33", info)
+
+    def test_hochwert_not_read_is_not_checked(self):
+        info, warnings = plan_geo.check_coordinates('DB_REF', [(3588400, None)], 32)
+        self.assertEqual(warnings, [])
+        self.assertIn("zone 3", info)
 
 
 if __name__ == "__main__":

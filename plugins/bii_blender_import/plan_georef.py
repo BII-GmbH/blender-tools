@@ -34,19 +34,37 @@ _draw_handle = None
 
 # ---------------------------------------------------------------- fitting
 
+def has_values(p):
+    return p.easting_state != 'EMPTY' or p.northing_state != 'EMPTY'
+
+
 def used_points(pg):
     """Points with values that take part in the fit (read or guessed)."""
-    return [p for p in pg.points if p.use and (p.easting or p.northing)]
+    return [p for p in pg.points if p.use and has_values(p)]
 
 
-def known_values(pg):
-    """Number of Rechtswerte and Hochwerte read from the plan (not guessed)."""
-    pts = used_points(pg)
-    return (sum(not p.easting_guessed for p in pts), sum(not p.northing_guessed for p in pts))
+def read_values(pg, axis):
+    """Values of one axis ("easting" or "northing") read from the plan."""
+    return [getattr(p, axis) for p in used_points(pg) if getattr(p, axis + "_state") == 'READ']
 
 
 def is_guessed(p):
-    return p.easting_guessed or p.northing_guessed
+    return p.easting_state == 'GUESSED' or p.northing_state == 'GUESSED'
+
+
+def is_read(p):
+    return p.easting_state == 'READ' or p.northing_state == 'READ'
+
+
+_WEIGHTS = {'READ': 1.0, 'GUESSED': plan_geo.GUESS_WEIGHT, 'EMPTY': 0.0}
+
+
+def _fit_points(pg, guesses=True):
+    """Points for plan_geo's weighted fits; guesses=False leaves the guesses out."""
+    def weight(state):
+        return _WEIGHTS[state] if guesses or state == 'READ' else 0.0
+    return [(p.x, p.y, p.easting, weight(p.easting_state), p.northing, weight(p.northing_state))
+            for p in used_points(pg)]
 
 
 def scene_position(scene, obj, pg, x, y):
@@ -62,7 +80,7 @@ def scene_position(scene, obj, pg, x, y):
     world = obj.matrix_world @ Vector((x, y, 0.0))
     lat, lon = plan_geo.SceneProjection(scene["lat"], scene["lon"]).to_geographic(
         world.x, world.y)
-    known = [p.easting for p in used_points(pg) if not p.easting_guessed]
+    known = read_values(pg, "easting")
     if pg.crs == 'ETRS89':
         prefixed = [e for e in known if e >= 1e7]
         zone = int(prefixed[0] // 1e6) if prefixed else pg.utm_zone
@@ -79,8 +97,8 @@ def estimate_from_scene(scene, obj, pg, p):
     if pos is None:
         return False
     s = pg.grid_spacing or 1
-    import_plan.set_point_value(p, "easting", round(pos[0] / s) * s, True)
-    import_plan.set_point_value(p, "northing", round(pos[1] / s) * s, True)
+    import_plan.set_point_value(p, "easting", round(pos[0] / s) * s, 'GUESSED')
+    import_plan.set_point_value(p, "northing", round(pos[1] / s) * s, 'GUESSED')
     return True
 
 
@@ -98,11 +116,11 @@ def refresh_guesses(scene, obj, pg):
         if not is_guessed(p):
             continue
         e, n = scene_position(scene, obj, pg, p.x, p.y)
-        if p.easting_guessed:
-            import_plan.set_point_value(p, "easting", round(e / s) * s, True)
+        if p.easting_state == 'GUESSED':
+            import_plan.set_point_value(p, "easting", round(e / s) * s, 'GUESSED')
             changed += 1
-        if p.northing_guessed:
-            import_plan.set_point_value(p, "northing", round(n / s) * s, True)
+        if p.northing_state == 'GUESSED':
+            import_plan.set_point_value(p, "northing", round(n / s) * s, 'GUESSED')
             changed += 1
     return changed
 
@@ -113,21 +131,18 @@ def sheet_fit(pg):
     Values read from the plan decide; guessed values only fill in what they
     leave open. Without any value read from the plan there is no fit.
     """
-    if sum(known_values(pg)) == 0:
+    if not any(is_read(p) for p in used_points(pg)):
         return None
-    w = plan_geo.GUESS_WEIGHT
-    return plan_geo.fit_similarity_weighted([
-        (p.x, p.y, p.easting, w if p.easting_guessed else 1.0,
-         p.northing, w if p.northing_guessed else 1.0) for p in used_points(pg)])
+    return plan_geo.fit_similarity_weighted(_fit_points(pg))
 
 
 def grid_spacing(pg):
+    """The Grid Spacing setting, else the coarsest standard spacing that fits the
+    values read so far (an upper bound: the real grid may be finer), else 0."""
     if pg.grid_spacing:
         return pg.grid_spacing
-    pts = used_points(pg)
     diffs = set()
-    for values in ([p.easting for p in pts if not p.easting_guessed],
-                   [p.northing for p in pts if not p.northing_guessed]):
+    for values in (read_values(pg, "easting"), read_values(pg, "northing")):
         diffs |= {abs(a - b) for a in values for b in values if a != b}
     for s in plan_geo.STANDARD_SPACINGS:
         if diffs and all(d % s == 0 for d in diffs):
@@ -135,15 +150,32 @@ def grid_spacing(pg):
     return 0
 
 
+def predict_values(pg, x, y):
+    """Plan coordinates of a sheet point from the fit, rounded to the grid, or None.
+
+    With Grid Spacing set, rounded to it. Else to the grid the prediction
+    lies near: the spacing inferred from the read values is only an upper
+    bound, see plan_geo.round_to_grid.
+    """
+    fit = sheet_fit(pg)
+    if fit is None:
+        return None
+    e, n = plan_geo.apply_similarity(fit, x, y)
+    if pg.grid_spacing:
+        s = pg.grid_spacing
+        return round(e / s) * s, round(n / s) * s
+    spacing = grid_spacing(pg)
+    return plan_geo.round_to_grid(e, spacing), plan_geo.round_to_grid(n, spacing)
+
+
 def update_residuals(pg):
     """Residuals of the values read from the plan; guessed values do not count."""
     fit = sheet_fit(pg)
     for p in pg.points:
-        if fit and p.use and (p.easting or p.northing) and not (
-                p.easting_guessed and p.northing_guessed):
+        if fit and p.use and is_read(p):
             e, n = plan_geo.apply_similarity(fit, p.x, p.y)
-            de = 0.0 if p.easting_guessed else e - p.easting
-            dn = 0.0 if p.northing_guessed else n - p.northing
+            de = e - p.easting if p.easting_state == 'READ' else 0.0
+            dn = n - p.northing if p.northing_state == 'READ' else 0.0
             p.residual = math.hypot(de, dn)
         else:
             p.residual = -1.0
@@ -160,11 +192,12 @@ def fit_summary(pg):
     rms = math.sqrt(sum(p.residual ** 2 for p in used) / len(used))
     worst = max(used, key=lambda p: p.residual)
     warnings = []
-    known_e, known_n = known_values(pg)
-    if known_e + known_n < 3:
-        warnings.append(f"Only {known_e + known_n} values read from the plan: Maßstab and "
-                        "rotation come partly from the guesses. Read at least 3")
-    full = [p for p in used_points(pg) if not is_guessed(p)]
+    if not plan_geo.fixes_scale_and_rotation(_fit_points(pg, guesses=False)):
+        warnings.append("The values read from the plan do not fix Maßstab and rotation, the "
+                        "guesses turn the plan. Read more values: at least 3, and for one "
+                        "axis alone from crosses not all in one line")
+    full = [p for p in used_points(pg)
+            if p.easting_state == 'READ' and p.northing_state == 'READ']
     warnings += plan_geo.check_axes([(p.x, p.y) for p in full],
                                     [(p.easting, p.northing) for p in full])
     return plan_geo.similarity_scale(fit), rms, worst, warnings
@@ -327,17 +360,14 @@ class PlanPickOperator(bpy.types.Operator):
             self.report({'WARNING'}, "No cross found near the click, the point stays where "
                         "you clicked")
         x, y = snapped or point
-        fit = sheet_fit(pg)
+        predicted = predict_values(pg, x, y)
         p = pg.points.add()
         p.name = f"P{len(pg.points)}"
         p.x, p.y = x, y
-        if fit:
-            e, n = plan_geo.apply_similarity(fit, x, y)
-            s = grid_spacing(pg) or 1
-            known_e, known_n = known_values(pg)
-            # An axis without values read from the plan only has guesses to go by.
-            import_plan.set_point_value(p, "easting", round(e / s) * s, known_e == 0)
-            import_plan.set_point_value(p, "northing", round(n / s) * s, known_n == 0)
+        if predicted:
+            # Predicted values are guesses until the user confirms or types them.
+            import_plan.set_point_value(p, "easting", predicted[0], 'GUESSED')
+            import_plan.set_point_value(p, "northing", predicted[1], 'GUESSED')
         elif context is not None:
             obj = bpy.data.objects[self.obj_name]
             if estimate_from_scene(context.scene, obj, pg, p):
@@ -589,7 +619,8 @@ class PlanRemoveOperator(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     kind: EnumProperty(items=[('POINT', "Grid Cross", ""), ('PAIR', "Align Point", "")])
-    clear: bpy.props.BoolProperty(name="All", description="Remove all points")
+    clear: bpy.props.BoolProperty(name="All", description="Remove all points",
+                                  options={'SKIP_SAVE'})
 
     @classmethod
     def poll(cls, context):
@@ -700,7 +731,7 @@ def _draw_overlay():
     for p in pg.points:
         if p.use and is_guessed(p):
             color = (0.5, 0.8, 1.0, 1.0)
-        elif not p.use or not (p.easting or p.northing):
+        elif not p.use or not has_values(p):
             color = (0.6, 0.6, 0.6, 1.0)
         elif p.residual > 0.5:
             color = (1.0, 0.2, 0.2, 1.0)
@@ -751,11 +782,13 @@ class BII_UL_plan_points(bpy.types.UIList):
         # fit into a list row of the sidebar.
         row = layout.row(align=True)
         row.prop(item, "use", text="")
-        if item.easting or item.northing:
-            values = (("≈" if item.easting_guessed else "") + str(item.easting) + " / " +
-                      ("≈" if item.northing_guessed else "") + str(item.northing))
-        else:
-            values = "–"
+
+        def value(axis):
+            state = getattr(item, axis + "_state")
+            if state == 'EMPTY':
+                return "–"
+            return ("≈" if state == 'GUESSED' else "") + str(getattr(item, axis))
+        values = f"{value('easting')} / {value('northing')}" if has_values(item) else "–"
         row.label(text=f"{item.name}   {values}")
         sub = row.row()
         sub.alignment = 'RIGHT'
@@ -846,8 +879,8 @@ class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
         if pg.crs == 'ETRS89':
             layout.prop(pg, "utm_zone")
         info, warnings = plan_geo.check_coordinates(
-            pg.crs, [(p.easting, p.northing) for p in used_points(pg)
-                     if not p.easting_guessed], pg.utm_zone)
+            pg.crs, [(p.easting, p.northing if p.northing_state == 'READ' else None)
+                     for p in used_points(pg) if p.easting_state == 'READ'], pg.utm_zone)
         if info or warnings:
             col = layout.column(align=True)
             if info:
@@ -872,7 +905,9 @@ class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
             for name, flag in (("easting", "easting_guessed"), ("northing", "northing_guessed")):
                 row = col.row(align=True)
                 row.prop(point, name)
-                row.prop(point, flag, text="", icon='QUESTION', toggle=True)
+                sub = row.row(align=True)
+                sub.enabled = getattr(point, name + "_state") != 'EMPTY'
+                sub.prop(point, flag, text="", icon='QUESTION', toggle=True)
             if "lat" in context.scene and "lon" in context.scene:
                 try:
                     pos = scene_position(context.scene, context.object, pg, point.x, point.y)
@@ -886,7 +921,8 @@ class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
                     row.operator(PlanRefreshGuessesOperator.bl_idname, icon='FILE_REFRESH')
             if is_guessed(point):
                 wrapped_label(layout, context, "? = guess: only fills what the values read "
-                              "from the plan leave open. Typing a value clears it", 'INFO')
+                              "from the plan leave open. Check it against the plan, then "
+                              "click ? to confirm it, or type the right value", 'INFO')
         row = layout.row(align=True)
         row.prop(pg, "snap", toggle=True)
         row.prop(pg, "show_grid", toggle=True)

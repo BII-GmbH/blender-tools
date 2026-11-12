@@ -60,28 +60,53 @@ def _points_changed(self, context):
     _redraw(self, context)
 
 
-def set_point_value(point, axis, value, guessed):
-    """Set the "easting" or "northing" of a PlanPoint from code.
+AXES = ("easting", "northing")
 
-    Typing a value in the sidebar marks it as read from the plan: the
-    property's update clears its guessed flag. Code sets values through this
-    function, which sets the flag after the value.
+# Where a Rechtswert or Hochwert comes from. Only READ values decide the fit;
+# GUESSED ones (from the scene position or predicted from the other points)
+# only fill in what the read values leave open; EMPTY ones take no part.
+VALUE_STATES = [
+    ('EMPTY', "Empty", "No value entered"),
+    ('READ', "Read", "Read from the plan"),
+    ('GUESSED', "Guessed", "A guess: from where the plan lies in the scene, or predicted "
+     "from the other points"),
+]
+
+
+def set_point_value(point, axis, value, state):
+    """Set the "easting" or "northing" of a PlanPoint from code, with its state.
+
+    Typing a value in the sidebar marks it as read from the plan: the value's
+    update sets its state. Code sets values through this function, which sets
+    the state after the value.
     """
     setattr(point, axis, value)
-    setattr(point, axis + "_guessed", guessed)
+    setattr(point, axis + "_state", state if value else 'EMPTY')
 
 
-def _easting_edited(self, context):
-    # A typed value is read from the plan, not guessed.
-    if self.easting_guessed:
-        self.easting_guessed = False
-    _points_changed(self, context)
+def _value_edited(axis):
+    def update(self, context):
+        # A typed value is read from the plan; 0 clears it.
+        state = 'READ' if getattr(self, axis) else 'EMPTY'
+        if getattr(self, axis + "_state") != state:
+            setattr(self, axis + "_state", state)
+        _points_changed(self, context)
+    return update
 
 
-def _northing_edited(self, context):
-    if self.northing_guessed:
-        self.northing_guessed = False
-    _points_changed(self, context)
+def _guess_flag(axis):
+    """Get and set of the "?" toggle: GUESSED <-> READ. An empty value stays empty."""
+    def get(self):
+        return getattr(self, axis + "_state") == 'GUESSED'
+
+    def set(self, value):
+        if getattr(self, axis + "_state") != 'EMPTY':
+            setattr(self, axis + "_state", 'GUESSED' if value else 'READ')
+    return get, set
+
+
+_easting_guess = _guess_flag("easting")
+_northing_guess = _guess_flag("northing")
 
 
 class PlanPoint(bpy.types.PropertyGroup):
@@ -91,17 +116,23 @@ class PlanPoint(bpy.types.PropertyGroup):
     # Whole meters as integers: a 32-bit float cannot hold 5437550 exactly.
     easting: IntProperty(name="Rechtswert", description="Easting printed on the plan, "
                          "with the zone digits in front (e.g. 4590250)",
-                         update=_easting_edited)
+                         update=_value_edited("easting"))
     northing: IntProperty(name="Hochwert", description="Northing printed on the plan",
-                          update=_northing_edited)
+                          update=_value_edited("northing"))
+    easting_state: EnumProperty(items=VALUE_STATES, default='EMPTY', update=_points_changed)
+    northing_state: EnumProperty(items=VALUE_STATES, default='EMPTY', update=_points_changed)
     easting_guessed: BoolProperty(
-        name="Rechtswert Guessed", update=_points_changed,
+        name="Rechtswert Guessed", get=_easting_guess[0], set=_easting_guess[1],
+        update=_points_changed,
         description="The Rechtswert is a guess, not read from the plan. Guesses only decide "
-        "what the values read from the plan leave open. Typing a value clears this")
+        "what the values read from the plan leave open. Click to confirm it as read from "
+        "the plan; typing a value does the same")
     northing_guessed: BoolProperty(
-        name="Hochwert Guessed", update=_points_changed,
+        name="Hochwert Guessed", get=_northing_guess[0], set=_northing_guess[1],
+        update=_points_changed,
         description="The Hochwert is a guess, not read from the plan. Guesses only decide "
-        "what the values read from the plan leave open. Typing a value clears this")
+        "what the values read from the plan leave open. Click to confirm it as read from "
+        "the plan; typing a value does the same")
     use: BoolProperty(name="Use", default=True, description="Use this point for the fit",
                       update=_points_changed)
     residual: FloatProperty(name="Residual", description="Distance between the entered and "
@@ -554,8 +585,10 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         description="Opacity of the white paper, can be changed later. 0: the plan lies on "
         "the scene like a print on tracing paper, the lines over maps and models. 1: the "
         "plan as printed")
-    page: IntProperty(name="PDF Page", default=1, min=1)
+    # SKIP_SAVE: page and resolution belong to one file, not to the next import.
+    page: IntProperty(name="PDF Page", default=1, min=1, options={'SKIP_SAVE'})
     dpi: FloatProperty(name="PDF Resolution", default=0, min=0, soft_max=1200,
+                       options={'SKIP_SAVE'},
                        description="Pixels per inch for PDF pages. 0: the resolution "
                        "of the scan in the PDF, 300 for vector drawings")
 
@@ -568,6 +601,10 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         col = layout.column(heading="PDF")
         col.prop(self, "page")
         col.prop(self, "dpi")
+
+    def invoke(self, context, event):
+        # A dropped file has its path set: show the options, not the file browser.
+        return self.invoke_popup(context)
 
     def execute(self, context):
         from . import plan_raster
@@ -601,7 +638,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
             text += f"; {sheet.note}"
         if max(w, h) > 16384:
             text += "; larger than most GPUs can show, the viewport shows it scaled down"
-        self.report({'WARNING'} if "check" in sheet.note else {'INFO'}, text)
+        self.report({'WARNING'} if sheet.warning else {'INFO'}, text)
         return {'FINISHED'}
 
 

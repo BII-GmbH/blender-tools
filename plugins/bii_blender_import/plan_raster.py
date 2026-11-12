@@ -9,6 +9,7 @@ The result is written as PNG for Blender, with the plan's own colors. Its
 alpha marks the white paper for Solid view.
 """
 
+import contextlib
 import io
 import math
 import os
@@ -23,13 +24,18 @@ PAPER_LEVEL = 230  # pixels this light in every channel count as paper
 
 
 class Sheet:
-    """A loaded plan: Pillow image and its resolution in pixels per inch."""
+    """A loaded plan: Pillow image and its resolution in pixels per inch.
 
-    def __init__(self, image, dpi_x, dpi_y, note=""):
+    note: a remark for the import report; warning: the note asks the user to
+    check something (a guessed resolution, say).
+    """
+
+    def __init__(self, image, dpi_x, dpi_y, note="", warning=False):
         self.image = image
         self.dpi_x = dpi_x
         self.dpi_y = dpi_y
         self.note = note
+        self.warning = warning
 
     @property
     def width_m(self):
@@ -103,18 +109,34 @@ def load_pdf(path, page_index=0, dpi=0.0):
         pdf.close()
 
 
+@contextlib.contextmanager
+def _large_images():
+    """Let Pillow open plans larger than its decompression bomb limit.
+
+    Plans are large on purpose. The limit is Pillow's global setting, shared
+    with every other add-on in Blender, so it is lifted only meanwhile.
+    """
+    from PIL import Image
+    limit = Image.MAX_IMAGE_PIXELS
+    Image.MAX_IMAGE_PIXELS = None
+    try:
+        yield
+    finally:
+        Image.MAX_IMAGE_PIXELS = limit
+
+
 def load_raster(path):
     from PIL import Image
-    Image.MAX_IMAGE_PIXELS = None  # plans are large on purpose
-    image = Image.open(path)
-    image.seek(0)
-    image.load()
+    with _large_images():
+        image = Image.open(path)
+        image.seek(0)
+        image.load()
     dpi = image.info.get("dpi")
-    note = ""
     if not dpi or not dpi[0] or not dpi[1]:
-        dpi = (300.0, 300.0)
-        note = "no resolution in the file, 300 dpi assumed: check the scale"
-    return Sheet(image, float(dpi[0]), float(dpi[1]), note)
+        return Sheet(image, 300.0, 300.0,
+                     "no resolution in the file, 300 dpi assumed: check the scale",
+                     warning=True)
+    return Sheet(image, float(dpi[0]), float(dpi[1]))
 
 
 def load(path, page_index=0, dpi=0.0):
@@ -198,9 +220,8 @@ def gray_pixels(data_or_path):
     """
     import numpy as np
     from PIL import Image
-    Image.MAX_IMAGE_PIXELS = None
     source = io.BytesIO(data_or_path) if isinstance(data_or_path, (bytes, bytearray)) else data_or_path
-    with Image.open(source) as image:
+    with _large_images(), Image.open(source) as image:
         return np.asarray(image.convert("L"))
 
 

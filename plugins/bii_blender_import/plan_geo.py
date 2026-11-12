@@ -43,9 +43,10 @@ CRS_ITEMS = [
 def check_coordinates(crs, points, utm_zone):
     """Hints about entered coordinates: (info line, list of warnings).
 
-    points: (easting, northing) as printed on the plan. Checks the digit
-    count against the chosen system, the zone, and swapped values. Only
-    for Germany and its neighbors (northing 5.2 to 6.1 million).
+    points: (easting, northing) as printed on the plan; northing None if
+    it was not read. Checks the digit count against the chosen system, the
+    zone, and swapped values. Only for Germany and its neighbors (northing
+    5.2 to 6.1 million).
     """
     warnings = []
     if not points:
@@ -53,10 +54,10 @@ def check_coordinates(crs, points, utm_zone):
     gk = crs != 'ETRS89'
     zones = set()
     for e, n in points:
-        if 5.2e6 <= e <= 6.1e6 and not 5.2e6 <= n <= 6.1e6:
+        if n is not None and 5.2e6 <= e <= 6.1e6 and not 5.2e6 <= n <= 6.1e6:
             warnings.append(f"{e:.0f} / {n:.0f}: Rechtswert and Hochwert swapped?")
             continue
-        if not 5.2e6 <= n <= 6.1e6:
+        if n is not None and not 5.2e6 <= n <= 6.1e6:
             warnings.append(f"Hochwert {n:.0f} is outside Germany")
         if gk:
             if e >= 1e7:
@@ -307,35 +308,75 @@ def fit_similarity(src, dst):
 GUESS_WEIGHT = 1e-4  # weight of guessed values against values read from the plan
 
 
+def _weighted_mean(values, weights):
+    total = sum(weights)
+    return sum(v * w for v, w in zip(values, weights)) / total if total else 0.0
+
+
+def _normal_equations(points):
+    """Normal equations of the weighted similarity fit, in centered coordinates.
+
+    Returns (ata, atb, (sx, sy, e0, n0)); unknowns (a, b, tx, ty), rows
+    E = a x - b y + tx and N = b x + a y + ty.
+    """
+    sx = sum(p[0] for p in points) / len(points)
+    sy = sum(p[1] for p in points) / len(points)
+    # Means of the weighted values only: weight 0 means no value (0 in the field).
+    e0 = _weighted_mean([p[2] for p in points], [p[3] for p in points])
+    n0 = _weighted_mean([p[4] for p in points], [p[5] for p in points])
+    ata = [[0.0] * 4 for _ in range(4)]
+    atb = [0.0] * 4
+    for x, y, e, we, n, wn in points:
+        x, y = x - sx, y - sy
+        for row, value, w in (((x, -y, 1.0, 0.0), e - e0, we), ((y, x, 0.0, 1.0), n - n0, wn)):
+            if not w:
+                continue
+            for i in range(4):
+                atb[i] += w * row[i] * value
+                for j in range(4):
+                    ata[i][j] += w * row[i] * row[j]
+    return ata, atb, (sx, sy, e0, n0)
+
+
 def fit_similarity_weighted(points):
     """Least-squares 2D similarity with a weight per value.
 
     points: (x, y, easting, easting weight, northing, northing weight).
     Guessed values get a tiny weight: they only decide what the values read
     from the plan leave open (with Rechtswerte only: the north-south shift).
-    Returns (a, b, tx, ty) like fit_similarity, or None if undetermined.
+    Weight 0 leaves a value out. Returns (a, b, tx, ty) like fit_similarity,
+    or None if undetermined.
     """
     if len(points) < 2:
         return None
-    sx = sum(p[0] for p in points) / len(points)
-    sy = sum(p[1] for p in points) / len(points)
-    e0 = sum(p[2] for p in points) / len(points)
-    n0 = sum(p[4] for p in points) / len(points)
-    # Unknowns (a, b, tx, ty); rows: E = a x - b y + tx, N = b x + a y + ty.
-    ata = [[0.0] * 4 for _ in range(4)]
-    atb = [0.0] * 4
-    for x, y, e, we, n, wn in points:
-        x, y = x - sx, y - sy
-        for row, value, w in (((x, -y, 1.0, 0.0), e - e0, we), ((y, x, 0.0, 1.0), n - n0, wn)):
-            for i in range(4):
-                atb[i] += w * row[i] * value
-                for j in range(4):
-                    ata[i][j] += w * row[i] * row[j]
+    ata, atb, (sx, sy, e0, n0) = _normal_equations(points)
     solution = _solve(ata, atb)
     if solution is None:
         return None
     a, b, tx, ty = solution
     return a, b, e0 + tx - a * sx + b * sy, n0 + ty - b * sx - a * sy
+
+
+def fixes_scale_and_rotation(points):
+    """True if the weighted values alone determine Maßstab and rotation.
+
+    points as for fit_similarity_weighted, usually with only the values read
+    from the plan weighted. The shift may stay open (Rechtswerte only leave
+    the north-south shift to the guesses); scale and rotation must not.
+    They do not with fewer than 3 values, or with values of one axis whose
+    points all lie on one line: then the guesses turn the plan.
+
+    Checks the normal equations of (a, b) with the shift (tx, ty) eliminated
+    (Schur complement). tx and ty never share a row, so their block is
+    diagonal.
+    """
+    if len(points) < 2:
+        return False
+    ata, _, _ = _normal_equations(points)
+    s = [[ata[i][j] - sum(ata[i][k] * ata[k][j] / ata[k][k] for k in (2, 3) if ata[k][k] > 0)
+          for j in (0, 1)] for i in (0, 1)]
+    trace = s[0][0] + s[1][1]
+    return trace > 0 and s[0][0] * s[1][1] - s[0][1] * s[1][0] > 1e-9 * trace * trace
 
 
 def _solve(m, v):
@@ -436,3 +477,22 @@ def similarity_angle(fit):
 
 
 STANDARD_SPACINGS = (1000, 500, 250, 200, 100, 50, 25, 20, 10, 5, 1)
+GRID_TOLERANCE = 0.05  # share of the spacing a prediction may be off a grid line
+
+
+def round_to_grid(value, max_spacing):
+    """A predicted grid value, rounded to the coarsest grid line it lies near.
+
+    max_spacing is the spacing inferred from the values read so far. The
+    real spacing can be any divisor of it: crosses 1000 m apart can lie on a
+    100 m grid. So try the standard spacings that divide max_spacing, coarse
+    to fine, and take the first one the value lies within GRID_TOLERANCE of.
+    Else the value is only rounded to whole meters.
+    """
+    for s in STANDARD_SPACINGS:
+        if s > max_spacing or max_spacing % s:
+            continue
+        rounded = round(value / s) * s
+        if abs(value - rounded) <= GRID_TOLERANCE * s:
+            return rounded
+    return round(value)

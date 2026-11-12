@@ -128,6 +128,34 @@ def _gray_scan_pdf(path, stamp_color=None, scan_dpi=200, size_mm=(100, 80)):
     pdf.close()
 
 
+class LoadRasterTest(_TempDir):
+
+    def test_missing_resolution_is_a_warning(self):
+        Image.new("L", (40, 30), 255).save(self.path("plan.png"))
+        sheet = plan_raster.load(self.path("plan.png"))
+        self.assertTrue(sheet.warning)
+        self.assertEqual(sheet.dpi_x, 300.0)
+
+    def test_resolution_in_file_is_no_warning(self):
+        Image.new("L", (40, 30), 255).save(self.path("plan.png"), dpi=(200, 200))
+        sheet = plan_raster.load(self.path("plan.png"))
+        self.assertFalse(sheet.warning)
+        self.assertAlmostEqual(sheet.dpi_x, 200, delta=0.01)
+
+    def test_pillow_limit_is_restored(self):
+        # The decompression bomb limit is Pillow's global setting, shared with
+        # other add-ons: lifted only while a plan is opened.
+        Image.new("L", (40, 30), 255).save(self.path("plan.png"), dpi=(200, 200))
+        limit = Image.MAX_IMAGE_PIXELS
+        Image.MAX_IMAGE_PIXELS = 100  # smaller than the plan
+        try:
+            plan_raster.load(self.path("plan.png"))
+            plan_raster.gray_pixels(self.path("plan.png"))
+            self.assertEqual(Image.MAX_IMAGE_PIXELS, 100)
+        finally:
+            Image.MAX_IMAGE_PIXELS = limit
+
+
 class LoadPdfTest(_TempDir):
 
     def test_scan_resolution(self):
