@@ -139,6 +139,38 @@ def load_raster(path):
     return Sheet(image, float(dpi[0]), float(dpi[1]))
 
 
+def downscale(sheet, long_side):
+    """The sheet with at most long_side pixels on its long side, same paper size.
+
+    Resampled with Lanczos; black-and-white plans become grayscale, so thin
+    lines stay visible instead of breaking up. The resolution drops with
+    the pixel count, so the sheet keeps its size in meters.
+    """
+    from PIL import Image
+    w, h = sheet.image.size
+    if max(w, h) <= long_side:
+        return sheet
+    factor = long_side / max(w, h)
+    size = (max(1, round(w * factor)), max(1, round(h * factor)))
+    image = _on_white(sheet.image).resize(size, Image.LANCZOS)
+    return Sheet(image, sheet.dpi_x * size[0] / w, sheet.dpi_y * size[1] / h, sheet.note,
+                 sheet.warning)
+
+
+def with_sheet_size(sheet, width_m, height_m):
+    """The sheet with its resolution set so it measures width_m x height_m.
+
+    For rebuilding a plan's image from a file without a reliable resolution
+    (its own PNG). Raises ValueError if the proportions do not match.
+    """
+    w, h = sheet.image.size
+    if abs(w / h - width_m / height_m) > 0.01 * width_m / height_m:
+        raise ValueError(f"the file is {w} x {h} px, which does not fit a sheet of "
+                         f"{width_m * 1000:.0f} x {height_m * 1000:.0f} mm")
+    return Sheet(sheet.image, w / (width_m / 0.0254), h / (height_m / 0.0254), sheet.note,
+                 sheet.warning)
+
+
 def load(path, page_index=0, dpi=0.0):
     ext = os.path.splitext(path)[1].lower()
     if ext in PDF_EXTENSIONS:

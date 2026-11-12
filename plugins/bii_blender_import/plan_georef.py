@@ -832,6 +832,12 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
         col = layout.column(align=True)
         col.label(text=pg.image.name if pg.image else obj.name, icon='IMAGE_DATA')
         col.label(text=f"{pg.width * 1000:.0f} x {pg.height * 1000:.0f} mm, {pg.dpi:.0f} dpi")
+        if pg.image is not None:
+            row = col.row(align=True)
+            row.label(text=f"{pg.image.size[0]} x {pg.image.size[1]} px, "
+                      f"{import_plan.image_megabytes(pg.image):.0f} MB RAM")
+            row.operator(import_plan.PlanResolutionOperator.bl_idname, text="",
+                         icon='IMAGE_REFERENCE')
         layout.use_property_split = True
         layout.use_property_decorate = False
         layout.prop(pg, "massstab", text="Maßstab 1:")

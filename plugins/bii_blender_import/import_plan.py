@@ -29,6 +29,14 @@ MODIFIER = "BII Plan Sheet"
 OPACITY_NODE = "Opacity"
 BACKGROUND_NODE = "Background"
 SHEET_TOLERANCE = 1e-5  # paper meters a vertex may lie outside the sheet
+RESOLUTIONS = [
+    ('16384', "16384 px (full)", "Long side 16384 pixels, the most GPUs show. About 1 GB of "
+     "RAM for a full A0 sheet"),
+    ('8192', "8192 px", "Long side 8192 pixels, a quarter of the memory of 16384"),
+    ('4096', "4096 px", "Long side 4096 pixels"),
+    ('2048', "2048 px", "Long side 2048 pixels, for overview plans"),
+    ('1024', "1024 px", "Long side 1024 pixels"),
+]
 
 
 # ---------------------------------------------------------------- properties
@@ -255,6 +263,10 @@ class PlanSettings(bpy.types.PropertyGroup):
         "on tracing paper (white vanishes, colors tint what is below). 1: the plan as "
         "printed. Solid view shows the paper from 0.5 on")
     page: IntProperty(default=1, min=1, description="PDF page of the plan")
+    full_png: StringProperty(
+        subtype='FILE_PATH', description="The plan's PNG at its import resolution, kept when "
+        "the resolution was lowered: the source for going back up if the original file is "
+        "gone")
 
     crs: EnumProperty(name="Coordinates", items=plan_geo.CRS_ITEMS, default='DB_REF',
                       update=_crs_changed,
@@ -498,6 +510,92 @@ def outline_off_sheet(obj):
                 or (np.abs(co[:, 2]) > t).any())
 
 
+def image_megabytes(image):
+    """RAM Blender needs for the image: 4 bytes per pixel (RGBA, 8 bit)."""
+    if image is None:
+        return 0.0
+    w, h = image.size
+    return w * h * 4 / 1e6
+
+
+def _image_file(image):
+    """Absolute path of an image's file on disk, or None (packed or missing)."""
+    if image is None or image.packed_file is not None:
+        return None
+    path = bpy.path.abspath(image.filepath)
+    return path if os.path.isfile(path) else None
+
+
+def change_resolution(obj, long_side):
+    """Write the plan's image again with long_side pixels on its long side.
+
+    Reads the best source there is: the original file (pg.source), the PNG
+    kept at the import resolution (pg.full_png), or the current image. The
+    sheet keeps its size in meters, so crop, points and placement stay.
+    Copies of the plan that share its image get the new one too. Returns
+    (old MB, new MB, source used). Raises OSError or ValueError.
+    """
+    from . import plan_georef, plan_raster
+    pg = obj.bii_plan
+    old = pg.image
+    candidates = []
+    source = bpy.path.abspath(pg.source) if pg.source else ""
+    if source and os.path.isfile(source):
+        candidates.append(("original file", source, True))
+    full = bpy.path.abspath(pg.full_png) if pg.full_png else ""
+    if full and os.path.isfile(full):
+        candidates.append(("kept full-size PNG", full, False))
+    current = _image_file(old)
+    if current:
+        candidates.append(("current image", current, False))
+    elif old is not None and old.packed_file is not None:
+        candidates.append(("current image", bytes(old.packed_file.data), False))
+    if not candidates:
+        raise OSError("neither the original file nor the plan's image can be read")
+    label, path, is_source = candidates[0]
+    if is_source:
+        sheet = plan_raster.load(path, pg.page - 1)
+    else:
+        import io
+        from PIL import Image
+        with plan_raster._large_images():
+            image = Image.open(io.BytesIO(path) if isinstance(path, bytes) else path)
+            image.load()
+        sheet = plan_raster.Sheet(image, 1.0, 1.0)
+    sheet = plan_raster.with_sheet_size(sheet, pg.width, pg.height)
+    if max(sheet.image.size) < long_side and label == "current image":
+        long_side = max(sheet.image.size)  # cannot go up from the image itself
+    sheet = plan_raster.downscale(sheet, long_side)
+
+    stem = os.path.splitext(os.path.basename(pg.source or obj.name))[0]
+    if pg.page > 1:
+        stem += f"_p{pg.page}"
+    png = plan_output_path(f"{stem}_{max(sheet.image.size)}px.png", 0, 1)
+    plan_raster.write_png(sheet, png)
+    new = load_plan_image(png)
+    keep_full = current if (current and old is not None and max(old.size) > long_side
+                            and not pg.full_png) else ""
+    for o in bpy.data.objects:
+        opg = getattr(o, "bii_plan", None)
+        if opg is None or not opg.is_plan or opg.image != old:
+            continue
+        opg.image = new
+        opg.dpi = sheet.image.width / (opg.width / 0.0254)
+        if keep_full:
+            opg.full_png = bpy.path.relpath(keep_full) if bpy.data.filepath else keep_full
+        if opg.material is not None:
+            for node in opg.material.node_tree.nodes:
+                if node.type == 'TEX_IMAGE' and node.image == old:
+                    node.image = new
+        update_solid_paper(opg)
+        o.update_tag()
+    old_mb = image_megabytes(old)
+    if old is not None and old.users == 0:
+        bpy.data.images.remove(old)  # frees its memory; its file on disk stays
+    plan_georef._pixel_cache.clear()
+    return old_mb, image_megabytes(new), label
+
+
 def plan_output_path(source, page_index, page_count):
     """Where the PNG goes: "plans" next to the .blend file, else a temp folder.
 
@@ -585,6 +683,8 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         description="Opacity of the white paper, can be changed later. 0: the plan lies on "
         "the scene like a print on tracing paper, the lines over maps and models. 1: the "
         "plan as printed")
+    resolution: EnumProperty(name="Resolution", items=RESOLUTIONS, default='16384',
+                             description="Long side of the plan image. Can be changed later")
     # SKIP_SAVE: page and resolution belong to one file, not to the next import.
     page: IntProperty(name="PDF Page", default=1, min=1, options={'SKIP_SAVE'})
     dpi: FloatProperty(name="PDF Resolution", default=0, min=0, soft_max=1200,
@@ -598,6 +698,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         layout.prop(self, "massstab")
         layout.prop(self, "orientation")
         layout.prop(self, "background")
+        layout.prop(self, "resolution")
         col = layout.column(heading="PDF")
         col.prop(self, "page")
         col.prop(self, "dpi")
@@ -615,7 +716,8 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
                 page_index, page_count = self.page - 1, plan_raster.pdf_page_count(path)
             if context.window:
                 context.window.cursor_set('WAIT')
-            sheet = plan_raster.load(path, page_index, self.dpi)
+            sheet = plan_raster.downscale(plan_raster.load(path, page_index, self.dpi),
+                                          int(self.resolution))
             png = plan_output_path(path, page_index, page_count)
             kind = plan_raster.write_png(sheet, png)
         except ImportError as e:
@@ -659,6 +761,76 @@ class PlanCropResetOperator(bpy.types.Operator):
         return {'FINISHED'}
 
 
+class PlanResolutionOperator(bpy.types.Operator):
+    """Write the selected plans' images again at another resolution, from the original
+    file. Lower resolution needs less memory; crop, points and placement stay"""
+    bl_idname = "bii_plan.set_resolution"
+    bl_label = "Change Resolution"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    resolution: EnumProperty(name="Long Side", items=RESOLUTIONS, default='8192')
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and bool(cls._plans(context))
+
+    @staticmethod
+    def _plans(context):
+        plans = [o for o in context.selected_objects if o.bii_plan.is_plan]
+        if context.object is not None and context.object.bii_plan.is_plan \
+                and context.object not in plans:
+            plans.append(context.object)
+        seen, unique = set(), []
+        for o in plans:  # copies share their image: one rebuild covers them
+            key = o.bii_plan.image.name if o.bii_plan.image else o.name
+            if key not in seen:
+                seen.add(key)
+                unique.append(o)
+        return unique
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, context):
+        layout = self.layout
+        layout.prop(self, "resolution")
+        plans = self._plans(context)
+        col = layout.column(align=True)
+        total = sum(image_megabytes(o.bii_plan.image) for o in plans)
+        col.label(text=f"{len(plans)} plan image(s), now {total:.0f} MB in RAM")
+        for o in plans[:8]:
+            img = o.bii_plan.image
+            size = f"{img.size[0]} x {img.size[1]} px" if img else "no image"
+            col.label(text=f"{o.name}: {size}", icon='IMAGE_DATA')
+
+    def execute(self, context):
+        long_side = int(self.resolution)
+        plans = self._plans(context)
+        before = after = 0.0
+        problems, sources = [], set()
+        if context.window:
+            context.window.cursor_set('WAIT')
+        try:
+            for obj in plans:
+                try:
+                    old_mb, new_mb, label = change_resolution(obj, long_side)
+                    before += old_mb
+                    after += new_mb
+                    sources.add(label)
+                except (OSError, ValueError, ImportError) as e:
+                    traceback.print_exc()
+                    problems.append(f"{obj.name}: {e}")
+        finally:
+            if context.window:
+                context.window.cursor_set('DEFAULT')
+        text = (f"{len(plans) - len(problems)} of {len(plans)} plans at {long_side} px: "
+                f"{before:.0f} MB -> {after:.0f} MB RAM, from the {', '.join(sorted(sources))}")
+        if problems:
+            text += ". " + "; ".join(problems)
+        self.report({'WARNING'} if problems else {'INFO'}, text)
+        return {'FINISHED'} if len(problems) < len(plans) else {'CANCELLED'}
+
+
 class IO_FH_bii_plan(bpy.types.FileHandler):
     """Drop PDF plans into the 3D viewport"""
     bl_idname = "IO_FH_bii_plan"
@@ -676,7 +848,7 @@ def menu_func_import(self, context):
 
 
 classes = (PlanPoint, AlignPair, PlanSettings, ImportPlanOperator, PlanCropResetOperator,
-           IO_FH_bii_plan)
+           PlanResolutionOperator, IO_FH_bii_plan)
 
 
 def register():

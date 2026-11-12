@@ -52,12 +52,19 @@ The plan becomes a plane at its true size: the sheet size comes from the file's 
 | Maßstab 1: | Scale printed on the plan. Can be changed later in the sidebar. |
 | Orientation | Flat for Lagepläne (on the ground), Upright for Ansichten and Schnitte. |
 | Background | Opacity of the white paper, see below. 0 (default): the lines lie over maps and models. 1: the plan as printed. Can be changed later in the sidebar. |
+| Resolution | Long side of the plan image, 16384 px (the most GPUs show) down to 1024 px. Can be changed later. |
 | PDF Page | Page of a PDF with several pages. |
 | PDF Resolution | 0 uses the resolution of the scan in the PDF, or 300 dpi for vector drawings. |
 
 The PNG goes into a `plans` folder next to the .blend file. If the .blend file is not saved yet, the PNG is packed into it.
 
 The sidebar (N) > BII Import > Plan shows the settings of the selected plan.
+
+### Resolution and memory
+
+Blender keeps every plan image in RAM at 4 bytes per pixel: a sheet at 16384 x 4140 px takes about 270 MB, more for large sheets. The panel shows each plan's pixel size and memory. The button next to it (Change Resolution) writes the images of the selected plans again at another long side (8192 px takes a quarter of the memory of 16384). Crop, grid crosses, km points and placement stay, since the sheet keeps its size in meters; copies of a plan get the new image too.
+
+The image is made from the original file the plan was imported from (PDF, TIFF, ...), so the resolution can go up again later. If that file is gone, it uses the PNG kept at the import resolution (remembered when the resolution was first lowered), and else the current image, which can then only go down. The old image is removed from the file; its PNG on disk stays.
 
 ### Crop
 
