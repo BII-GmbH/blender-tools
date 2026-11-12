@@ -349,6 +349,59 @@ class PlanPickOperator(bpy.types.Operator):
 
 # ---------------------------------------------------------------- placing
 
+def umgebung_origin(scene):
+    """Projection center the Umgebung extension would use, from its panel, or None.
+
+    Same rule as Umgebung's get_projection without a stored origin: the
+    center of its area (center point, or middle of the bounding box). Only
+    right as long as nobody changed the area since Umgebung built the scene.
+    """
+    props = getattr(scene, "railway_chainage", None)
+    if props is None:
+        return None
+    try:
+        if props.area_mode == 'CENTER':
+            lat, lon = props.center_lat, props.center_lon
+        else:
+            lat = (props.min_lat + props.max_lat) / 2.0
+            lon = (props.min_lon + props.max_lon) / 2.0
+    except AttributeError:  # another Umgebung version
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        return None
+    return lat, lon
+
+
+class PlanOriginFromUmgebungOperator(bpy.types.Operator):
+    """Store the projection center of the Umgebung panel's area as scene origin
+    (scene["lat"] / scene["lon"]). Right only if the area has not changed since
+    Umgebung built the scene"""
+    bl_idname = "bii_plan.origin_from_umgebung"
+    bl_label = "Origin from Umgebung Panel"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        scene = context.scene
+        return ("lat" not in scene or "lon" not in scene) and umgebung_origin(scene) is not None
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_props_dialog(self, width=360)
+
+    def draw(self, context):
+        lat, lon = umgebung_origin(context.scene)
+        col = self.layout.column(align=True)
+        col.label(text=f"Scene origin: {lat:.6f}, {lon:.6f}")
+        col.label(text="The center of the area in the Umgebung panel.")
+        col.label(text="Only right if the area is unchanged since the last build.", icon='ERROR')
+
+    def execute(self, context):
+        lat, lon = umgebung_origin(context.scene)
+        context.scene["lat"], context.scene["lon"] = lat, lon
+        self.report({'INFO'}, f"Scene origin set to {lat:.6f}, {lon:.6f} from the Umgebung panel")
+        return {'FINISHED'}
+
+
 class PlanGeoreferenceOperator(bpy.types.Operator):
     """Place the plan in the scene by its grid crosses, at the Umgebung coordinates
     (scene["lat"] / scene["lon"])"""
@@ -855,7 +908,12 @@ class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
                           "plan lies now", 'INFO')
         origin = context.scene.get("lat"), context.scene.get("lon")
         if None in origin:
-            layout.label(text="No scene origin yet: the plan sets it", icon='WORLD')
+            if umgebung_origin(context.scene) is not None:
+                wrapped_label(layout, context, "No scene origin stored. Umgebung scenes "
+                              "built before Umgebung 1.29.1 may lack it", 'ERROR')
+                layout.operator(PlanOriginFromUmgebungOperator.bl_idname, icon='IMPORT')
+            else:
+                layout.label(text="No scene origin yet: the plan sets it", icon='WORLD')
         layout.operator(PlanGeoreferenceOperator.bl_idname, icon='WORLD')
 
 
@@ -939,7 +997,7 @@ class VIEW3D_PT_bii_plan_align(bpy.types.Panel):
         layout.operator(PlanAlignOperator.bl_idname, icon='SNAP_ON')
 
 
-classes = (PlanPickOperator, PlanGeoreferenceOperator, PlanAlignOperator, PlanPairTargetOperator,
+classes = (PlanPickOperator, PlanOriginFromUmgebungOperator, PlanGeoreferenceOperator, PlanAlignOperator, PlanPairTargetOperator,
            PlanPointFromSceneOperator, PlanRefreshGuessesOperator, PlanRemoveOperator,
            BII_UL_plan_points, BII_UL_plan_pairs, VIEW3D_PT_bii_plan,
            VIEW3D_PT_bii_plan_georef, VIEW3D_PT_bii_plan_crs_help, VIEW3D_PT_bii_plan_align)

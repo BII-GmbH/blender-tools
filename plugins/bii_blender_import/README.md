@@ -85,7 +85,7 @@ For Lagepläne with grid crosses (Gitterkreuze) and their coordinates on the she
 
    The panel warns when the values read from the plan cannot be right: when Rechtswert and Hochwert give different Maßstäbe (a value off by grid steps, the warning names both Maßstäbe, the axis matching the plan is right), when the values are mirrored (swapped, or counting the wrong way), or when the grid they give is skewed. All points with the same residual is the typical sign of such a mistake.
 4. Show Grid draws the grid that follows from the points. If it runs through all crosses and matches the labels on the frame, the points are right. Residuals over 0.5 m show in red.
-5. Place in Scene moves and turns the plan to the scene coordinates of the Umgebung extension (`scene["lat"]` / `scene["lon"]`). Without them, the plan sets them to its center, and Umgebung can build around it ("use scene origin").
+5. Place in Scene moves and turns the plan to the scene coordinates of the Umgebung extension (`scene["lat"]` / `scene["lon"]`). Without them, the plan sets them to its center, and Umgebung can build around it ("use scene origin"). If the scene has Umgebung objects but no stored origin (Umgebung before 1.29.1 stored it only when loading tracks), the panel offers Origin from Umgebung Panel: it takes the center of the area in the Umgebung panel, which is right only if that area has not changed since Umgebung built the scene.
 
 #### Which coordinate system?
 
