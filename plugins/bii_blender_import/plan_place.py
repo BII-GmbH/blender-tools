@@ -457,7 +457,11 @@ def place_chain(scene, root, include_refined=False):
             if child.bii_plan_place.placed_by_km and not include_refined:
                 kept.append(child.name)
                 continue
-            warnings += attach(child)
+            try:
+                warnings += attach(child)
+            except ValueError as e:  # say an attached sheet was turned upright since
+                warnings.append(f"{child.name} not moved: {e}")
+                continue
             bpy.context.view_layer.update()
             moved.append(child.name)
             todo.append(child)
@@ -616,7 +620,8 @@ class PlanAttachOperator(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return _plan_poll(context) and context.area and context.area.type == 'VIEW_3D'
+        return (_plan_poll(context) and context.object.bii_plan.orientation == 'FLAT'
+                and context.area and context.area.type == 'VIEW_3D')
 
     def hint(self, context, shared):
         n = len(_pending.get(self.obj_name, []))
@@ -686,6 +691,10 @@ class PlanAttachOperator(bpy.types.Operator):
             self.hint(context, obj.bii_plan_place.attach_shared)
             return {'RUNNING_MODAL'}
         place = obj.bii_plan_place
+        # Keep the new link only if the sheet can snap: a cancelled operator leaves
+        # no undo step behind, so a failed attach must not change anything.
+        old = (place.attach_parent, tuple(place.attach_own), tuple(place.attach_other),
+               place.placed_by_km)
         place.attach_parent = bpy.data.objects[clicks[2][0]]
         place.attach_own = (*clicks[0][1], *clicks[1][1])
         place.attach_other = (*clicks[2][1], *clicks[3][1])
@@ -694,6 +703,8 @@ class PlanAttachOperator(bpy.types.Operator):
         try:
             warnings = attach(obj)
         except ValueError as e:
+            (place.attach_parent, place.attach_own, place.attach_other,
+             place.placed_by_km) = old
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
         context.view_layer.update()
@@ -725,7 +736,7 @@ class PlanSnapToNeighborOperator(bpy.types.Operator):
             return {'CANCELLED'}
         obj.bii_plan_place.placed_by_km = False
         context.view_layer.update()
-        place_chain(context.scene, obj)
+        warnings += place_chain(context.scene, obj)[2]
         self.report({'WARNING'} if warnings else {'INFO'},
                     ". ".join([f"{obj.name} snapped to {obj.bii_plan_place.attach_parent.name}"]
                               + warnings))

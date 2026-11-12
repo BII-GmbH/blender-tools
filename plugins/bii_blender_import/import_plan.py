@@ -592,7 +592,7 @@ def change_resolution(obj, long_side):
     old_mb = image_megabytes(old)
     if old is not None and old.users == 0:
         bpy.data.images.remove(old)  # frees its memory; its file on disk stays
-    plan_georef._pixel_cache.clear()
+    plan_georef.clear_pixel_cache()
     return old_mb, image_megabytes(new), label
 
 

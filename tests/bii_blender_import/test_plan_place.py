@@ -260,6 +260,41 @@ class PlanPlaceTest(unittest.TestCase):
         moved, kept, _ = plan_place.place_chain(bpy.context.scene, a)
         self.assertEqual((moved, kept), ([b.name], [c.name]))
 
+    def attach_pair(self):
+        """Sheet B attached to the right edge of sheet A."""
+        a = self.import_plan("A.png")
+        b = self.import_plan("B.png")
+        place = b.bii_plan_place
+        place.attach_parent = a
+        place.attach_own = (0.0, 0.10, 0.0, 0.15)
+        place.attach_other = (0.30, 0.10, 0.30, 0.15)
+        bpy.context.view_layer.update()
+        return a, b
+
+    def test_upright_sheet_in_chain_is_a_warning(self):
+        a, b = self.attach_pair()
+        b.bii_plan.orientation = 'UPRIGHT'
+        bpy.context.view_layer.update()
+        moved, kept, warnings = plan_place.place_chain(bpy.context.scene, a)
+        self.assertEqual(moved, [])
+        self.assertTrue(any(b.name in w for w in warnings), warnings)
+        # The attach button is not offered on an upright sheet.
+        bpy.context.view_layer.objects.active = b
+        self.assertFalse(plan_place.PlanAttachOperator.poll(bpy.context))
+
+    def test_align_to_scene_places_attached_sheets(self):
+        a, b = self.attach_pair()
+        pair = a.bii_plan.pairs.add()
+        pair.x, pair.y = 0.0, 0.0
+        pair.target = (500.0, 300.0, 0.0)
+        bpy.context.view_layer.objects.active = a
+        self.assertEqual(bpy.ops.bii_plan.align(), {'FINISHED'})
+        bpy.context.view_layer.update()
+        joint = b.matrix_world @ Vector((0.0, 0.10, 0.0))
+        edge = a.matrix_world @ Vector((0.30, 0.10, 0.0))
+        self.assertLess((joint - edge).xy.length, 1e-3)
+        self.assertLess((edge - Vector((800.0, 400.0, 0.0))).xy.length, 1e-3)
+
 
 if __name__ == "__main__":
     unittest.main()

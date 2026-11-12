@@ -234,7 +234,13 @@ def mouse_to_sheet(area, event, obj):
     return p.x, p.y
 
 
+def clear_pixel_cache():
+    """Free the gray pixels kept for snapping while points are picked."""
+    _pixel_cache.clear()
+
+
 def sheet_pixels(image):
+    """Gray pixels of the plan image, kept while one pick runs (see clear_pixel_cache)."""
     from . import plan_raster
     if image is None:
         return None
@@ -308,6 +314,7 @@ class PlanPickOperator(bpy.types.Operator):
     def finish(self, context):
         context.workspace.status_text_set(None)
         _pending_crop.pop(self.obj_name, None)
+        clear_pixel_cache()  # a full sheet takes about 200 MB as gray pixels
         import_plan._redraw(None, context)
 
     def modal(self, context, event):
@@ -486,6 +493,8 @@ class PlanGeoreferenceOperator(bpy.types.Operator):
             text += f"; scene origin set to {scene['lat']:.6f}, {scene['lon']:.6f}"
         if bend > 0.05:
             text += f"; the projection bends the sheet by up to {bend:.2f} m"
+        text, chain_warnings = place_attached(context, obj, text)
+        warnings = warnings + chain_warnings
         for w in warnings:
             text += f". {w}"
         self.report({'WARNING'} if warnings else {'INFO'}, text)
@@ -537,8 +546,25 @@ class PlanAlignOperator(bpy.types.Operator):
             text += f", Maßstab now 1:{pg.massstab:.1f}"
         if n >= 2:
             text += f", residuals {rms:.3f} m RMS"
-        self.report({'INFO'}, text)
+        text, warnings = place_attached(context, obj, text)
+        self.report({'WARNING'} if warnings else {'INFO'}, ". ".join([text] + warnings))
         return {'FINISHED'}
+
+
+def place_attached(context, obj, text):
+    """Move the neighbor sheets attached to a plan that was just placed.
+
+    Returns the report text with the moved and kept sheets added, and the
+    warnings of the chain.
+    """
+    from . import plan_place  # plan_place imports this module
+    context.view_layer.update()
+    moved, kept, warnings = plan_place.place_chain(context.scene, obj)
+    if moved:
+        text += f"; attached sheets placed too: {', '.join(moved)}"
+    if kept:
+        warnings.append(f"Placed by their own km points, not moved: {', '.join(kept)}")
+    return text, warnings
 
 
 class PlanPairTargetOperator(bpy.types.Operator):
