@@ -26,12 +26,18 @@ def download_wheel(wheel_path):
     filename = os.path.basename(wheel_path)
     # {name}-{version}-{python tag}-{abi tag}-{platform tag}.whl
     name, version, python_tag, abi_tag, platform_tag = filename[:-4].split("-")
+    # "py3-none" wheels fit any Python 3 (3.11 is the oldest in Blender 4.2+);
+    # compressed platform tags ("manylinux_2_27_x86_64.manylinux_2_28_x86_64")
+    # list several platforms.
+    python_version = "3.11" if python_tag.startswith("py") else python_tag.removeprefix("cp")
+    abi = [] if abi_tag == "none" else ["--abi", abi_tag]
+    platforms = [arg for tag in platform_tag.split(".") for arg in ("--platform", tag)]
     print(f"Downloading {filename}", flush=True)
     subprocess.run(
         [sys.executable, "-m", "pip", "download", f"{name}=={version}",
          "--no-deps", "--only-binary=:all:", "--dest", os.path.dirname(wheel_path),
-         "--python-version", python_tag.removeprefix("cp"), "--implementation", "cp",
-         "--abi", abi_tag, "--platform", platform_tag,
+         "--python-version", python_version, "--implementation", "cp",
+         *abi, *platforms,
          "--disable-pip-version-check", "--quiet"],
         check=True)
     if not os.path.isfile(wheel_path):
