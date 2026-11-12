@@ -46,12 +46,21 @@ def get_bbox(props):
 
 
 def get_projection(context, props):
-    """Projektionsmittelpunkt bestimmen - kompatibel zu BLOSM."""
+    """Projektionsmittelpunkt bestimmen - kompatibel zu BLOSM.
+
+    Ein neuer Mittelpunkt wird sofort in der Szene hinterlegt (scene["lat"] /
+    scene["lon"]), bei jedem Bauschritt: Gelände, Kartentextur, Fläche und
+    Gebäude allein brauchen ihn genauso wie die Gleise, und andere Add-ons
+    (BLOSM, BII Import) richten sich danach.
+    """
     scene = context.scene
     if props.use_scene_origin and "lat" in scene and "lon" in scene:
         return TransverseMercator(scene["lat"], scene["lon"]), False
     bbox = get_bbox(props)
-    return TransverseMercator((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0), True
+    projection = TransverseMercator((bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0)
+    scene["lat"] = projection.lat
+    scene["lon"] = projection.lon
+    return projection, True
 
 
 def signature(props):
@@ -182,7 +191,7 @@ def fetch_data(props, status=None):
 
 def process_data(context, props, data):
     """Rohdaten auswerten und im Zwischenspeicher ablegen (Hauptthread)."""
-    projection, is_new_origin = get_projection(context, props)
+    projection, _ = get_projection(context, props)
     rail = railgeom.RailData.from_overpass(
         data, projection, sorted(props.track_types) or ['rail'],
         # Bahnhofsgleise müssen erhalten bleiben, wenn sie aufgelistet werden sollen
@@ -190,10 +199,6 @@ def process_data(context, props, data):
 
     _STATE.update({"rail": rail, "projection": projection, "signature": signature(props)})
 
-    if is_new_origin:
-        # wie BLOSM den Projektionsmittelpunkt in der Szene hinterlegen
-        context.scene["lat"] = projection.lat
-        context.scene["lon"] = projection.lon
     return rail, projection
 
 
