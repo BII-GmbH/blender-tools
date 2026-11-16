@@ -17,6 +17,14 @@ The release notes list the commits that changed that plugin's folder since its p
 The release [all-plugins](https://github.com/BII-GmbH/blender-tools/releases/latest) always holds the latest version of every plugin: each release workflow replaces its plugin's zips there.
 It is the release marked Latest, so `/releases/latest` leads to it. Pre-releases do not go into it.
 
+
+## Scripts
+
+Scripts are helper files that can be used inside the Text Editor tab in Blender to automate tedious tasks/improve workflows.
+There are too small for dedicated plugins, but still are helpfull/abstract enough to be used across projects.
+Python scripts in Blender are tracked as 'TEXT' elements and for the moment can not be tracked as asset/inside an asset library.
+
+
 ## Pipelines
 
 Pipelines automate workflows that a) take time and b) are tedious.
