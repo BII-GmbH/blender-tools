@@ -62,6 +62,20 @@ class SpecTest(unittest.TestCase):
                 got = spec.aspects(b.key, cfg)
                 self.assertEqual(got, [a for a in full if a in got])  # subset, same order
 
+    def test_other_signals(self):
+        cfg = spec.config("lf7", kennziffer=10)
+        self.assertEqual(spec.modifier_values("lf7", cfg), {"Kennziffer": 10, "Mast": True})
+        self.assertEqual(spec.config_from_modifier("lf7", {"Kennziffer": 99})["kennziffer"], 16)  # clamped
+        with self.assertRaises(ValueError):
+            spec.config("lf7", kennziffer=17)
+        self.assertFalse(spec.shown("zs3", "kennziffer", spec.config("zs3", ausfuehrung="licht")))
+        self.assertTrue(spec.shown("zs3", "kennziffer", spec.config("zs3", ausfuehrung="tafel")))
+        self.assertEqual(spec.all_aspects("ls"), ["Aus", "Sh0", "Sh1"])
+        self.assertEqual(spec.symbol_elements("ne3", spec.config("ne3", streifen=2))[-1], ("bake", 2))
+        self.assertEqual(spec.name("lf7", cfg), "Geschwindigkeitssignal Lf7 Kennziffer 10")
+        groups = {b.group for b in spec.BAUFORMEN}
+        self.assertEqual(groups, set(spec.GROUPS))
+
     def test_symbol_of_06F(self):
         # Ks-Mehrabschnittssignal, half filled, Zs 3 and Zs 3v lights, no Zs 1 (signals 06F/06FF)
         cfg = spec.config("ks_mehr", bedienung="stellwerk_zug", kopf="ohne", zs3="licht", zs3v="licht")

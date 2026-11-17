@@ -2,8 +2,10 @@
 
 A railway signal in the Lageplan is a head shape (Bauform) plus extras: Zs 1 or
 Zs 7 on top, Zs 3 above and Zs 3v below the head, Zs 6, an additional light,
-Sh 1, the kind of operation (Bedienung) and the mast. The DB_Signale asset
-library has one composite asset per Bauform; its Geometry Nodes modifier
+Sh 1, the kind of operation (Bedienung) and the mast. The other signals (Zs
+indicators and signs, Lf 6/Lf 7, Ne 2/3/4, Lichtsperrsignale) are Bauformen too,
+with their own elements, e.g. the Kennziffer of a speed sign. The DB_Signale
+asset library has one composite asset per Bauform; its Geometry Nodes modifier
 "Signal" has one input per element below, and the menu "Signalbild" lights the
 lamps of an aspect.
 
@@ -25,18 +27,39 @@ class Bauform:
     key: str
     label: str          # shown in the panel
     asset: str          # asset (object) name in DB_Signale.blend
-    system: str         # "Ks" or "H/V"
-    kind: str           # "haupt", "vor" or "mehr" (Mehrabschnittssignal: main and distant signal)
+    system: str         # "Ks", "H/V" or "" (other signals)
+    kind: str           # "haupt", "vor", "mehr" (Mehrabschnittssignal) or "zusatz" (other signals)
+    group: str = ""     # panel group
+    short: str = ""     # short panel label
+
+    @property
+    def is_main_signal(self):
+        return self.kind in ("haupt", "vor", "mehr")
 
 
 BAUFORMEN = [
-    Bauform("ks_haupt", "Ks-Hauptsignal", "Ks-Hauptsignal", "Ks", "haupt"),
-    Bauform("ks_vor", "Ks-Vorsignal", "Ks-Vorsignal", "Ks", "vor"),
-    Bauform("ks_mehr", "Ks-Mehrabschnittssignal", "Ks-Mehrabschnittssignal", "Ks", "mehr"),
-    Bauform("hv_haupt", "H/V-Hauptsignal", "HV-Hauptsignal", "H/V", "haupt"),
-    Bauform("hv_vor", "H/V-Vorsignal", "HV-Vorsignal", "H/V", "vor"),
-    Bauform("hv_mehr", "H/V-Mehrabschnittssignal", "HV-Mehrabschnittssignal", "H/V", "mehr"),
+    Bauform("ks_haupt", "Ks-Hauptsignal", "Ks-Hauptsignal", "Ks", "haupt", "Ks", "Haupt"),
+    Bauform("ks_vor", "Ks-Vorsignal", "Ks-Vorsignal", "Ks", "vor", "Ks", "Vor"),
+    Bauform("ks_mehr", "Ks-Mehrabschnittssignal", "Ks-Mehrabschnittssignal", "Ks", "mehr", "Ks", "Mehrabschnitt"),
+    Bauform("hv_haupt", "H/V-Hauptsignal", "HV-Hauptsignal", "H/V", "haupt", "H/V", "Haupt"),
+    Bauform("hv_vor", "H/V-Vorsignal", "HV-Vorsignal", "H/V", "vor", "H/V", "Vor"),
+    Bauform("hv_mehr", "H/V-Mehrabschnittssignal", "HV-Mehrabschnittssignal", "H/V", "mehr", "H/V", "Mehrabschnitt"),
+    Bauform("zs1", "Ersatzsignal Zs1", "Ersatzsignal Zs1", "", "zusatz", "Zusatzsignale", "Zs1"),
+    Bauform("zs2", "Richtungsanzeiger Zs2/Zs2v", "Richtungsanzeiger Zs2", "", "zusatz", "Zusatzsignale", "Zs2"),
+    Bauform("zs3", "Geschwindigkeitsanzeiger Zs3", "Geschwindigkeitsanzeiger Zs3", "", "zusatz", "Zusatzsignale", "Zs3"),
+    Bauform("zs3v", "Geschwindigkeitsvoranzeiger Zs3v", "Geschwindigkeitsvoranzeiger Zs3v", "", "zusatz",
+            "Zusatzsignale", "Zs3v"),
+    Bauform("zs6", "Gleiswechselanzeiger Zs6", "Gleiswechselanzeiger Zs6", "", "zusatz", "Zusatzsignale", "Zs6"),
+    Bauform("lf6", "Geschwindigkeits-Ankündesignal Lf6", "Geschwindigkeits-Ankündesignal Lf6", "", "zusatz",
+            "Langsamfahrsignale", "Lf6"),
+    Bauform("lf7", "Geschwindigkeitssignal Lf7", "Geschwindigkeitssignal Lf7", "", "zusatz",
+            "Langsamfahrsignale", "Lf7"),
+    Bauform("ne2", "Vorsignaltafel Ne2", "Vorsignaltafel Ne2", "", "zusatz", "Nebensignale", "Ne2"),
+    Bauform("ne3", "Vorsignalbake Ne3", "Vorsignalbake Ne3", "", "zusatz", "Nebensignale", "Ne3"),
+    Bauform("ne4", "Schachbretttafel Ne4", "Schachbretttafel Ne4", "", "zusatz", "Nebensignale", "Ne4"),
+    Bauform("ls", "Lichtsperrsignal Sh0/Sh1", "Lichtsperrsignal", "", "zusatz", "Rangiersignale", "Ls"),
 ]
+GROUPS = ["Ks", "H/V", "Zusatzsignale", "Langsamfahrsignale", "Nebensignale", "Rangiersignale"]
 BY_KEY = {b.key: b for b in BAUFORMEN}
 BY_ASSET = {b.asset: b for b in BAUFORMEN}
 
@@ -52,8 +75,11 @@ class Element:
     default: object
     description: str = ""
     boolean: bool = False
+    number: tuple = None        # (min, max) of a number element (no options)
 
     def values(self):
+        if self.number:
+            return list(range(self.number[0], self.number[1] + 1))
         return [v for v, _ in self.options]
 
     def option_label(self, value):
@@ -61,6 +87,7 @@ class Element:
 
 
 _ALL = tuple(b.key for b in BAUFORMEN)
+_SIGNALS = tuple(b.key for b in BAUFORMEN if b.is_main_signal)
 _MAIN = ("ks_haupt", "ks_mehr", "hv_haupt", "hv_mehr")
 _DIST = ("ks_vor", "ks_mehr", "hv_vor", "hv_mehr")
 
@@ -68,7 +95,7 @@ ELEMENTS = [
     Element("bedienung", "Bedienung",
             (("stellwerk", "stellwerksbedient"), ("stellwerk_zug", "stellwerks- oder zugbedient"),
              ("zug", "zugbedient")),
-            _ALL, "stellwerk",
+            _SIGNALS, "stellwerk",
             "Kopf gefüllt, halb gefüllt oder leer; Blocksignale haben das Mastschild weiß-gelb"),
     Element("hp", "Hp",
             (("hp01", "Hp0/Hp1"), ("hp012", "Hp0/Hp1/Hp2"), ("hp02", "Hp0/Hp2")),
@@ -94,9 +121,24 @@ ELEMENTS = [
     Element("sh1", "Sh1",
             ((False, "ohne"), (True, "Sh1")),
             _MAIN, False, "Hauptsperrsignal: Rangiersignal Sh 1 im Kopf (Striche im Symbol)", boolean=True),
+    Element("art", "Art",
+            (("zs2", "Zs2 Richtungsanzeiger"), ("zs2v", "Zs2v Richtungsvoranzeiger")),
+            ("zs2",), "zs2", "Quadrat gefüllt (Zs2) oder leer (Zs2v)"),
+    Element("ausfuehrung", "Ausführung",
+            (("licht", "Lichtsignal"), ("tafel", "Tafel")),
+            ("zs3", "zs3v"), "licht", "Dreieck gefüllt (Lichtsignal) oder leer (Tafel)"),
+    Element("streifen", "Streifen",
+            ((1, "1 Streifen"), (2, "2 Streifen"), (3, "3 Streifen"), (4, "4 Streifen"), (5, "5 Streifen")),
+            ("ne3",), 1, "Anzahl der schrägen Streifen; die Bake nächst dem Vorsignal hat einen"),
+    Element("bauart", "Bauart",
+            (("hoch", "hoch"), ("niedrig", "niedrig"), ("kennlicht", "mit Rangierkennlicht")),
+            ("ls",), "hoch", "Hohes Ls am Mast oder niedriges Ls (langer oder kurzer Stiel im Symbol)"),
+    Element("kennziffer", "Kennziffer", (), ("zs3", "zs3v", "lf6", "lf7"), 0,
+            "Zahl aus dem Plan: Geschwindigkeit = Kennziffer x 10 km/h; 0 = leere Tafel", number=(0, 16)),
     Element("mast", "Mast",
             ((True, "Mast"), (False, "ohne Mast")),
-            _ALL, True, "Mast, Fußplatte und Mastschilder; ohne z. B. auf einer Signalbrücke", boolean=True),
+            _ALL, True, "Mast oder Pfosten, Fußplatte und Mastschilder; ohne z. B. auf einer Signalbrücke "
+                        "oder zum Anbauen an einen anderen Mast", boolean=True),
 ]
 ELEMENT = {e.key: e for e in ELEMENTS}
 
@@ -116,6 +158,13 @@ def config(bauform, **values):
             raise ValueError(f"{k}: unknown option {v!r}")
         cfg[k] = v
     return cfg
+
+
+def shown(bauform, key, cfg):
+    """Whether the panel shows element key (the Kennziffer only on signs)."""
+    if key == "kennziffer" and cfg.get("ausfuehrung", "tafel") != "tafel":
+        return False
+    return True
 
 
 def allowed(bauform, key, value, cfg):
@@ -150,11 +199,13 @@ def fix(bauform, cfg):
 
 
 def combinations(bauform):
-    """All valid configurations of a Bauform (for tests and later symbol detection)."""
+    """All valid configurations of a Bauform (for tests and later symbol detection);
+    number elements keep their default."""
     els = elements(bauform)
     out = [{}]
     for e in els:
-        out = [dict(c, **{e.key: v}) for c in out for v in e.values()]
+        vals = [e.default] if e.number else e.values()
+        out = [dict(c, **{e.key: v}) for c in out for v in vals]
     return [c for c in out if valid(bauform, c)]
 
 # ---------------------------------------------------------------- modifier values
@@ -165,7 +216,7 @@ def modifier_values(bauform, cfg):
     out = {}
     for e in elements(bauform):
         v = cfg[e.key]
-        out[e.label] = v if e.boolean else e.values().index(v)
+        out[e.label] = v if (e.boolean or e.number) else e.values().index(v)
     return out
 
 
@@ -178,6 +229,8 @@ def config_from_modifier(bauform, values):
         v = values[e.label]
         if e.boolean:
             cfg[e.key] = bool(v)
+        elif e.number:
+            cfg[e.key] = max(e.number[0], min(e.number[1], int(v)))
         elif isinstance(v, str):
             labels = [label for _, label in e.options]
             cfg[e.key] = e.values()[labels.index(v)] if v in labels else e.default
@@ -208,7 +261,11 @@ def all_aspects(bauform):
         return ["Aus", "Vr0", "Vr1", "Vr2"]
     if bauform == "hv_mehr":
         return ["Aus", "Hp0", *[f"{h} + {v}" for h in ("Hp1", "Hp2") for v in ("Vr0", "Vr1", "Vr2")], *extra]
-    raise KeyError(b)
+    if bauform == "zs1":
+        return ["Aus", "Zs1"]
+    if bauform == "ls":
+        return ["Aus", "Sh0", "Sh1"]
+    return ["Aus"]  # signs and dark indicators
 
 
 def aspects(bauform, cfg):
@@ -232,9 +289,40 @@ def aspects(bauform, cfg):
 # ---------------------------------------------------------------- symbol
 
 
+def _single_symbol(bauform, cfg):
+    """Symbols of the other signals (Zs, Lf, Ne, Ls)."""
+    F, S = ("foot",), lambda h: ("stem", h)
+    if bauform == "zs1":
+        return [("chev",)]
+    if bauform == "zs2":
+        return [("square", True), ("hv", 1)] if cfg["art"] == "zs2" else [("square", False)]
+    if bauform == "zs3":
+        return [("tri_up", cfg["ausfuehrung"] == "licht")]
+    if bauform == "zs3v":
+        return [("tri_down", cfg["ausfuehrung"] == "licht")]
+    if bauform == "zs6":
+        return [("zs6",)]
+    if bauform == "lf6":
+        return [F, S(14), ("lf6",)]
+    if bauform == "lf7":
+        return [F, S(14), ("lf7",)]
+    if bauform == "ne2":
+        return [("ne2",)]
+    if bauform == "ne3":
+        return [F, S(6), ("bake", cfg["streifen"])]
+    if bauform == "ne4":
+        return [F, S(14), ("ne4",)]
+    if bauform == "ls":
+        return {"hoch": [F, S(16), ("ls",)], "niedrig": [F, S(4), ("ls",)],
+                "kennlicht": [F, S(4), ("ls",), ("kenn",)]}[cfg["bauart"]]
+    raise KeyError(bauform)
+
+
 def symbol_elements(bauform, cfg):
     """Element list for signal_symbols.draw: the Lageplan symbol of this configuration."""
     b = BY_KEY[bauform]
+    if not b.is_main_signal:
+        return _single_symbol(bauform, cfg)
     fill = {"stellwerk": "full", "stellwerk_zug": "half", "zug": "empty"}[cfg["bedienung"]]
     els = [("foot",)]
     els.append(("stem", 6 if b.kind == "mehr" or cfg.get("zs3v", "ohne") != "ohne" else 14))
@@ -296,8 +384,12 @@ def option_symbol(bauform, key, value, cfg):
         if b.system == "H/V":
             return [("hv_dots", "full", True)]
         return [("ks_head", {"haupt": "bell", "vor": "cup", "mehr": "caps"}[b.kind], "full", False), ("zus",)]
+    if key in ("art", "ausfuehrung", "streifen", "bauart"):
+        return symbol_elements(bauform, dict(cfg, **{key: value}))
     if key == "mast":
         return [("foot",), ("stem", 14), ("lf7",)] if value else [("lf7",)]
+    if key == "kennziffer":
+        return []
     raise KeyError(key)
 
 
@@ -307,6 +399,10 @@ def name(bauform, cfg):
     parts = []
     for e in elements(bauform):
         v = cfg[e.key]
+        if e.number:
+            if v and shown(bauform, e.key, cfg):
+                parts.append(f"{e.label} {v}")
+            continue
         if v == e.default or v in ("ohne", False):
             continue
         if e.boolean:

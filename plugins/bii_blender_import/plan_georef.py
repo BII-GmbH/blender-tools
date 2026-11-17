@@ -1002,7 +1002,7 @@ def _draw_several(layout, context, plans):
 class VIEW3D_PT_bii_plan(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_label = "Plan"
 
     def draw(self, context):
@@ -1050,7 +1050,7 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
 class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Georeference"
     bl_options = {'DEFAULT_CLOSED'}
@@ -1174,7 +1174,7 @@ CRS_HELP = (
 class VIEW3D_PT_bii_plan_crs_help(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan_georef"
     bl_label = "Which Coordinate System?"
     bl_options = {'DEFAULT_CLOSED'}
@@ -1189,7 +1189,7 @@ class VIEW3D_PT_bii_plan_crs_help(bpy.types.Panel):
 class VIEW3D_PT_bii_plan_align(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Align to Scene"
     bl_options = {'DEFAULT_CLOSED'}

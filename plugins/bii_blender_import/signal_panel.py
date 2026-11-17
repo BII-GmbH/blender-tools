@@ -1,8 +1,8 @@
-"""Signal panel: configure and place composite railway signals by their Lageplan symbol.
+"""Signal panel: configure and place railway signals by their Lageplan symbol.
 
-Sidebar > BII Import > Signal. The composite assets of DB_Signale.blend (one
-per Bauform, see signal_spec) have a Geometry Nodes modifier "Signal" with one
-input per element. The panel shows each element's options as Lageplan symbols
+Sidebar > BII Signal. The composite assets of DB_Signale.blend (one per
+Bauform, see signal_spec: main and distant signals, Zs, Lf, Ne, Ls) have a
+Geometry Nodes modifier "Signal" with one input per element. The panel shows each element's options as Lageplan symbols
 (signal_symbols), a preview of the symbol of the whole combination, and the
 aspects of the Signalbild menu that light something. It works on the active
 object if that is such a signal, else on a draft that "Place Signal" puts at
@@ -15,7 +15,7 @@ import os
 
 import bpy
 import bpy.utils.previews
-from bpy.props import BoolProperty, EnumProperty, StringProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
 from mathutils import Vector
 
 from . import plan_km, plan_place, signal_spec as spec, signal_symbols as symbols
@@ -146,9 +146,19 @@ def _library_items(self, context):
     return items
 
 
+def _kennziffer_changed(self, context):
+    cfg = self.get()
+    if "kennziffer" in cfg:
+        cfg["kennziffer"] = self.kennziffer
+        self.set(cfg)
+    _redraw(self, context)
+
+
 class SignalDraft(bpy.types.PropertyGroup):
     bauform: EnumProperty(name="Bauform", items=_bauform_items, update=_redraw)
     config: StringProperty(name="Configuration", default="{}")
+    kennziffer: IntProperty(name="Kennziffer", min=0, max=16, update=_kennziffer_changed,
+                            description=spec.ELEMENT["kennziffer"].description)
     aspect: StringProperty(name="Signalbild", default="Aus")
     library: EnumProperty(name="Library", items=_library_items,
                           description=f"Asset library to take the signal from (it needs {LIBRARY_FILE})")
@@ -159,6 +169,8 @@ class SignalDraft(bpy.types.PropertyGroup):
     def get(self):
         cfg = json.loads(self.config or "{}")
         cfg = {k: v for k, v in cfg.items() if k in spec.config(self.bauform)}
+        if "kennziffer" in spec.config(self.bauform):
+            cfg["kennziffer"] = self.kennziffer
         return spec.fix(self.bauform, spec.config(self.bauform, **cfg))
 
     def set(self, cfg):
@@ -277,6 +289,8 @@ class SignalTakeOperator(bpy.types.Operator):
         d.bauform = b
         d.set(cfg)
         d.aspect = aspect
+        if "kennziffer" in cfg:
+            d.kennziffer = cfg["kennziffer"]
         return {'FINISHED'}
 
 
@@ -391,8 +405,7 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
     bl_label = "Signal"
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
-    bl_order = 10
+    bl_category = "BII Signal"
 
     def draw(self, context):
         layout = self.layout
@@ -410,16 +423,25 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
             box.label(text="New signal (not placed yet)", icon='ADD')
 
         if not mod:
-            col = layout.column(align=True)
-            col.label(text="Bauform")
-            grid = col.grid_flow(columns=3, align=True, even_columns=True)
-            for o in spec.BAUFORMEN:
-                c = spec.config(o.key)
-                grid.operator(SignalSetBauformOperator.bl_idname, text=o.label.split("-", 1)[0] + " " + o.kind.capitalize(),
-                              icon_value=_icon(spec.symbol_elements(o.key, c)), depress=o.key == b).bauform = o.key
+            for group in spec.GROUPS:
+                col = layout.column(align=True)
+                col.label(text=group)
+                grid = col.grid_flow(columns=3, align=True, even_columns=True)
+                for o in spec.BAUFORMEN:
+                    if o.group != group:
+                        continue
+                    c = spec.config(o.key)
+                    grid.operator(SignalSetBauformOperator.bl_idname, text=o.short,
+                                  icon_value=_icon(spec.symbol_elements(o.key, c)), depress=o.key == b).bauform = o.key
+            layout.separator()
 
         for e in spec.elements(b):
+            if not spec.shown(b, e.key, cfg):
+                continue
             col = layout.column(align=True)
+            if e.number:
+                draw_number(col, context, mod, e)
+                continue
             col.label(text=e.label)
             row = col.row(align=True)
             for value, label, ok in spec.options(b, e.key, cfg):
@@ -430,10 +452,12 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
                 op = sub.operator(SignalSetOptionOperator.bl_idname, text=label, depress=cfg[e.key] == value, **kw)
                 op.element, op.value = e.key, str(value)
 
+        lit = [a for a in spec.aspects(b, cfg) if a != "Aus"]
         col = layout.column(align=True)
-        col.label(text="Signalbild")
+        if lit:
+            col.label(text="Signalbild")
         grid = col.grid_flow(columns=3, align=True, even_columns=True)
-        for a in spec.aspects(b, cfg):
+        for a in spec.aspects(b, cfg) if lit else []:
             grid.operator(SignalSetAspectOperator.bl_idname, text=a, depress=a == aspect).aspect = a
 
         layout.separator()
@@ -453,6 +477,21 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         if not library_path(context, d.library)[0]:
             wrapped_label(layout, context, f"! No asset library has {LIBRARY_FILE}. Add the BII asset library under "
                                            "Preferences > File Paths > Asset Libraries.", 'ERROR')
+
+
+def draw_number(layout, context, mod, e):
+    """Number field of a number element: on the active signal's modifier, else on the draft."""
+    if mod is None:
+        layout.prop(context.scene.bii_signal, e.key, text=e.label)
+        return
+    sock = _inputs(mod).get(e.label)
+    if sock is None:
+        return
+    props = getattr(mod, "properties", None)
+    if props is not None and hasattr(props, "inputs"):
+        layout.prop(getattr(props.inputs, sock.identifier), "value", text=e.label)
+    else:
+        layout.prop(mod, f'["{sock.identifier}"]', text=e.label)
 
 
 classes = (

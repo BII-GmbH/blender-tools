@@ -59,7 +59,7 @@ The plan becomes a plane at its true size: the sheet size comes from the file's 
 
 The PNG goes into a `plans` folder next to the .blend file. If the .blend file is not saved yet, the PNG is packed into it.
 
-The sidebar (N) > BII Import > Plan shows the settings of the selected plan. With several plans selected, it shows only what can change for all of them at once: Maßstab, Orientation, Opacity, Background, Full Sheet, Reset Crop and Change Resolution. Fields where the plans differ say "(mixed)" and show the active plan's value; a change sets it on all selected plans. Crop, Georeference, Neighbor Sheets, Kilometrierung and Align to Scene work on one plan and show when it is selected alone.
+The sidebar (N) > BII Plan shows the settings of the selected plan. With several plans selected, it shows only what can change for all of them at once: Maßstab, Orientation, Opacity, Background, Full Sheet, Reset Crop and Change Resolution. Fields where the plans differ say "(mixed)" and show the active plan's value; a change sets it on all selected plans. Crop, Georeference, Neighbor Sheets, Kilometrierung and Align to Scene work on one plan and show when it is selected alone.
 
 ### Resolution and memory
 
@@ -125,7 +125,7 @@ For plans without coordinates, such as Ansichten: put the 3D cursor on a scene p
 
 ### Place by Kilometrierung
 
-For DB Lagepläne without grid crosses: they show the Kilometrierung of the Strecke (hectometer labels like 5,3 / 5,4 / 5,5 along the track) and landmarks with their km, such as "EÜ (Weg) 5240/5,504/1616" for a bridge on Strecke 5240 at km 5,504. The scene needs the Kilometrierung line of that Strecke from BII Umgebung (a curve "KM-Linie 5240 ..." with its tick marks). Sidebar > BII Import > Plan > Kilometrierung:
+For DB Lagepläne without grid crosses: they show the Kilometrierung of the Strecke (hectometer labels like 5,3 / 5,4 / 5,5 along the track) and landmarks with their km, such as "EÜ (Weg) 5240/5,504/1616" for a bridge on Strecke 5240 at km 5,504. The scene needs the Kilometrierung line of that Strecke from BII Umgebung (a curve "KM-Linie 5240 ..." with its tick marks). Sidebar > BII Plan > Kilometrierung:
 
 1. Enter the Strecke (5240). Empty works when the scene has only one Strecke. The panel shows the km range of its Kilometrierung lines.
 2. Move the plan roughly into place by hand (optional: two km points far apart fix it from anywhere).
@@ -158,13 +158,13 @@ The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images a
 
 ## Signals
 
-Sidebar (N) > BII Import > Signal places railway signals from a Lageplan and sets them up by their symbol. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
+Sidebar (N) > BII Signal places railway signals from a Lageplan and sets them up by their symbol: Ks and H/V Haupt-, Vor- and Mehrabschnittssignale, Zusatzsignale (Zs1, Zs2/Zs2v, Zs3, Zs3v, Zs6), Lf 6 and Lf 7, Ne 2, Ne 3 and Ne 4, and Lichtsperrsignale. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
 
 A signal symbol in the Lageplan is a head (Bauform) with marks around it. The panel shows every choice as its Lageplan symbol, and at the top the symbol of the whole combination, to compare with the plan:
 
 | Row | Lageplan symbol |
 |---|---|
-| Bauform | Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bauform | Grouped by Ks, H/V, Zusatzsignale, Langsamfahrsignale, Nebensignale, Rangiersignale. Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
 | Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
 | Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
 | Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |
@@ -173,7 +173,11 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. The pa
 | Zs6 | Square with a diagonal, half filled, below the head |
 | Zusatzlicht | Small circle at the head: Kennlicht or shortened braking distance (top left), Vorsignalwiederholer (bottom left, Ks distant signals) |
 | Sh1 | Bars in the head (Hauptsperrsignal) |
-| Mast | Without mast for a Signalbrücke or Ausleger |
+| Mast | Without mast for a Signalbrücke or Ausleger, or to put a Zusatzsignal on another signal's mast |
+| Art, Ausführung | Zs2 or Zs2v; Zs3/Zs3v as light indicator or sign |
+| Kennziffer | The number of Lf 6, Lf 7 and the Zs3/Zs3v signs (speed = number x 10 km/h; 0 leaves the sign empty) |
+| Streifen | Ne 3 Vorsignalbake with 1 to 5 stripes |
+| Bauart | Lichtsperrsignal high on a mast, low, or low with Rangierkennlicht |
 
 Choices that do not fit the rest are greyed out. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 

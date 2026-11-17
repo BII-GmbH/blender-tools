@@ -1010,7 +1010,7 @@ def _report(layout, context, text):
 class VIEW3D_PT_bii_plan_km(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Kilometrierung"
     bl_options = {'DEFAULT_CLOSED'}
@@ -1078,7 +1078,7 @@ class VIEW3D_PT_bii_plan_km(bpy.types.Panel):
 class VIEW3D_PT_bii_plan_sheets(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Neighbor Sheets"
     bl_options = {'DEFAULT_CLOSED'}

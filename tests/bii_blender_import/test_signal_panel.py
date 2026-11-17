@@ -113,6 +113,26 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(lit, 1)  # Ks1: the green light
         obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh_clear()
 
+    def test_speed_sign_with_kennziffer(self):
+        scene = bpy.context.scene
+        scene.bii_signal.library = "test signals"
+        bpy.context.view_layer.objects.active = None
+        bpy.ops.bii_signal.set_bauform(bauform="lf7")
+        scene.bii_signal.kennziffer = 10
+        self.assertEqual(scene.bii_signal.get()["kennziffer"], 10)
+        self.assertEqual(bpy.ops.bii_signal.place(), {'FINISHED'})
+        obj = bpy.context.active_object
+        mod = signal_panel.signal_modifier(obj)
+        self.assertEqual(signal_panel.object_state(mod)[1]["kennziffer"], 10)
+
+        def faces():
+            bpy.context.view_layer.update()
+            return len(obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data.polygons)
+
+        with_number = faces()
+        signal_panel.write_modifier(mod, {"Kennziffer": 0})
+        self.assertLess(faces(), with_number)  # the digits are gone
+
 
 if __name__ == "__main__":
     unittest.main()
