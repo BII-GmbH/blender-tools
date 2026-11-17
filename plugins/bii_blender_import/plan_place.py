@@ -31,7 +31,7 @@ from bpy_extras.io_utils import ImportHelper
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector
 
-from . import import_plan, plan_georef, plan_km
+from . import import_plan, plan_georef, plan_gpu, plan_km
 
 UMGEBUNG_MARKER = "railway_chainage"  # set by BII Umgebung on everything it builds
 KM_LINE_PREFIX = "KM-Linie "
@@ -524,12 +524,15 @@ class PlanAlignKmOperator(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PlanPickKmOperator(bpy.types.Operator):
-    """Click points on the plan track, then type the km printed there. Points without km
-    pull the plan track onto the scene track"""
+class PlanPickKmOperator(plan_georef.PickMode, bpy.types.Operator):
+    """Click a point on the plan track, then type the km printed there. Points without km
+    pull the plan track onto the scene track. Shift-click: add several, until Esc"""
     bl_idname = "bii_plan.pick_km"
-    bl_label = "Add km Points"
+    bl_label = "Add km Point"
     bl_options = {'REGISTER', 'UNDO'}
+
+    multiple: BoolProperty(name="Several", options={'SKIP_SAVE'},
+                           description="Add several points, until Esc or right click")
 
     @classmethod
     def poll(cls, context):
@@ -537,28 +540,34 @@ class PlanPickKmOperator(bpy.types.Operator):
         return (obj is not None and obj.bii_plan.is_plan and context.area
                 and context.area.type == 'VIEW_3D')
 
+    def hint(self):
+        if not self.multiple:
+            return ("ADD KM POINT: click a point on the plan track (hectometer mark, "
+                    "landmark)   ·   Esc: cancel")
+        return ("ADD KM POINTS: click points on the plan track (hectometer marks, landmarks)"
+                f"   ·   {self.added} added   ·   Esc / right click: done")
+
     def invoke(self, context, event):
         self.obj_name = context.object.name
         self.added = 0
-        context.workspace.status_text_set("Click points on the plan track: hectometer "
-                                          "marks, landmarks   Esc / Right click: done")
-        context.window_manager.modal_handler_add(self)
+        self.multiple = self.multiple or event.shift
+        self.pick_start(context, self.hint())
         return {'RUNNING_MODAL'}
 
     def modal(self, context, event):
         obj = bpy.data.objects.get(self.obj_name)
         if obj is None:
-            context.workspace.status_text_set(None)
+            self.pick_end(context)
             return {'CANCELLED'}
+        on_view = self.pick_on_view(context, event)
         if event.type == 'RIGHTMOUSE' and event.shift:
             return {'PASS_THROUGH'}
         if event.type in {'ESC', 'RIGHTMOUSE', 'RET'} and event.value == 'PRESS':
-            context.workspace.status_text_set(None)
-            _redraw(None, context)
+            self.pick_end(context)
             return {'FINISHED'} if self.added else {'CANCELLED'}
         if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
             return {'PASS_THROUGH'}
-        if plan_georef.window_region(context.area, event.mouse_x, event.mouse_y) is None:
+        if not on_view:
             return {'PASS_THROUGH'}  # the sidebar, so km can be typed meanwhile
         point = plan_georef.mouse_to_sheet(context.area, event, obj)
         if point is None:
@@ -569,6 +578,10 @@ class PlanPickKmOperator(bpy.types.Operator):
             self.report({'INFO'}, f"{p.name}: km ≈ {p.km_text} predicted. Confirm it with ? "
                         "or type the km printed there")
         self.added += 1
+        if not self.multiple:
+            self.pick_end(context)
+            return {'FINISHED'}
+        self.pick_hint(context, self.hint())
         _redraw(None, context)
         return {'RUNNING_MODAL'}
 
@@ -611,7 +624,7 @@ class PlanKmRemoveOperator(bpy.types.Operator):
         return {'FINISHED'}
 
 
-class PlanAttachOperator(bpy.types.Operator):
+class PlanAttachOperator(plan_georef.PickMode, bpy.types.Operator):
     """Snap this sheet to a neighbor at the match line (Anschlussblatt): click two points on
     this sheet, then the same two on the neighbor"""
     bl_idname = "bii_plan.attach"
@@ -623,37 +636,36 @@ class PlanAttachOperator(bpy.types.Operator):
         return (_plan_poll(context) and context.object.bii_plan.orientation == 'FLAT'
                 and context.area and context.area.type == 'VIEW_3D')
 
-    def hint(self, context, shared):
+    def hint(self, shared):
         n = len(_pending.get(self.obj_name, []))
         if shared:
-            texts = ["Click a point on this sheet that the neighbor shows too",
-                     "Click a second shared point on this sheet, far from the first",
-                     "Click the first point on the neighbor sheet",
-                     "Click the second point on the neighbor sheet"]
+            texts = ["click a point on this sheet that the neighbor shows too",
+                     "click a second shared point on this sheet, far from the first",
+                     "click the first point on the neighbor sheet",
+                     "click the second point on the neighbor sheet"]
         else:
-            texts = ["Click where the track crosses the match line on this sheet",
-                     "Click a second point on the match line of this sheet",
-                     "Click the same crossing on the neighbor sheet",
-                     "Click a second point on the neighbor's match line"]
-        context.workspace.status_text_set(f"{texts[n]}   Esc: cancel")
+            texts = ["click where the track crosses the match line on this sheet",
+                     "click a second point on the match line of this sheet",
+                     "click the same crossing on the neighbor sheet",
+                     "click a second point on the neighbor's match line"]
+        return f"ATTACH ({n + 1}/4): {texts[n]}   ·   Esc: cancel"
 
     def invoke(self, context, event):
         self.obj_name = context.object.name
         _pending[self.obj_name] = []
-        self.hint(context, context.object.bii_plan_place.attach_shared)
-        context.window_manager.modal_handler_add(self)
+        self.pick_start(context, self.hint(context.object.bii_plan_place.attach_shared))
         return {'RUNNING_MODAL'}
 
     def finish(self, context):
-        context.workspace.status_text_set(None)
+        self.pick_end(context)
         _pending.pop(self.obj_name, None)
-        _redraw(None, context)
 
     def modal(self, context, event):
         obj = bpy.data.objects.get(self.obj_name)
         if obj is None:
             self.finish(context)
             return {'CANCELLED'}
+        on_view = self.pick_on_view(context, event)
         if event.type == 'RIGHTMOUSE' and event.shift:
             return {'PASS_THROUGH'}
         if event.type in {'ESC', 'RIGHTMOUSE'} and event.value == 'PRESS':
@@ -661,7 +673,7 @@ class PlanAttachOperator(bpy.types.Operator):
             return {'CANCELLED'}
         if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
             return {'PASS_THROUGH'}
-        if plan_georef.window_region(context.area, event.mouse_x, event.mouse_y) is None:
+        if not on_view:
             return {'PASS_THROUGH'}
         clicks = _pending.setdefault(self.obj_name, [])
         if len(clicks) < 2:
@@ -688,7 +700,7 @@ class PlanAttachOperator(bpy.types.Operator):
             clicks.append(hit)
         _redraw(None, context)
         if len(clicks) < 4:
-            self.hint(context, obj.bii_plan_place.attach_shared)
+            self.pick_hint(context, self.hint(obj.bii_plan_place.attach_shared))
             return {'RUNNING_MODAL'}
         place = obj.bii_plan_place
         # Keep the new link only if the sheet can snap: a cancelled operator leaves
@@ -806,29 +818,52 @@ class ImportPlanSheetsOperator(bpy.types.Operator, ImportHelper):
                               description="Opacity of the white paper, see Import Plan")
     gap: FloatProperty(name="Gap", default=20.0, min=0.0, subtype='DISTANCE',
                        description="Space between the sheets in the scene")
+    resolution: EnumProperty(name="Resolution", items=import_plan.RESOLUTIONS, default='8192',
+                             description="Long side of each sheet's image. Can be changed "
+                             "later")
     page: IntProperty(name="PDF Page", default=1, min=1, options={'SKIP_SAVE'})
     dpi: FloatProperty(name="PDF Resolution", default=0, min=0, soft_max=1200,
                        options={'SKIP_SAVE'},
                        description="Pixels per inch for PDF pages. 0: the resolution of the "
                        "scan in the PDF, 300 for vector drawings")
+    check_gpu: BoolProperty(name="Check GPU Memory", default=True, options={'SKIP_SAVE'},
+                            description=import_plan.CHECK_GPU_DESCRIPTION
+                            + ". Stops before the first sheet that does not fit")
 
     def draw(self, context):
         layout = self.layout
         layout.use_property_split = True
-        for name in ("massstab", "background", "gap", "page", "dpi"):
+        for name in ("massstab", "background", "resolution", "gap"):
             layout.prop(self, name)
+        col = layout.column(heading="PDF")
+        col.prop(self, "page")
+        col.prop(self, "dpi")
+        layout.prop(self, "check_gpu")
 
     def execute(self, context):
+        from . import plan_raster
         names = [f.name for f in self.files if f.name] or [os.path.basename(self.filepath)]
         folder = self.directory or os.path.dirname(self.filepath)
         paths = [os.path.join(folder, n) for n in sorted(names, key=natural_key)]
-        objs, failed = [], []
-        for path in paths:
+        long_side = int(self.resolution)
+        left, how = plan_gpu.budget() if self.check_gpu else (math.inf, "")
+        objs, failed, no_memory, need = [], [], [], 0.0
+        for i, path in enumerate(paths):
+            if self.check_gpu:
+                try:
+                    w, h = plan_raster.pixel_size(path, self.page - 1, self.dpi, long_side)
+                except Exception:  # unreadable: the import reports it
+                    w = h = 0
+                need = plan_gpu.texture_megabytes(w, h)
+                if need > left:
+                    no_memory = [os.path.basename(p) for p in paths[i:]]
+                    break
             before = set(bpy.data.objects)
             try:
                 result = bpy.ops.import_image.bii_plan(
                     filepath=path, massstab=self.massstab, orientation='FLAT',
-                    background=self.background, page=self.page, dpi=self.dpi)
+                    background=self.background, resolution=self.resolution, page=self.page,
+                    dpi=self.dpi, check_gpu=False)
             except RuntimeError as e:
                 failed.append(f"{os.path.basename(path)}: {e}")
                 continue
@@ -837,8 +872,15 @@ class ImportPlanSheetsOperator(bpy.types.Operator, ImportHelper):
                 failed.append(os.path.basename(path))
                 continue
             objs += new
+            left -= need
+        memory_text = ""
+        if no_memory:
+            memory_text = (f"Not enough GPU memory for more sheets ({how}), not imported: "
+                           f"{', '.join(no_memory)}. {plan_gpu.advice()}. Blender would crash "
+                           "drawing them")
         if not objs:
-            self.report({'ERROR'}, "No sheet imported: " + "; ".join(failed))
+            self.report({'ERROR'}, "No sheet imported: "
+                        + ". ".join(t for t in ("; ".join(failed), memory_text) if t))
             return {'CANCELLED'}
         lay_out_in_row(objs, context.scene.cursor.location, self.gap)
         for o in context.selected_objects:
@@ -850,7 +892,9 @@ class ImportPlanSheetsOperator(bpy.types.Operator, ImportHelper):
                 "then Attach to Neighbor for each next one")
         if failed:
             text += ". Not imported: " + "; ".join(failed)
-        self.report({'WARNING'} if failed else {'INFO'}, text)
+        if memory_text:
+            text += ". " + memory_text
+        self.report({'WARNING'} if failed or no_memory else {'INFO'}, text)
         return {'FINISHED'}
 
 
@@ -970,6 +1014,7 @@ class VIEW3D_PT_bii_plan_km(bpy.types.Panel):
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Kilometrierung"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 2
 
     @classmethod
     def poll(cls, context):
@@ -1037,6 +1082,7 @@ class VIEW3D_PT_bii_plan_sheets(bpy.types.Panel):
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Neighbor Sheets"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 1
 
     @classmethod
     def poll(cls, context):

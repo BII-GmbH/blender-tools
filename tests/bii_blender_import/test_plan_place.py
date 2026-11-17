@@ -20,7 +20,7 @@ except ImportError as e:  # pragma: no cover
     raise unittest.SkipTest(f"needs Blender and Pillow: {e}")
 
 import bii_blender_import  # noqa: E402  (run_in_blender.py puts plugins/ on sys.path)
-from bii_blender_import import plan_km, plan_place  # noqa: E402
+from bii_blender_import import plan_gpu, plan_km, plan_place  # noqa: E402
 
 RADIUS = 1500.0
 KM_START = 5.0
@@ -221,6 +221,42 @@ class PlanPlaceTest(unittest.TestCase):
         for a, b in zip(plans, plans[1:]):
             self.assertAlmostEqual(b.location.x - a.location.x, width + 10, places=3)
             self.assertAlmostEqual(a.bii_plan.massstab, 500)
+
+    def with_gpu_budget(self, megabytes):
+        """Pretend the GPU has megabytes left for new plans (background Blender has no GPU)."""
+        original = plan_gpu.budget
+        plan_gpu.budget = lambda: (megabytes, "test budget")
+        self.addCleanup(setattr, plan_gpu, "budget", original)
+
+    def test_import_sheets_stops_when_gpu_memory_is_full(self):
+        names = ["Blatt 1.png", "Blatt 2.png", "Blatt 3.png"]
+        for n in names:
+            self.sheet(n, (600, 400), 100)
+        one = plan_gpu.texture_megabytes(600, 400)
+        self.with_gpu_budget(2.5 * one)
+        result = bpy.ops.import_image.bii_plan_sheets(
+            directory=self._dir.name, files=[{"name": n} for n in names], resolution='16384')
+        self.assertEqual(result, {'FINISHED'})
+        self.assertEqual(sorted(o.name for o in bpy.data.objects if o.bii_plan.is_plan),
+                         ["Blatt 1", "Blatt 2"])
+
+    def test_import_sheets_at_a_resolution(self):
+        self.sheet("Blatt 1.png", (2000, 1000), 100)
+        bpy.ops.import_image.bii_plan_sheets(directory=self._dir.name,
+                                             files=[{"name": "Blatt 1.png"}], resolution='1024')
+        plan = next(o for o in bpy.data.objects if o.bii_plan.is_plan)
+        self.assertEqual(tuple(plan.bii_plan.image.size), (1024, 512))
+        self.assertAlmostEqual(plan.bii_plan.width, 2000 / 100 * 0.0254, places=5)  # true size
+
+    def test_import_refused_without_gpu_memory(self):
+        self.with_gpu_budget(0.1)
+        with self.assertRaises(RuntimeError) as cm:  # the operator reports an error
+            bpy.ops.import_image.bii_plan(filepath=self.sheet("Lageplan.png"), massstab=1000)
+        self.assertIn("GPU memory", str(cm.exception))
+        self.assertFalse(any(o.bii_plan.is_plan for o in bpy.data.objects))
+        result = bpy.ops.import_image.bii_plan(filepath=self.sheet("Lageplan.png"),
+                                               massstab=1000, check_gpu=False)
+        self.assertEqual(result, {'FINISHED'})
 
     def test_attach_and_chain(self):
         a = self.import_plan("A.png")

@@ -76,6 +76,55 @@ def _scan_resolution(page):
     return best
 
 
+def _render_dpi(page, dpi):
+    """(dpi the page is rendered at, note). dpi 0: the scan's own, else 300."""
+    page_w, page_h = page.get_size()
+    note = ""
+    if dpi <= 0:
+        scan_dpi = _scan_resolution(page)
+        dpi = round(scan_dpi) if scan_dpi else 300.0
+        note = f"scanned at {dpi:.0f} dpi" if scan_dpi else "vector page, rendered at 300 dpi"
+    long_side = max(page_w, page_h) / 72 * dpi
+    if long_side > MAX_SIDE:
+        # Slightly less, as the pixel size is rounded up.
+        dpi *= MAX_SIDE / long_side * (1 - 1e-6)
+        note = (f"rendered at {dpi:.0f} dpi, {MAX_SIDE} pixels on the long side: GPUs "
+                "show no more")
+    return dpi, note
+
+
+def pixel_size(path, page_index=0, dpi=0.0, long_side=MAX_SIDE):
+    """(width, height) in pixels of the image load() and downscale() would give.
+
+    Reads only the file header or the PDF page size, not the pixels, so it is
+    quick even for large plans. Raises like load().
+    """
+    ext = os.path.splitext(path)[1].lower()
+    if ext in PDF_EXTENSIONS:
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(path)
+        try:
+            if not 0 <= page_index < len(pdf):
+                raise ValueError(f"The PDF has {len(pdf)} pages, there is no page "
+                                 f"{page_index + 1}")
+            page = pdf[page_index]
+            page_w, page_h = page.get_size()
+            render_dpi = _render_dpi(page, dpi)[0]
+        finally:
+            pdf.close()
+        w, h = math.ceil(page_w / 72 * render_dpi), math.ceil(page_h / 72 * render_dpi)
+    elif ext in RASTER_EXTENSIONS:
+        from PIL import Image
+        with _large_images(), Image.open(path) as image:
+            w, h = image.size
+    else:
+        raise ValueError(f"Cannot read {ext} files")
+    if max(w, h) > long_side:
+        factor = long_side / max(w, h)
+        w, h = max(1, round(w * factor)), max(1, round(h * factor))
+    return w, h
+
+
 def load_pdf(path, page_index=0, dpi=0.0):
     """Render one PDF page. dpi 0 means the scan's own resolution, else 300.
 
@@ -90,17 +139,7 @@ def load_pdf(path, page_index=0, dpi=0.0):
             raise ValueError(f"The PDF has {len(pdf)} pages, there is no page {page_index + 1}")
         page = pdf[page_index]
         page_w, page_h = page.get_size()
-        scan_dpi = _scan_resolution(page)
-        note = ""
-        if dpi <= 0:
-            dpi = round(scan_dpi) if scan_dpi else 300.0
-            note = f"scanned at {dpi:.0f} dpi" if scan_dpi else "vector page, rendered at 300 dpi"
-        long_side = max(page_w, page_h) / 72 * dpi
-        if long_side > MAX_SIDE:
-            # Slightly less, as the pixel size is rounded up.
-            dpi *= MAX_SIDE / long_side * (1 - 1e-6)
-            note = (f"rendered at {dpi:.0f} dpi, {MAX_SIDE} pixels on the long side: GPUs "
-                    "show no more")
+        dpi, note = _render_dpi(page, dpi)
         bitmap = page.render(scale=dpi / 72)
         image = bitmap.to_pil()
         # The real resolution after rounding the pixel size.

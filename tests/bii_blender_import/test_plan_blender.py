@@ -116,6 +116,98 @@ class PlanImportTest(unittest.TestCase):
         self.assertEqual(p.easting_state, 'GUESSED')
 
 
+class FbxExportTest(unittest.TestCase):
+    """Plans keep their image when exported as FBX."""
+
+    def setUp(self):
+        bpy.ops.wm.read_homefile(use_empty=True)
+        self._dir = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
+        png = os.path.join(self._dir.name, "Lageplan.png")
+        image = Image.new("RGB", (600, 400), (255, 255, 255))
+        ImageDraw.Draw(image).line((0, 200, 599, 200), fill=(200, 0, 0), width=3)
+        image.save(png, dpi=(300, 300))
+        bpy.ops.import_image.bii_plan(filepath=png, massstab=1000)
+        self.plan = bpy.context.view_layer.objects.active
+
+    def tearDown(self):
+        bpy.ops.wm.read_homefile(use_empty=True)
+        self._dir.cleanup()
+
+    def test_blender_draws_the_plan_shader(self):
+        nodes = self.plan.bii_plan.material.node_tree.nodes
+        export = nodes[import_plan.EXPORT_OUTPUT]
+        self.assertFalse(export.is_active_output)
+        active = [n for n in nodes if n.type == 'OUTPUT_MATERIAL' and n.is_active_output]
+        self.assertEqual(len(active), 1)
+        self.assertEqual(active[0].inputs["Surface"].links[0].from_node.type, 'MIX_SHADER')
+
+    def test_older_plans_get_the_export_shader(self):
+        mat = self.plan.bii_plan.material
+        for name in (import_plan.EXPORT_SHADER, import_plan.EXPORT_OUTPUT):
+            mat.node_tree.nodes.remove(mat.node_tree.nodes[name])
+        import_plan._add_export_shaders()
+        self.assertIsNotNone(mat.node_tree.nodes.get(import_plan.EXPORT_SHADER))
+        self.assertFalse(import_plan.add_export_shader(mat))  # only once
+
+    def test_fbx_keeps_the_texture(self):
+        fbx = os.path.join(self._dir.name, "plan.fbx")
+        bpy.ops.export_scene.fbx(filepath=fbx, use_selection=True, path_mode='COPY',
+                                 embed_textures=True)
+        bpy.ops.wm.read_homefile(use_empty=True)
+        bpy.ops.import_scene.fbx(filepath=fbx)
+        obj = next(o for o in bpy.data.objects if o.type == 'MESH')
+        mat = obj.material_slots[0].material
+        # The importer links color and alpha, each with its own copy of the image.
+        images = [n.image for n in mat.node_tree.nodes if n.type == 'TEX_IMAGE' and n.image]
+        self.assertTrue(images)
+        for image in images:
+            self.assertEqual(tuple(image.size), (600, 400))
+        self.assertTrue(obj.data.uv_layers)
+        uvs = [tuple(d.uv) for d in obj.data.uv_layers[0].data]
+        self.assertAlmostEqual(max(u for u, _ in uvs), 1.0, places=4)
+        self.assertAlmostEqual(min(v for _, v in uvs), 0.0, places=4)
+
+
+class SeveralPlansTest(PlanImportTest):
+    """The sidebar with several plans selected edits all of them."""
+
+    def setUp(self):
+        super().setUp()
+        bpy.ops.import_image.bii_plan(filepath=self.png, massstab=500)
+        self.second = bpy.context.view_layer.objects.active
+        self.plan.select_set(True)
+        self.second.select_set(True)
+        bpy.context.view_layer.objects.active = self.plan
+
+    def test_only_one_plan_gets_the_placing_panels(self):
+        self.assertEqual(import_plan.selected_plans(bpy.context), [self.plan, self.second])
+        self.assertIsNone(plan_georef._plan(bpy.context))
+        self.second.select_set(False)
+        self.assertEqual(plan_georef._plan(bpy.context), self.plan)
+
+    def test_change_goes_to_all_selected(self):
+        multi = bpy.context.scene.bii_plan_multi
+        self.assertAlmostEqual(multi.massstab, 1000)  # the active plan's value
+        self.assertTrue(import_plan.values_differ([self.plan, self.second], "massstab"))
+        multi.opacity = 0.4
+        multi.massstab = 2000
+        multi.orientation = 'UPRIGHT'
+        multi.full_sheet = True
+        for obj in (self.plan, self.second):
+            self.assertAlmostEqual(obj.bii_plan.opacity, 0.4, places=5)
+            self.assertAlmostEqual(obj.scale[0], 2000)
+            self.assertEqual(obj.bii_plan.orientation, 'UPRIGHT')
+            self.assertTrue(obj.bii_plan.full_sheet)
+        self.assertFalse(import_plan.values_differ([self.plan, self.second], "massstab"))
+
+    def test_reset_crop_of_all_selected(self):
+        for obj in (self.plan, self.second):
+            import_plan.set_sheet_rectangle(obj, 0.01, 0.01, 0.02, 0.02)
+        self.assertEqual(bpy.ops.bii_plan.crop_reset(), {'FINISHED'})
+        for obj in (self.plan, self.second):
+            self.assertAlmostEqual(max(v.co.x for v in obj.data.vertices), obj.bii_plan.width)
+
+
 # A 100 m grid at 1:1000, so 0.1 m on the sheet between crosses.
 def _cross(x_steps, y_steps):
     return 0.01 + 0.1 * x_steps, 0.01 + 0.1 * y_steps, 3588000 + 100 * x_steps, \
@@ -154,8 +246,13 @@ class GeoreferenceTest(unittest.TestCase):
         self.assertAlmostEqual(plan_geo.similarity_scale(fit), 1000, places=3)
         self.assertLess(p3.residual, 1e-3)
 
+    def test_grid_spacing_defaults_to_100(self):
+        self.assertEqual(self.pg.grid_spacing, 100)
+        self.assertFalse(self.pg.snap)
+
     def test_prediction_is_a_guess_on_the_finer_grid(self):
         # Crosses read 500 m apart suggest a 500 m grid; the grid is 100 m.
+        self.pg.grid_spacing = 0  # from the points
         self.add(0, 0)
         self.add(5, 5)
         self.assertEqual(plan_georef.grid_spacing(self.pg), 500)
