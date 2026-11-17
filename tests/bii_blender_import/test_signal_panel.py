@@ -99,6 +99,14 @@ class PlaceTest(unittest.TestCase):
         self.assertLess(fewer, full)
         self.assertEqual(signal_panel.object_state(mod)[1]["zs3v"], "ohne")
 
+        # Place Another: a second signal like the active one
+        bpy.context.scene.cursor.location = (20.0, 5.0, 0.0)
+        self.assertEqual(bpy.ops.bii_signal.place(), {'FINISHED'})
+        second = bpy.context.active_object
+        self.assertIsNot(second, obj)
+        self.assertEqual(signal_panel.object_state(signal_panel.signal_modifier(second))[1],
+                         signal_panel.object_state(mod)[1])
+
         me = obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh()
         lit = sum(1 for p in me.polygons if p.material_index < len(me.materials)
                   and me.materials[p.material_index].name == "Signal Lampe an")

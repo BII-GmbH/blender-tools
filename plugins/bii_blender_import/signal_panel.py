@@ -262,7 +262,7 @@ class SignalSetAspectOperator(bpy.types.Operator):
 
 
 class SignalTakeOperator(bpy.types.Operator):
-    """Use the active signal's configuration for the next signals to place"""
+    """Use the active signal's setup for new signals (shown when no signal is selected)"""
     bl_idname = "bii_signal.take"
     bl_label = "Use for Placing"
     bl_options = {'REGISTER', 'INTERNAL'}
@@ -326,19 +326,20 @@ def track_direction(context, point):
 
 
 class SignalPlaceOperator(bpy.types.Operator):
-    """Place the signal at the 3D cursor, with the options chosen above"""
+    """Place a signal as shown above at the 3D cursor (with a signal active: another one like it)"""
     bl_idname = "bii_signal.place"
     bl_label = "Place Signal"
     bl_options = {'REGISTER', 'UNDO'}
 
     def execute(self, context):
         d = context.scene.bii_signal
+        bauform, cfg, aspect, _ = state(context)
         path, method = library_path(context, d.library)
         if not path:
             self.report({'ERROR'}, f"No asset library with {LIBRARY_FILE}: add the BII asset library "
                                    "under Preferences > File Paths > Asset Libraries")
             return {'CANCELLED'}
-        b = spec.BY_KEY[d.bauform]
+        b = spec.BY_KEY[bauform]
         try:
             obj = load_signal_object(path, b.asset, method)
         except (OSError, RuntimeError, KeyError) as e:
@@ -360,10 +361,9 @@ class SignalPlaceOperator(bpy.types.Operator):
         context.view_layer.objects.active = obj
         mod = signal_modifier(obj)
         if mod:
-            cfg = d.get()
-            values = spec.modifier_values(d.bauform, cfg)
-            aspect = d.aspect if d.aspect in spec.aspects(d.bauform, cfg) else "Aus"
-            values["Signalbild"] = spec.all_aspects(d.bauform).index(aspect)
+            values = spec.modifier_values(bauform, cfg)
+            aspect = aspect if aspect in spec.aspects(bauform, cfg) else "Aus"
+            values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
             write_modifier(mod, values)
         obj.name = b.asset
         return {'FINISHED'}
@@ -441,18 +441,18 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
             row = layout.row(align=True)
             row.operator(SignalTakeOperator.bl_idname, icon='COPYDOWN')
             row.operator(SignalTurnOperator.bl_idname, icon='FILE_REFRESH')
-        else:
-            d = context.scene.bii_signal
-            col = layout.column()
-            col.use_property_split = True
-            col.prop(d, "library")
-            col.prop(d, "align_to_track")
-            row = layout.row(align=True)
-            row.scale_y = 1.4
-            row.operator(SignalPlaceOperator.bl_idname, icon='EMPTY_SINGLE_ARROW')
-            if not library_path(context, d.library)[0]:
-                wrapped_label(layout, context, f"! No asset library has {LIBRARY_FILE}. Add the BII asset library under "
-                                               "Preferences > File Paths > Asset Libraries.", 'ERROR')
+        d = context.scene.bii_signal
+        col = layout.column()
+        col.use_property_split = True
+        col.prop(d, "library")
+        col.prop(d, "align_to_track")
+        row = layout.row(align=True)
+        row.scale_y = 1.4
+        row.operator(SignalPlaceOperator.bl_idname, text="Place Another" if mod else "Place Signal",
+                     icon='EMPTY_SINGLE_ARROW')
+        if not library_path(context, d.library)[0]:
+            wrapped_label(layout, context, f"! No asset library has {LIBRARY_FILE}. Add the BII asset library under "
+                                           "Preferences > File Paths > Asset Libraries.", 'ERROR')
 
 
 classes = (

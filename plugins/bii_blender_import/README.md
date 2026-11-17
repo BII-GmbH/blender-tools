@@ -177,8 +177,9 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. The pa
 
 Choices that do not fit the rest are greyed out. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 
-- Without a signal selected, the panel sets up a new signal: Place Signal puts it at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). Turn 180° turns the selected signals to face the other direction. The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting).
-- With a placed signal active, the panel changes that signal. Use for Placing copies its setup for the next ones.
+- With a placed signal active, the panel changes that signal. Without one, it sets up a new signal.
+- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
+- The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting).
 
 The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library and can render symbols at plan scale as templates, for finding signals on imported plans later (`signal_symbols.mask`).
 
