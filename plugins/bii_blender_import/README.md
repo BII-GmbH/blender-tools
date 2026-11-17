@@ -1,6 +1,6 @@
 # BII Import
 
-Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses or by their Kilometrierung, and join sheets at their match lines.
+Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses or by their Kilometrierung, and join sheets at their match lines. Its Signal panel places and configures railway signals by their Lageplan symbol.
 
 ## Install
 
@@ -156,15 +156,41 @@ All sheets of a chain should have the same Maßstab; Attach warns otherwise.
 
 The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3-Clause, PDFium BSD-3-Clause) for PDF files.
 
+## Signals
+
+Sidebar (N) > BII Import > Signal places railway signals from a Lageplan and sets them up by their symbol. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
+
+A signal symbol in the Lageplan is a head (Bauform) with marks around it. The panel shows every choice as its Lageplan symbol, and at the top the symbol of the whole combination, to compare with the plan:
+
+| Row | Lageplan symbol |
+|---|---|
+| Bauform | Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
+| Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
+| Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |
+| Zs3 | Triangle above the head: filled = light indicator, empty = sign |
+| Zs3v | Triangle below the head: filled = light indicator, empty = sign |
+| Zs6 | Square with a diagonal, half filled, below the head |
+| Zusatzlicht | Small circle at the head: Kennlicht or shortened braking distance (top left), Vorsignalwiederholer (bottom left, Ks distant signals) |
+| Sh1 | Bars in the head (Hauptsperrsignal) |
+| Mast | Without mast for a Signalbrücke or Ausleger |
+
+Choices that do not fit the rest are greyed out. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
+
+- Without a signal selected, the panel sets up a new signal: Place Signal puts it at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). Turn 180° turns the selected signals to face the other direction. The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting).
+- With a placed signal active, the panel changes that signal. Use for Placing copies its setup for the next ones.
+
+The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library and can render symbols at plan scale as templates, for finding signals on imported plans later (`signal_symbols.mask`).
+
 ## Tests
 
-The plan import has tests in [tests/bii_blender_import](../../tests/bii_blender_import). They run in Blender's Python with Pillow and pypdfium2 from `wheels/` (download them first with the build script, see below):
+The plan import and the Signal panel have tests in [tests/bii_blender_import](../../tests/bii_blender_import). They run in Blender's Python with Pillow and pypdfium2 from `wheels/` (download them first with the build script, see below):
 
 ```
 blender -b --factory-startup --python-exit-code 1 --python tests/bii_blender_import/run_in_blender.py
 ```
 
-`python -m unittest discover tests/bii_blender_import` runs the coordinate tests without Blender and skips the others.
+`python -m unittest discover tests/bii_blender_import` runs the coordinate tests without Blender and skips the others. The signal placing tests need the asset library: set `BII_SIGNAL_LIBRARY` to the folder with `DB_Signale.blend`, else they are skipped.
 
 ## Release
 
