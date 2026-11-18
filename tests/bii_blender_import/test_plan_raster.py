@@ -192,6 +192,22 @@ class LoadPdfTest(_TempDir):
         with self.assertRaises(ValueError):
             plan_raster.load(self.path("scan.pdf"), page_index=1)
 
+    def test_pixel_size_matches_the_loaded_image(self):
+        _gray_scan_pdf(self.path("scan.pdf"))
+        sheet = plan_raster.load(self.path("scan.pdf"))
+        self.assertEqual(plan_raster.pixel_size(self.path("scan.pdf")), sheet.image.size)
+        small = plan_raster.downscale(sheet, 400)
+        self.assertEqual(plan_raster.pixel_size(self.path("scan.pdf"), long_side=400),
+                         small.image.size)
+
+
+class PixelSizeTest(_TempDir):
+
+    def test_raster_size_without_loading(self):
+        Image.new("L", (1200, 800), 255).save(self.path("plan.png"))
+        self.assertEqual(plan_raster.pixel_size(self.path("plan.png")), (1200, 800))
+        self.assertEqual(plan_raster.pixel_size(self.path("plan.png"), long_side=600), (600, 400))
+
 
 class FindMarkCenterTest(unittest.TestCase):
 

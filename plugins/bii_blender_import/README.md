@@ -1,6 +1,6 @@
 # BII Import
 
-Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses or by their Kilometrierung, and join sheets at their match lines.
+Blender extension that imports STEP files with their colors, names and assembly tree, with options for low-poly meshes and for leaving out small, hidden or chosen parts. It also imports plans (Lagepläne, Ansichten) from PDF or image files as reference planes at their true size, and can place Lagepläne by their grid crosses or by their Kilometrierung, and join sheets at their match lines. Its Signal panel places and configures railway signals by their Lageplan symbol.
 
 ## Install
 
@@ -52,17 +52,20 @@ The plan becomes a plane at its true size: the sheet size comes from the file's 
 | Maßstab 1: | Scale printed on the plan. Can be changed later in the sidebar. |
 | Orientation | Flat for Lagepläne (on the ground), Upright for Ansichten and Schnitte. |
 | Background | Opacity of the white paper, see below. 0 (default): the lines lie over maps and models. 1: the plan as printed. Can be changed later in the sidebar. |
-| Resolution | Long side of the plan image, 16384 px (the most GPUs show) down to 1024 px. Can be changed later. |
+| Resolution | Long side of the plan image, 16384 px (the most GPUs show) down to 1024 px. 8192 px by default, which keeps most plans readable at a quarter of the memory. Can be changed later. |
 | PDF Page | Page of a PDF with several pages. |
 | PDF Resolution | 0 uses the resolution of the scan in the PDF, or 300 dpi for vector drawings. |
+| Check GPU Memory | Imports the plan only if the GPU has memory left for it, see below. On by default for every import. |
 
 The PNG goes into a `plans` folder next to the .blend file. If the .blend file is not saved yet, the PNG is packed into it.
 
-The sidebar (N) > BII Import > Plan shows the settings of the selected plan.
+The sidebar (N) > BII Plan shows the settings of the selected plan. With several plans selected, it shows only what can change for all of them at once: Maßstab, Orientation, Opacity, Background, Full Sheet, Reset Crop and Change Resolution. Fields where the plans differ say "(mixed)" and show the active plan's value; a change sets it on all selected plans. Crop, Georeference, Neighbor Sheets, Kilometrierung and Align to Scene work on one plan and show when it is selected alone.
 
 ### Resolution and memory
 
 Blender keeps every plan image in RAM at 4 bytes per pixel: a sheet at 16384 x 4140 px takes about 270 MB, more for large sheets. The panel shows each plan's pixel size and memory. The button next to it (Change Resolution) writes the images of the selected plans again at another long side (8192 px takes a quarter of the memory of 16384). Crop, grid crosses, km points and placement stay, since the sheet keeps its size in meters; copies of a plan get the new image too.
+
+The viewport also keeps each plan image it shows on the GPU, with about a third more for mipmaps: about 1 GB for a sheet at 16384 x 11600 px. When the GPU memory runs out, Blender (5.x with Vulkan) crashes while drawing. So the imports first check how much GPU memory is left (NVIDIA GPUs report their free memory; for other GPUs the total memory minus the plans shown and a reserve for the scene; 4 GB assumed if neither can be read). A plan that does not fit is not imported, and the message says which resolution would fit. Import Plan Sheets imports the sheets that fit and stops before the first one that does not. Change Resolution checks the same before it raises the resolution. Turn off Check GPU Memory to import anyway. Hidden plans do not count: the viewport only loads the images it shows. Preferences > Viewport > Texture Limit Size lowers the GPU memory of all images, and the check takes it into account.
 
 The image is made from the original file the plan was imported from (PDF, TIFF, ...), so the resolution can go up again later. If that file is gone, it uses the PNG kept at the import resolution (remembered when the resolution was first lowered), and else the current image, which can then only go down. The old image is removed from the file; its PNG on disk stays.
 
@@ -80,13 +83,17 @@ Opacity fades the whole plan, Background sets how much of its white paper shows:
 
 The plan's colors stay exactly as in the file. In Material Preview and Rendered view, Blender's default View Transform AgX makes them paler and lowers the contrast; the panel offers to switch the scene to Standard (Render Properties > Color Management), which shows them as printed.
 
+### FBX export
+
+File > Export > FBX exports plans with their image as texture. Use Path Mode Copy and Embed Textures (the button next to Path Mode) to put the image into the FBX file. The plan's material has a second shader for this, a Principled BSDF with the image as Base Color, on a Material Output that is not the active one; Blender keeps drawing the plan's own shader. Opacity and Background are not exported. The image keeps the alpha that marks the paper, so some programs show the paper transparent. Plans imported with an older version get the export shader when the file is opened.
+
 ### Georeference
 
 For Lagepläne with grid crosses (Gitterkreuze) and their coordinates on the sheet frame:
 
 1. Choose the coordinate system, see the table below. The Gauß-Krüger zone comes from the first digit of the Rechtswert (3588400: zone 3). Under the list, the panel shows the zone and warns about values that do not fit the system (8 digits for Gauß-Krüger, 7 for UTM, swapped values, different zones).
-2. Click + and then grid crosses in the viewport. Snap to Crosses moves each point to the center of the nearest cross. Esc ends.
-3. Enter Rechtswert and Hochwert of the first two points in the list. From the third point on, the coordinates are predicted from the others and rounded to the grid, and marked as guesses (?). Check them against the labels on the frame, then click ? to confirm them, or type the right value. Without Grid Spacing, the prediction goes to the coarsest grid line it lies near: crosses read 1000 m apart may lie on a 100 m grid.
+2. Click + and then a grid cross in the viewport. Shift-click + to add several crosses, until Esc or right click. While points are added, the viewport has an orange frame and a banner saying what to click; clicks on the sidebar, toolbar or header go to their buttons, not to the plan. Snap to Crosses (off by default) moves each point to the center of the nearest dark mark: good for crosses that stand alone, but lines or text near a cross pull the point off.
+3. Enter Rechtswert and Hochwert of the first two points in the list. From the third point on, the coordinates are predicted from the others and rounded to the grid, and marked as guesses (?). Check them against the labels on the frame, then click ? to confirm them, or type the right value. Grid Spacing is 100 m by default. Set it to the grid of the plan, or to 0 to take it from the values read: then the prediction goes to the coarsest grid line it lies near (crosses read 1000 m apart may lie on a 100 m grid).
 
    If the scene has an origin (`scene["lat"]` / `scene["lon"]`, for example from Umgebung), the first points get estimated values instead: where they lie in the scene now. So you can first move, turn and scale the plan roughly into place by hand, then click the crosses and round their values to the grid. This also helps when the plan labels only one axis (only Hochwert, say): correct the labeled value and round the other one. The panel shows "Lies now at" for the active point, and From Scene Position takes it over again after you moved the plan. Estimated values are guesses (? next to the value, "≈" in the list). Guesses only decide what the values read from the plan leave open: with Rechtswerte read from at least three crosses not in one line and Hochwerte guessed, the Rechtswerte set Maßstab, rotation and the east-west position, and the guesses only the north-south position. So wrong guesses do not bend the grid. With fewer values, or crosses in one line, the guesses also turn the plan; the panel warns then. Typing a value marks it as read from the plan, and so does clicking ? on a guess; clicking ? again marks it as a guess. A value left empty (0) does not count. With Grid Spacing set, the estimates are rounded to it.
 
@@ -114,15 +121,15 @@ The coordinates go through WGS84 with the 7-parameter transformations PROJ uses 
 
 ### Align to Scene
 
-For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
+For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. Shift-click + to add several points in a row, moving the 3D cursor with Shift + right click in between. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
 
 ### Place by Kilometrierung
 
-For DB Lagepläne without grid crosses: they show the Kilometrierung of the Strecke (hectometer labels like 5,3 / 5,4 / 5,5 along the track) and landmarks with their km, such as "EÜ (Weg) 5240/5,504/1616" for a bridge on Strecke 5240 at km 5,504. The scene needs the Kilometrierung line of that Strecke from BII Umgebung (a curve "KM-Linie 5240 ..." with its tick marks). Sidebar > BII Import > Plan > Kilometrierung:
+For DB Lagepläne without grid crosses: they show the Kilometrierung of the Strecke (hectometer labels like 5,3 / 5,4 / 5,5 along the track) and landmarks with their km, such as "EÜ (Weg) 5240/5,504/1616" for a bridge on Strecke 5240 at km 5,504. The scene needs the Kilometrierung line of that Strecke from BII Umgebung (a curve "KM-Linie 5240 ..." with its tick marks). Sidebar > BII Plan > Kilometrierung:
 
 1. Enter the Strecke (5240). Empty works when the scene has only one Strecke. The panel shows the km range of its Kilometrierung lines.
 2. Move the plan roughly into place by hand (optional: two km points far apart fix it from anywhere).
-3. Click + and then points on the plan track: hectometer marks, landmarks. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
+3. Click + and then a point on the plan track: a hectometer mark, a landmark. Shift-click + to add several, until Esc. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
 4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
 
 Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation, often a few meters off along the track): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
@@ -138,7 +145,7 @@ Two km points far apart fix the plan. One km point and a few track points far fr
 
 ### Neighbor sheets (Anschlussblatt)
 
-Long Strecken come as several sheets that join at dashed match lines ("Anschlussblatt 2"). File > Import > Plan Sheets imports several files at once with the same Maßstab, side by side in name order (Blatt 2 before Blatt 10), centered on the 3D cursor. The sidebar has the same under Plan > Neighbor Sheets > Import Plan Sheets.
+Long Strecken come as several sheets that join at dashed match lines ("Anschlussblatt 2"). File > Import > Plan Sheets imports several files at once with the same Maßstab, Background and Resolution, side by side in name order (Blatt 2 before Blatt 10), centered on the 3D cursor. It imports the sheets that fit into the GPU memory left and names the others (see Resolution and memory). The sidebar has the same under Plan > Neighbor Sheets > Import Plan Sheets, right below Georeference.
 
 1. Place one sheet, by grid crosses, by Kilometrierung or by hand.
 2. Select the next sheet and click Attach to Neighbor. Click where the track crosses the match line on this sheet, then a second point on the match line; then the same crossing on the neighbor sheet, and a second point on its match line. The sheet snaps to its neighbor: the crossings meet, the match lines lie on each other, and the sheets lie on opposite sides of the line (so the order of the second clicks does not matter). With Two Shared Points, both clicks on each sheet are the same two places instead, for example two Weichen both sheets show.
@@ -149,15 +156,46 @@ All sheets of a chain should have the same Maßstab; Attach warns otherwise.
 
 The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3-Clause, PDFium BSD-3-Clause) for PDF files.
 
+## Signals
+
+Sidebar (N) > BII Signal places railway signals from a Lageplan and sets them up by their symbol: Ks and H/V Haupt-, Vor- and Mehrabschnittssignale, Zusatzsignale (Zs1, Zs2/Zs2v, Zs3, Zs3v, Zs6), Lf 6 and Lf 7, Ne 2, Ne 3 and Ne 4, and Lichtsperrsignale. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
+
+A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the top, the panel shows the symbol of the whole combination, to compare with the plan. Below it, one row per choice shows every option as a small symbol button (names in the tooltips). The button at the end of a row shows the chosen option; a click on it shows all options as large symbols to choose from:
+
+| Row | Lageplan symbol |
+|---|---|
+| Bauform | The first rows (one per group: Ks, H/V, Zusatzsignale, Langsamfahrsignale, Nebensignale, Rangiersignale). Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
+| Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
+| Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |
+| Zs3 | Triangle above the head: filled = light indicator, empty = sign |
+| Zs3v | Triangle below the head: filled = light indicator, empty = sign |
+| Zs6 | Square with a diagonal, half filled, below the head |
+| Zusatzlicht | Small circle at the head: Kennlicht or shortened braking distance (top left), Vorsignalwiederholer (bottom left, Ks distant signals) |
+| Sh1 | Bars in the head (Hauptsperrsignal) |
+| Mast | Without mast for a Signalbrücke or Ausleger, or to put a Zusatzsignal on another signal's mast |
+| Art, Ausführung | Zs2 or Zs2v; Zs3/Zs3v as light indicator or sign |
+| Kennziffer (number field) | The number of Lf 6, Lf 7 and the Zs3/Zs3v signs (speed = number x 10 km/h; 0 leaves the sign empty) |
+| Streifen | Ne 3 Vorsignalbake with 1 to 5 stripes |
+| Bauart | Lichtsperrsignal high on a mast, low, or low with Rangierkennlicht |
+
+Options that do not fit the rest are greyed out. Kennziffer is a number field. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
+
+- With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
+- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
+- The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: left empty, it takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
+
+The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library.
+
 ## Tests
 
-The plan import has tests in [tests/bii_blender_import](../../tests/bii_blender_import). They run in Blender's Python with Pillow and pypdfium2 from `wheels/` (download them first with the build script, see below):
+The plan import and the Signal panel have tests in [tests/bii_blender_import](../../tests/bii_blender_import). They run in Blender's Python with Pillow and pypdfium2 from `wheels/` (download them first with the build script, see below):
 
 ```
 blender -b --factory-startup --python-exit-code 1 --python tests/bii_blender_import/run_in_blender.py
 ```
 
-`python -m unittest discover tests/bii_blender_import` runs the coordinate tests without Blender and skips the others.
+`python -m unittest discover tests/bii_blender_import` runs the coordinate tests without Blender and skips the others. The signal placing tests need the asset library: set `BII_SIGNAL_LIBRARY` to the folder with `DB_Signale.blend`, else they are skipped.
 
 ## Release
 

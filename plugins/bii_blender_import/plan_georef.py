@@ -18,7 +18,7 @@ import math
 import blf
 import bpy
 import gpu
-from bpy.props import EnumProperty, IntProperty
+from bpy.props import BoolProperty, EnumProperty, IntProperty
 from bpy_extras import view3d_utils
 from gpu_extras.batch import batch_for_shader
 from mathutils import Matrix, Vector
@@ -29,7 +29,10 @@ SNAP_RADIUS = 0.004  # paper meters around the click that snapping looks at
 
 _pixel_cache = {}  # image name -> (key, numpy array)
 _pending_crop = {}  # object name -> first corner of a crop rectangle
+_picking = {}  # area pointer -> banner text of the pick running in that 3D view
 _draw_handle = None
+_banner_handle = None
+PICK_COLOR = (1.0, 0.55, 0.1, 1.0)
 
 
 # ---------------------------------------------------------------- fitting
@@ -205,12 +208,102 @@ def fit_summary(pg):
 
 # ---------------------------------------------------------------- picking
 
+def _inside(region, x, y):
+    return (region.width > 1 and region.height > 1 and region.x <= x < region.x + region.width
+            and region.y <= y < region.y + region.height)
+
+
 def window_region(area, x, y):
+    """The 3D view's main region under the mouse (window coordinates), or None.
+
+    None also where the sidebar, toolbar, header or another region lies on
+    top of the main region: with Region Overlap the main region reaches
+    under them, and a click on a button there must not count as a click on
+    the plan.
+    """
+    if any(r.type != 'WINDOW' and _inside(r, x, y) for r in area.regions):
+        return None
     for region in area.regions:
-        if (region.type == 'WINDOW' and region.x <= x < region.x + region.width
-                and region.y <= y < region.y + region.height):
+        if region.type == 'WINDOW' and _inside(region, x, y):
             return region
     return None
+
+
+class PickMode:
+    """Mixin for modal operators that take clicks on the plan in the 3D view.
+
+    While it runs, the view shows an orange frame and a banner saying what to
+    click, the mouse is a crosshair over the view, and clicks on the sidebar,
+    toolbar or header go to their buttons, not to the plan.
+    """
+
+    def pick_start(self, context, text):
+        self.pick_area = context.area.as_pointer()
+        self.pick_cross = False
+        self.pick_hint(context, text)
+        context.window_manager.modal_handler_add(self)
+
+    def pick_hint(self, context, text):
+        _picking[self.pick_area] = text
+        context.workspace.status_text_set(text)
+        if context.area:
+            context.area.tag_redraw()
+
+    def pick_end(self, context):
+        _picking.pop(getattr(self, "pick_area", None), None)
+        context.workspace.status_text_set(None)
+        if getattr(self, "pick_cross", False) and context.window:
+            context.window.cursor_modal_restore()
+            self.pick_cross = False
+        import_plan._redraw(None, context)
+
+    def pick_on_view(self, context, event):
+        """True if the mouse is over the 3D view itself; sets the cursor to match."""
+        inside = (context.area is not None
+                  and window_region(context.area, event.mouse_x, event.mouse_y) is not None)
+        if inside != self.pick_cross and context.window:
+            if inside:
+                context.window.cursor_modal_set('CROSSHAIR')
+            else:
+                context.window.cursor_modal_restore()
+            self.pick_cross = inside
+        return inside
+
+
+def _draw_banner():
+    """Orange frame and banner in the 3D view a pick runs in."""
+    context = bpy.context
+    area, region = context.area, context.region
+    text = _picking.get(area.as_pointer()) if area else None
+    if not text or region is None:
+        return
+    scale = context.preferences.view.ui_scale
+    w, h = region.width, region.height
+    shader = gpu.shader.from_builtin('UNIFORM_COLOR')
+
+    def rects(color, boxes):
+        verts = []
+        for x0, y0, x1, y1 in boxes:
+            verts += [(x0, y0), (x1, y0), (x1, y1), (x0, y0), (x1, y1), (x0, y1)]
+        batch = batch_for_shader(shader, 'TRIS', {"pos": verts})
+        shader.uniform_float("color", color)
+        batch.draw(shader)
+
+    gpu.state.blend_set('ALPHA')
+    t = 3 * scale
+    rects(PICK_COLOR, [(0, 0, w, t), (0, h - t, w, h), (0, 0, t, h), (w - t, 0, w, h)])
+    font = 0
+    blf.size(font, 15 * scale)
+    tw, th = blf.dimensions(font, text)
+    pad = 8 * scale
+    x = max(pad, (w - tw) / 2)
+    y = h - 70 * scale
+    rects((0.08, 0.08, 0.08, 0.85), [(x - pad, y - pad, x + tw + pad, y + th + pad)])
+    rects(PICK_COLOR, [(x - pad, y - pad, x + tw + pad, y - pad + 2 * scale)])
+    gpu.state.blend_set('NONE')
+    blf.color(font, *PICK_COLOR)
+    blf.position(font, x, y, 0)
+    blf.draw(font, text)
 
 
 def mouse_to_sheet(area, event, obj):
@@ -271,7 +364,7 @@ def snap_to_cross(pg, x, y):
     return center[0] / w * pg.width, (1 - center[1] / h) * pg.height
 
 
-class PlanPickOperator(bpy.types.Operator):
+class PlanPickOperator(PickMode, bpy.types.Operator):
     """Click points on the plan in the viewport"""
     bl_idname = "bii_plan.pick"
     bl_label = "Pick on Plan"
@@ -279,17 +372,20 @@ class PlanPickOperator(bpy.types.Operator):
 
     mode: EnumProperty(items=[
         ('CROP', "Crop Rectangle", "Click two corners of the part of the sheet to keep"),
-        ('GEOREF', "Add Grid Crosses", "Click grid crosses, then enter their coordinates"),
-        ('ALIGN', "Add Align Points", "Click sheet points; each goes to the 3D cursor's "
+        ('GEOREF', "Add Grid Cross", "Click a grid cross, then enter its coordinates"),
+        ('ALIGN', "Add Align Point", "Click a sheet point; it goes to the 3D cursor's "
          "position at the time of the click")])
+    multiple: BoolProperty(name="Several", options={'SKIP_SAVE'},
+                           description="Add several points, until Esc or right click")
 
     @classmethod
     def description(cls, context, properties):
         return {'CROP': "Click two corners of the part of the sheet to keep",
-                'GEOREF': "Click grid crosses on the plan. From the third point on, "
-                          "their coordinates are predicted",
-                'ALIGN': "Click points on the sheet. Each one goes to the position of "
-                         "the 3D cursor at the time of the click"}[properties.mode]
+                'GEOREF': "Click a grid cross on the plan. From the third point on, the "
+                          "coordinates are predicted.\nShift-click: add several, until Esc",
+                'ALIGN': "Click a point on the sheet. It goes to the position of the 3D "
+                         "cursor at the time of the click.\nShift-click: add several, "
+                         "until Esc"}[properties.mode]
 
     @classmethod
     def poll(cls, context):
@@ -297,31 +393,42 @@ class PlanPickOperator(bpy.types.Operator):
         return (obj is not None and obj.bii_plan.is_plan and context.area
                 and context.area.type == 'VIEW_3D')
 
+    def hint(self):
+        if self.mode == 'CROP':
+            if _pending_crop.get(self.obj_name):
+                return "CROP: click the opposite corner   ·   Esc: cancel"
+            return "CROP: click the first corner of the part to keep   ·   Esc: cancel"
+        what = "GRID CROSS" if self.mode == 'GEOREF' else "ALIGN POINT"
+        if not self.multiple:
+            where = ("click a grid cross on the plan" if self.mode == 'GEOREF' else
+                     "click the sheet point that goes to the 3D cursor")
+            return f"ADD {what}: {where}   ·   Esc: cancel"
+        where = ("click grid crosses on the plan" if self.mode == 'GEOREF' else
+                 "click sheet points, Shift + right click moves the 3D cursor")
+        return f"ADD {what}S: {where}   ·   {self.added} added   ·   Esc / right click: done"
+
     def invoke(self, context, event):
         if self.mode == 'CROP' and context.object.mode != 'OBJECT':
             self.report({'ERROR'}, "Crop in Object Mode, or edit the outline in Edit Mode")
             return {'CANCELLED'}
         self.obj_name = context.object.name
         self.added = 0
+        self.multiple = self.mode != 'CROP' and (self.multiple or event.shift)
         _pending_crop.pop(self.obj_name, None)
-        hints = {'CROP': "Click the first corner of the part to keep",
-                 'GEOREF': "Click grid crosses",
-                 'ALIGN': "Click sheet points (each goes to the 3D cursor)"}
-        context.workspace.status_text_set(f"{hints[self.mode]}   Esc / Right click: done")
-        context.window_manager.modal_handler_add(self)
+        self.pick_start(context, self.hint())
         return {'RUNNING_MODAL'}
 
     def finish(self, context):
-        context.workspace.status_text_set(None)
+        self.pick_end(context)
         _pending_crop.pop(self.obj_name, None)
         clear_pixel_cache()  # a full sheet takes about 200 MB as gray pixels
-        import_plan._redraw(None, context)
 
     def modal(self, context, event):
         obj = bpy.data.objects.get(self.obj_name)
         if obj is None:
             self.finish(context)
             return {'CANCELLED'}
+        on_view = self.pick_on_view(context, event)
         if event.type == 'RIGHTMOUSE' and event.shift:
             return {'PASS_THROUGH'}  # Shift + right click places the 3D cursor
         if event.type in {'ESC', 'RIGHTMOUSE', 'RET'} and event.value == 'PRESS':
@@ -329,7 +436,7 @@ class PlanPickOperator(bpy.types.Operator):
             return {'FINISHED'} if self.added else {'CANCELLED'}
         if event.type != 'LEFTMOUSE' or event.value != 'PRESS':
             return {'PASS_THROUGH'}
-        if window_region(context.area, event.mouse_x, event.mouse_y) is None:
+        if not on_view:
             return {'PASS_THROUGH'}  # the sidebar, so values can be typed meanwhile
         point = mouse_to_sheet(context.area, event, obj)
         if point is None:
@@ -340,8 +447,7 @@ class PlanPickOperator(bpy.types.Operator):
             first = _pending_crop.get(self.obj_name)
             if first is None:
                 _pending_crop[self.obj_name] = point
-                context.workspace.status_text_set("Click the opposite corner   Esc: cancel")
-                import_plan._redraw(None, context)
+                self.pick_hint(context, self.hint())
                 return {'RUNNING_MODAL'}
             import_plan.set_sheet_rectangle(obj, *first, *point)
             if pg.full_sheet:
@@ -358,6 +464,10 @@ class PlanPickOperator(bpy.types.Operator):
             pair.target = context.scene.cursor.location
             pg.pair_index = len(pg.pairs) - 1
         self.added += 1
+        if not self.multiple:
+            self.finish(context)
+            return {'FINISHED'}
+        self.pick_hint(context, self.hint())
         import_plan._redraw(None, context)
         return {'RUNNING_MODAL'}
 
@@ -832,20 +942,77 @@ class BII_UL_plan_pairs(bpy.types.UIList):
 
 
 def _plan(context):
-    obj = context.object
-    return obj if obj is not None and obj.bii_plan.is_plan else None
+    """The active plan, if it is the only plan selected; else None.
+
+    Georeference, Kilometrierung, neighbor sheets and Align to Scene place
+    one plan, so their panels show only then.
+    """
+    plans = import_plan.selected_plans(context)
+    if len(plans) != 1 or plans[0] != context.object:
+        return None
+    return plans[0]
+
+
+def _draw_view_hints(layout, context):
+    space = context.space_data
+    shading = getattr(space, "shading", None)
+    if shading and shading.type == 'SOLID' and shading.color_type != 'TEXTURE':
+        row = layout.row(align=True)
+        row.label(text="No image in Solid view", icon='ERROR')
+        row.prop_enum(shading, "color_type", 'TEXTURE', text="Show")
+    view = context.scene.view_settings
+    if (shading and shading.type in {'MATERIAL', 'RENDERED'}
+            and view.view_transform != 'Standard'):
+        wrapped_label(layout, context, f"View Transform {view.view_transform} pales the "
+                      "plan's colors and contrast. Standard shows them as printed",
+                      'ERROR')
+        layout.prop_enum(view, "view_transform", 'Standard', text="Use Standard")
+
+
+def _draw_several(layout, context, plans):
+    """The sidebar with several plans selected: only what applies to all of them."""
+    col = layout.column(align=True)
+    col.label(text=f"{len(plans)} plans selected", icon='IMAGE_DATA')
+    images = {o.bii_plan.image.name: o.bii_plan.image for o in plans if o.bii_plan.image}
+    row = col.row(align=True)
+    row.label(text=f"{sum(import_plan.image_megabytes(i) for i in images.values()):.0f} MB RAM "
+              f"for {len(images)} images")
+    row.operator(import_plan.PlanResolutionOperator.bl_idname, text="", icon='IMAGE_REFERENCE')
+    if any(import_plan.outline_off_sheet(o) for o in plans):
+        box = layout.box()
+        wrapped_label(box, context, "The outline of a plan lies outside its sheet: select it "
+                      "alone for details", 'ERROR')
+    multi = context.scene.bii_plan_multi
+    layout.use_property_split = True
+    layout.use_property_decorate = False
+    for name, text, kwargs in (("massstab", "Maßstab 1:", {}),
+                               ("orientation", "Orientation", {"expand": True}),
+                               ("opacity", "Opacity", {}),
+                               ("background", "Background", {}),
+                               ("full_sheet", "Full Sheet", {})):
+        mixed = import_plan.values_differ(plans, name)
+        layout.prop(multi, name, text=text + (" (mixed)" if mixed else ""), **kwargs)
+    layout.use_property_split = False
+    layout.operator(import_plan.PlanCropResetOperator.bl_idname, icon='LOOP_BACK')
+    wrapped_label(layout, context, "A change goes to all selected plans. To crop, "
+                  "georeference or place a plan, select it alone", 'INFO')
+    _draw_view_hints(layout, context)
 
 
 class VIEW3D_PT_bii_plan(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_label = "Plan"
 
     def draw(self, context):
         layout = self.layout
         obj = _plan(context)
         if obj is None:
+            plans = import_plan.selected_plans(context)
+            if plans:
+                _draw_several(layout, context, plans)
+                return
             layout.operator(import_plan.ImportPlanOperator.bl_idname, icon='IMPORT')
             layout.label(text="Select a plan to edit it")
             return
@@ -877,28 +1044,17 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
         op.mode = 'CROP'
         row.operator(import_plan.PlanCropResetOperator.bl_idname, text="", icon='LOOP_BACK')
         layout.label(text="Or edit the outline in Edit Mode", icon='INFO')
-        space = context.space_data
-        shading = getattr(space, "shading", None)
-        if shading and shading.type == 'SOLID' and shading.color_type != 'TEXTURE':
-            row = layout.row(align=True)
-            row.label(text="No image in Solid view", icon='ERROR')
-            row.prop_enum(shading, "color_type", 'TEXTURE', text="Show")
-        view = context.scene.view_settings
-        if (shading and shading.type in {'MATERIAL', 'RENDERED'}
-                and view.view_transform != 'Standard'):
-            wrapped_label(layout, context, f"View Transform {view.view_transform} pales the "
-                          "plan's colors and contrast. Standard shows them as printed",
-                          'ERROR')
-            layout.prop_enum(view, "view_transform", 'Standard', text="Use Standard")
+        _draw_view_hints(layout, context)
 
 
 class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Georeference"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 0
 
     @classmethod
     def poll(cls, context):
@@ -1018,7 +1174,7 @@ CRS_HELP = (
 class VIEW3D_PT_bii_plan_crs_help(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan_georef"
     bl_label = "Which Coordinate System?"
     bl_options = {'DEFAULT_CLOSED'}
@@ -1033,10 +1189,11 @@ class VIEW3D_PT_bii_plan_crs_help(bpy.types.Panel):
 class VIEW3D_PT_bii_plan_align(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
-    bl_category = "BII Import"
+    bl_category = "BII Plan"
     bl_parent_id = "VIEW3D_PT_bii_plan"
     bl_label = "Align to Scene"
     bl_options = {'DEFAULT_CLOSED'}
+    bl_order = 3
 
     @classmethod
     def poll(cls, context):
@@ -1072,18 +1229,22 @@ classes = (PlanPickOperator, PlanOriginFromUmgebungOperator, PlanGeoreferenceOpe
 
 
 def register():
-    global _draw_handle
+    global _draw_handle, _banner_handle
     for cls in classes:
         bpy.utils.register_class(cls)
     _draw_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_overlay, (), 'WINDOW',
                                                           'POST_PIXEL')
+    _banner_handle = bpy.types.SpaceView3D.draw_handler_add(_draw_banner, (), 'WINDOW',
+                                                            'POST_PIXEL')
 
 
 def unregister():
-    global _draw_handle
-    if _draw_handle is not None:
-        bpy.types.SpaceView3D.draw_handler_remove(_draw_handle, 'WINDOW')
-        _draw_handle = None
+    global _draw_handle, _banner_handle
+    for handle in (_draw_handle, _banner_handle):
+        if handle is not None:
+            bpy.types.SpaceView3D.draw_handler_remove(handle, 'WINDOW')
+    _draw_handle = _banner_handle = None
+    _picking.clear()
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     _pixel_cache.clear()

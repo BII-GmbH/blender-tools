@@ -22,7 +22,7 @@ from bpy.props import (BoolProperty, CollectionProperty, EnumProperty, FloatProp
                        FloatVectorProperty, IntProperty, PointerProperty, StringProperty)
 from bpy_extras.io_utils import ImportHelper
 
-from . import plan_geo
+from . import plan_geo, plan_gpu
 
 NODE_GROUP = "BII Plan Sheet"
 MODIFIER = "BII Plan Sheet"
@@ -32,11 +32,34 @@ SHEET_TOLERANCE = 1e-5  # paper meters a vertex may lie outside the sheet
 RESOLUTIONS = [
     ('16384', "16384 px (full)", "Long side 16384 pixels, the most GPUs show. About 1 GB of "
      "RAM for a full A0 sheet"),
-    ('8192', "8192 px", "Long side 8192 pixels, a quarter of the memory of 16384"),
+    ('8192', "8192 px", "Long side 8192 pixels, a quarter of the memory of 16384. Enough to "
+     "read most plans"),
     ('4096', "4096 px", "Long side 4096 pixels"),
     ('2048', "2048 px", "Long side 2048 pixels, for overview plans"),
     ('1024', "1024 px", "Long side 1024 pixels"),
 ]
+CHECK_GPU_DESCRIPTION = ("Import only what fits into the GPU memory that is left. Blender "
+                         "crashes when the viewport draws more plans than the GPU can hold")
+
+
+def gpu_shortage(path, page_index, dpi, long_side):
+    """None if the plan fits into the GPU memory left, else the reason it does not."""
+    from . import plan_raster
+    try:
+        w, h = plan_raster.pixel_size(path, page_index, dpi, plan_raster.MAX_SIDE)
+    except Exception:  # unreadable: the import itself reports it
+        return None
+    factor = min(1.0, long_side / max(w, h))
+    need = plan_gpu.texture_megabytes(w * factor, h * factor)
+    left, how = plan_gpu.budget()
+    if need <= left:
+        return None
+    text = (f"Not enough GPU memory for {os.path.basename(path)}: it needs about {need:.0f} MB "
+            f"at {long_side} px, {max(0.0, left):.0f} MB are left ({how}). ")
+    fit = plan_gpu.fitting_resolution(w, h, left, [int(r[0]) for r in RESOLUTIONS])
+    if fit and fit < long_side:
+        text += f"At {fit} px it fits. "
+    return text + plan_gpu.advice() + ". Blender would crash drawing it"
 
 
 # ---------------------------------------------------------------- properties
@@ -273,10 +296,11 @@ class PlanSettings(bpy.types.PropertyGroup):
                       description="Coordinate system of the grid crosses on the plan")
     utm_zone: IntProperty(name="UTM Zone", min=1, max=60, default=32, update=_crs_changed,
                           description="UTM zone, for eastings without the zone in front")
-    snap: BoolProperty(name="Snap to Crosses", default=True,
-                       description="Move each clicked point to the center of the "
-                       "nearest grid cross")
-    grid_spacing: IntProperty(name="Grid Spacing", min=0, default=0, update=_redraw,
+    snap: BoolProperty(name="Snap to Crosses", default=False,
+                       description="Move each clicked point to the center of the nearest "
+                       "dark mark, meant for grid crosses that stand alone. Lines or text "
+                       "near the cross can pull the point off")
+    grid_spacing: IntProperty(name="Grid Spacing", min=0, default=100, update=_redraw,
                               description="Distance between grid crosses in meters. "
                               "0: from the entered coordinates")
     show_grid: BoolProperty(name="Show Grid", default=True, update=_redraw,
@@ -289,6 +313,76 @@ class PlanSettings(bpy.types.PropertyGroup):
     pair_index: IntProperty()
     fit_scale: BoolProperty(name="Fit Scale", default=False,
                             description="Also change the scale. Off keeps the Maßstab")
+
+
+# ---------------------------------------------------------------- several plans
+
+def is_plan(obj):
+    return obj is not None and getattr(obj, "bii_plan", None) is not None and obj.bii_plan.is_plan
+
+
+def selected_plans(context):
+    """The selected plans, the active one first (also when it is not selected)."""
+    active = context.object
+    plans = [active] if is_plan(active) else []
+    plans += [o for o in context.selected_objects if is_plan(o) and o != active]
+    return plans
+
+
+def values_differ(plans, name):
+    """True if the plans have different values of a PlanSettings property."""
+    values = {getattr(o.bii_plan, name) for o in plans}
+    if all(isinstance(v, float) for v in values):
+        values = {round(v, 4) for v in values}
+    return len(values) > 1
+
+
+def _all_plans(name, items=None, default=0.0):
+    """get / set of a PlanMultiSettings property: reads the active plan, sets all
+    selected plans. items: the enum items, whose index get and set use. default:
+    the value without a selected plan."""
+    def get(self):
+        plans = selected_plans(bpy.context)
+        value = getattr(plans[0].bii_plan, name) if plans else None
+        if items is not None:
+            keys = [i[0] for i in items]
+            return keys.index(value) if value in keys else 0
+        return value if value is not None else default
+
+    def set(self, value):
+        if items is not None:
+            value = items[value][0]
+        for o in selected_plans(bpy.context):
+            if getattr(o.bii_plan, name) != value:
+                setattr(o.bii_plan, name, value)
+    return get, set
+
+
+ORIENTATIONS = [('FLAT', "Flat", "Lageplan: lies on the ground (XY)"),
+                ('UPRIGHT', "Upright", "Ansicht or Schnitt: stands upright (XZ)")]
+
+
+class PlanMultiSettings(bpy.types.PropertyGroup):
+    """The settings of all selected plans at once, for the sidebar with several plans
+    selected. Shows the active plan's values; a change goes to all of them.
+
+    On the scene, not the window manager, so a change makes an undo step."""
+    massstab: FloatProperty(name="Maßstab", description="Scale of the selected plans, 1:x",
+                            get=_all_plans("massstab", default=1000.0)[0],
+                            set=_all_plans("massstab")[1],
+                            min=1e-6, soft_min=1, soft_max=100000, precision=1, step=100)
+    orientation: EnumProperty(name="Orientation", items=ORIENTATIONS,
+                              get=_all_plans("orientation", ORIENTATIONS)[0],
+                              set=_all_plans("orientation", ORIENTATIONS)[1])
+    opacity: FloatProperty(name="Opacity", min=0, max=1, subtype='FACTOR',
+                           get=_all_plans("opacity", default=1.0)[0], set=_all_plans("opacity")[1],
+                           description="Opacity of the selected plans")
+    background: FloatProperty(name="Background", min=0, max=1, subtype='FACTOR',
+                              get=_all_plans("background")[0], set=_all_plans("background")[1],
+                              description="Opacity of the white paper of the selected plans")
+    full_sheet: BoolProperty(name="Full Sheet", get=_all_plans("full_sheet", default=False)[0],
+                             set=_all_plans("full_sheet")[1],
+                             description="Show the whole sheets instead of their cropped parts")
 
 
 # ---------------------------------------------------------------- sheet setup
@@ -455,8 +549,57 @@ def plan_material(name, image):
     out = nodes.new('ShaderNodeOutputMaterial')
     out.location = (250, 100)
     links.new(fade.outputs[0], out.inputs["Surface"])
+    add_export_shader(mat)
     nodes.active = tex  # the image Solid view shows with Color: Texture
     return mat
+
+
+EXPORT_SHADER = "Export Shader"
+EXPORT_OUTPUT = "Export Output"
+
+
+def add_export_shader(mat):
+    """Add a Principled BSDF with the plan image as Base Color, for FBX export.
+
+    The FBX exporter reads a material only as a Principled BSDF linked to a
+    Material Output; the plan's own shader (a tinted Transparent BSDF and an
+    Emission) means nothing to it, so the texture got lost. The Principled
+    BSDF goes to a second Material Output that is not the active one, so
+    Blender still draws and renders the plan's own shader. Opacity and
+    Background are not exported. Returns True if the shader was added.
+    """
+    if mat is None or mat.node_tree is None:
+        return False
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    if nodes.get(EXPORT_SHADER) is not None:
+        return False
+    tex = next((n for n in nodes if n.type == 'TEX_IMAGE'), None)
+    if tex is None:
+        return False
+    outputs = [n for n in nodes if n.type == 'OUTPUT_MATERIAL']
+    active = next((n for n in outputs if n.is_active_output), outputs[0] if outputs else None)
+    bsdf = nodes.new('ShaderNodeBsdfPrincipled')
+    bsdf.name = bsdf.label = EXPORT_SHADER
+    bsdf.location = (-200, -350)
+    bsdf.inputs["Roughness"].default_value = 1.0
+    links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
+    out = nodes.new('ShaderNodeOutputMaterial')
+    out.name = out.label = EXPORT_OUTPUT
+    out.location = (250, -350)
+    links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    out.is_active_output = False
+    if active is not None:
+        active.is_active_output = True
+    return True
+
+
+@bpy.app.handlers.persistent
+def _add_export_shaders(*_args):
+    """Give plans imported with an older version the shader for FBX export."""
+    for obj in bpy.data.objects:
+        pg = getattr(obj, "bii_plan", None)
+        if pg is not None and pg.is_plan and pg.material is not None:
+            add_export_shader(pg.material)
 
 
 def load_plan_image(png_path):
@@ -683,7 +826,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         description="Opacity of the white paper, can be changed later. 0: the plan lies on "
         "the scene like a print on tracing paper, the lines over maps and models. 1: the "
         "plan as printed")
-    resolution: EnumProperty(name="Resolution", items=RESOLUTIONS, default='16384',
+    resolution: EnumProperty(name="Resolution", items=RESOLUTIONS, default='8192',
                              description="Long side of the plan image. Can be changed later")
     # SKIP_SAVE: page and resolution belong to one file, not to the next import.
     page: IntProperty(name="PDF Page", default=1, min=1, options={'SKIP_SAVE'})
@@ -691,6 +834,8 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
                        options={'SKIP_SAVE'},
                        description="Pixels per inch for PDF pages. 0: the resolution "
                        "of the scan in the PDF, 300 for vector drawings")
+    check_gpu: BoolProperty(name="Check GPU Memory", default=True, options={'SKIP_SAVE'},
+                            description=CHECK_GPU_DESCRIPTION)
 
     def draw(self, context):
         layout = self.layout
@@ -702,6 +847,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         col = layout.column(heading="PDF")
         col.prop(self, "page")
         col.prop(self, "dpi")
+        layout.prop(self, "check_gpu")
 
     def invoke(self, context, event):
         # A dropped file has its path set: show the options, not the file browser.
@@ -714,6 +860,11 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
             page_index, page_count = 0, 1
             if os.path.splitext(path)[1].lower() in plan_raster.PDF_EXTENSIONS:
                 page_index, page_count = self.page - 1, plan_raster.pdf_page_count(path)
+            if self.check_gpu:
+                shortage = gpu_shortage(path, page_index, self.dpi, int(self.resolution))
+                if shortage:
+                    self.report({'ERROR'}, shortage)
+                    return {'CANCELLED'}
             if context.window:
                 context.window.cursor_set('WAIT')
             sheet = plan_raster.downscale(plan_raster.load(path, page_index, self.dpi),
@@ -745,19 +896,19 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
 
 
 class PlanCropResetOperator(bpy.types.Operator):
-    """Show the whole sheet again, removing the crop"""
+    """Show the whole sheet again, removing the crop. Works on all selected plans"""
     bl_idname = "bii_plan.crop_reset"
     bl_label = "Reset Crop"
     bl_options = {'REGISTER', 'UNDO'}
 
     @classmethod
     def poll(cls, context):
-        obj = context.object
-        return obj and obj.bii_plan.is_plan and obj.mode == 'OBJECT'
+        return context.mode == 'OBJECT' and bool(selected_plans(context))
 
     def execute(self, context):
-        pg = context.object.bii_plan
-        set_sheet_rectangle(context.object, 0, 0, pg.width, pg.height)
+        for obj in selected_plans(context):
+            pg = obj.bii_plan
+            set_sheet_rectangle(obj, 0, 0, pg.width, pg.height)
         return {'FINISHED'}
 
 
@@ -769,6 +920,8 @@ class PlanResolutionOperator(bpy.types.Operator):
     bl_options = {'REGISTER', 'UNDO'}
 
     resolution: EnumProperty(name="Long Side", items=RESOLUTIONS, default='8192')
+    check_gpu: BoolProperty(name="Check GPU Memory", default=True, options={'SKIP_SAVE'},
+                            description=CHECK_GPU_DESCRIPTION)
 
     @classmethod
     def poll(cls, context):
@@ -802,10 +955,35 @@ class PlanResolutionOperator(bpy.types.Operator):
             img = o.bii_plan.image
             size = f"{img.size[0]} x {img.size[1]} px" if img else "no image"
             col.label(text=f"{o.name}: {size}", icon='IMAGE_DATA')
+        layout.prop(self, "check_gpu")
+
+    @staticmethod
+    def gpu_increase(plans, long_side):
+        """GPU memory the plans take more at long_side (at most: an image only from
+        its own PNG cannot go up)."""
+        extra = 0.0
+        for o in plans:
+            img = o.bii_plan.image
+            if img is None or not o.visible_get() or max(img.size) >= long_side:
+                continue
+            factor = long_side / max(img.size)
+            extra += (plan_gpu.texture_megabytes(img.size[0] * factor, img.size[1] * factor)
+                      - plan_gpu.texture_megabytes(*img.size))
+        return extra
 
     def execute(self, context):
         long_side = int(self.resolution)
         plans = self._plans(context)
+        if self.check_gpu:
+            extra = self.gpu_increase(plans, long_side)
+            if extra > 0:
+                left, how = plan_gpu.budget()
+                if extra > left:
+                    self.report({'ERROR'}, f"Not enough GPU memory: {long_side} px needs about "
+                                f"{extra:.0f} MB more, {max(0.0, left):.0f} MB are left ({how}). "
+                                "Choose a lower resolution or fewer plans. Blender would crash "
+                                "drawing them")
+                    return {'CANCELLED'}
         before = after = 0.0
         problems, sources = [], set()
         if context.window:
@@ -847,19 +1025,28 @@ def menu_func_import(self, context):
     self.layout.operator(ImportPlanOperator.bl_idname, text="Plan (.pdf, .tif, .png, .jpg)")
 
 
-classes = (PlanPoint, AlignPair, PlanSettings, ImportPlanOperator, PlanCropResetOperator,
-           PlanResolutionOperator, IO_FH_bii_plan)
+classes = (PlanPoint, AlignPair, PlanSettings, PlanMultiSettings, ImportPlanOperator,
+           PlanCropResetOperator, PlanResolutionOperator, IO_FH_bii_plan)
 
 
 def register():
     for cls in classes:
         bpy.utils.register_class(cls)
     bpy.types.Object.bii_plan = PointerProperty(type=PlanSettings)
+    bpy.types.Scene.bii_plan_multi = PointerProperty(type=PlanMultiSettings)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
+    bpy.app.handlers.load_post.append(_add_export_shaders)
+    # The file open when the extension is enabled; bpy.data is not ready during register.
+    bpy.app.timers.register(_add_export_shaders, first_interval=0.1)
 
 
 def unregister():
+    if bpy.app.timers.is_registered(_add_export_shaders):
+        bpy.app.timers.unregister(_add_export_shaders)
+    if _add_export_shaders in bpy.app.handlers.load_post:
+        bpy.app.handlers.load_post.remove(_add_export_shaders)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
+    del bpy.types.Scene.bii_plan_multi
     del bpy.types.Object.bii_plan
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
