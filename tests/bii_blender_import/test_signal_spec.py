@@ -24,7 +24,6 @@ class SpecTest(unittest.TestCase):
         for b in spec.BAUFORMEN:
             cfg = spec.config(b.key)
             self.assertTrue(spec.valid(b.key, cfg), b.key)
-            self.assertEqual(spec.name(b.key, cfg), b.label)
 
     def test_unknown_option_rejected(self):
         with self.assertRaises(ValueError):
@@ -72,7 +71,6 @@ class SpecTest(unittest.TestCase):
         self.assertTrue(spec.shown("zs3", "kennziffer", spec.config("zs3", ausfuehrung="tafel")))
         self.assertEqual(spec.all_aspects("ls"), ["Aus", "Sh0", "Sh1"])
         self.assertEqual(spec.symbol_elements("ne3", spec.config("ne3", streifen=2))[-1], ("bake", 2))
-        self.assertEqual(spec.name("lf7", cfg), "Geschwindigkeitssignal Lf7 Kennziffer 10")
         groups = {b.group for b in spec.BAUFORMEN}
         self.assertEqual(groups, set(spec.GROUPS))
 
@@ -121,15 +119,6 @@ class SymbolsTest(unittest.TestCase):
     def test_deterministic(self):
         els = spec.symbol_elements("hv_mehr", spec.config("hv_mehr", zs3="licht", kopf="zs7"))
         self.assertTrue((symbols.draw(els, 64) == symbols.draw(els, 64)).all())
-
-    def test_mask_scale_and_rotation(self):
-        els = spec.symbol_elements("ks_haupt", spec.config("ks_haupt"))
-        upright = symbols.mask(els, 2)
-        lying = symbols.mask(els, 2, rotation=90)
-        self.assertGreater(upright.shape[0], upright.shape[1])   # taller than wide
-        self.assertGreater(lying.shape[1], lying.shape[0])
-        self.assertAlmostEqual(upright.sum(), lying.sum(), delta=upright.sum() * 0.05)
-        self.assertGreater(symbols.mask(els, 4).sum(), upright.sum() * 3)
 
 
 if __name__ == "__main__":

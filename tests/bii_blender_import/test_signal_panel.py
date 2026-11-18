@@ -185,7 +185,7 @@ class PlaceTest(unittest.TestCase):
             libs[-1].name = "old signals"
             try:
                 ctx = bpy.context
-                self.assertEqual(signal_panel.library_path(ctx, "AUTO", "Ks-Vorsignal")[2], "test signals")
+                self.assertEqual(signal_panel.library_path(ctx, "", "Ks-Vorsignal")[2], "test signals")
                 self.assertIsNone(signal_panel.library_path(ctx, "old signals", "Ks-Vorsignal")[0])
                 self.assertIn("older version", signal_panel.missing_text(ctx, "old signals", "Ks-Vorsignal"))
             finally:
@@ -196,12 +196,23 @@ class PlaceTest(unittest.TestCase):
         scene.bii_signal.library = "test signals"
         bpy.context.view_layer.objects.active = None
         bpy.ops.bii_signal.set_bauform(bauform="lf7")
-        scene.bii_signal.kennziffer = 10
+        scene.bii_signal.picks.pick_kennziffer = 10
         self.assertEqual(scene.bii_signal.get()["kennziffer"], 10)
         self.assertEqual(bpy.ops.bii_signal.place(), {'FINISHED'})
         obj = bpy.context.active_object
         mod = signal_panel.signal_modifier(obj)
         self.assertEqual(signal_panel.object_state(mod)[1]["kennziffer"], 10)
+        self.assertEqual(obj.name, "Geschwindigkeitssignal 100 km/h Lf7")
+        scene.bii_signal.picks.pick_kennziffer = 6  # on the placed signal: its name follows
+        self.assertEqual(obj.name, "Geschwindigkeitssignal 60 km/h Lf7")
+
+        other = bpy.data.objects.new("not a signal", None)
+        scene.collection.objects.link(other)
+        other.select_set(True)
+        obj.select_set(True)
+        bpy.ops.bii_signal.turn()
+        self.assertEqual(other.rotation_euler.z, 0.0)  # only signals turn
+        self.assertNotEqual(obj.rotation_euler.z, 0.0)
 
         def faces():
             bpy.context.view_layer.update()

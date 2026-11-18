@@ -183,9 +183,9 @@ Options that do not fit the rest are greyed out. Kennziffer is a number field. S
 
 - With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
 - Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
-- The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: Automatic takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
+- The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: left empty, it takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
 
-The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library and can render symbols at plan scale as templates, for finding signals on imported plans later (`signal_symbols.mask`).
+The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library.
 
 ## Tests
 

@@ -13,11 +13,11 @@ import json
 import math
 import os
 import re
+import time
 
 import bpy
 import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
-from mathutils import Vector
 
 from . import plan_km, plan_place, signal_spec as spec, signal_symbols as symbols
 from .import_plan import _redraw
@@ -138,26 +138,6 @@ def object_state(mod):
 
 # ---------------------------------------------------------------- draft (for placing)
 
-def _bauform_items(self, context):
-    return [(b.key, b.label, "") for b in spec.BAUFORMEN]
-
-
-def _library_items(self, context):
-    items = [("AUTO", "Automatic", f"First asset library that has {LIBRARY_FILE}")]
-    for lib in context.preferences.filepaths.asset_libraries:
-        if os.path.isfile(os.path.join(bpy.path.abspath(lib.path), LIBRARY_FILE)):
-            items.append((lib.name, lib.name, lib.path))
-    return items
-
-
-def _kennziffer_changed(self, context):
-    cfg = self.get()
-    if "kennziffer" in cfg:
-        cfg["kennziffer"] = self.kennziffer
-        self.set(cfg)
-    _redraw(self, context)
-
-
 # ---------------------------------------------------------------- big icon pickers
 # template_icon_view is the only widget that shows icons large: its button at the end of a row shows the
 # chosen option, a click opens all options as large icons.
@@ -170,8 +150,26 @@ def _option_icon(bauform, key, value, cfg):
     return _icon(els, TILE_SIZE) if els else 'X'
 
 
-def _pick_option_items(key):
+def _pick(key):
+    """Property of an element on the active signal or the draft: an enum of option icons,
+    or an int for a number element."""
     e = spec.ELEMENT[key]
+
+    def get(self):
+        cfg = state(bpy.context)[1]
+        if key not in cfg:
+            return 0 if e.number else -1
+        return cfg[key] if e.number else e.values().index(cfg[key])
+
+    def set(self, n):
+        b, cfg, aspect, _ = state(bpy.context)
+        if key in cfg and (e.number or 0 <= n < len(e.values())):
+            cfg[key] = n if e.number else e.values()[n]
+            apply(bpy.context, b, cfg, aspect)
+
+    if e.number:
+        return IntProperty(name=e.label, description=e.description, min=e.number[0], max=e.number[1],
+                           get=get, set=set)
 
     def items(self, context):
         b, cfg, _, _ = state(context)
@@ -182,16 +180,6 @@ def _pick_option_items(key):
                     out.append((str(value), label, f"{e.label}: {label}", _option_icon(b, key, value, cfg), n))
         _pick_items[key] = out or [("NONE", "", "", 'BLANK1', -1)]
         return _pick_items[key]
-
-    def get(self):
-        cfg = state(bpy.context)[1]
-        return e.values().index(cfg[key]) if key in cfg else -1
-
-    def set(self, n):
-        b, cfg, aspect, _ = state(bpy.context)
-        if key in cfg and 0 <= n < len(e.values()):
-            cfg[key] = e.values()[n]
-            apply(bpy.context, b, cfg, aspect)
 
     return EnumProperty(name=e.label, description=e.description, items=items, get=get, set=set)
 
@@ -210,13 +198,14 @@ def _pick_bauform_get(self):
 def _pick_bauform_set(self, n):
     try:
         choose_bauform(bpy.context, spec.BAUFORMEN[n].key)
-    except RuntimeError as e:
-        print(f"BII Signal: {e}")
+    except RuntimeError as e:  # a property setter cannot report: show it in a popup
+        text = str(e)
+        bpy.context.window_manager.popup_menu(lambda menu, _c: menu.label(text=text), title="BII Signal", icon='ERROR')
 
 
-# Scene.bii_signal.picks: one enum per element (pick_<key>) and pick_bauform
+# Scene.bii_signal.picks: one property per element (pick_<key>) and pick_bauform
 SignalPicks = type("SignalPicks", (bpy.types.PropertyGroup,), {"__annotations__": {
-    **{f"pick_{e.key}": _pick_option_items(e.key) for e in spec.ELEMENTS if not e.number},
+    **{f"pick_{e.key}": _pick(e.key) for e in spec.ELEMENTS},
     "pick_bauform": EnumProperty(name="Bauform", description="Signal type; a placed signal is replaced in place", items=_pick_bauform_items,
                                  get=_pick_bauform_get, set=_pick_bauform_set),
 }})
@@ -224,13 +213,11 @@ SignalPicks = type("SignalPicks", (bpy.types.PropertyGroup,), {"__annotations__"
 
 class SignalDraft(bpy.types.PropertyGroup):
     picks: bpy.props.PointerProperty(type=SignalPicks)
-    bauform: EnumProperty(name="Bauform", items=_bauform_items, update=_redraw)
+    bauform: EnumProperty(name="Bauform", items=[(b.key, b.label, "") for b in spec.BAUFORMEN], update=_redraw)
     config: StringProperty(name="Configuration", default="{}")
-    kennziffer: IntProperty(name="Kennziffer", min=0, max=16, update=_kennziffer_changed,
-                            description=spec.ELEMENT["kennziffer"].description)
     aspect: StringProperty(name="Signalbild", default="Aus")
-    library: EnumProperty(name="Library", items=_library_items,
-                          description=f"Asset library to take the signal from (it needs {LIBRARY_FILE})")
+    library: StringProperty(name="Library", description=f"Asset library to take the signal from (it needs "
+                            f"{LIBRARY_FILE}). Empty: the first one that has the signal")
     align_to_track: BoolProperty(
         name="Align to Track", default=True,
         description="Turn the signal to the nearest Umgebung track axis (Gleisachse), lamps facing along it")
@@ -238,8 +225,6 @@ class SignalDraft(bpy.types.PropertyGroup):
     def get(self):
         cfg = json.loads(self.config or "{}")
         cfg = {k: v for k, v in cfg.items() if k in spec.config(self.bauform)}
-        if "kennziffer" in spec.config(self.bauform):
-            cfg["kennziffer"] = self.kennziffer
         return spec.fix(self.bauform, spec.config(self.bauform, **cfg))
 
     def set(self, cfg):
@@ -255,6 +240,18 @@ def state(context):
     return d.bauform, d.get(), d.aspect, None
 
 
+def write_signal(mod, bauform, cfg, aspect):
+    """Write a configuration and aspect (Aus if it lights nothing there) to a signal's modifier."""
+    values = spec.modifier_values(bauform, cfg)
+    values["Signalbild"] = spec.all_aspects(bauform).index(aspect if aspect in spec.aspects(bauform, cfg) else "Aus")
+    write_modifier(mod, values)
+
+
+def auto_named(obj, bauform, cfg):
+    """True if obj still has the name the panel gave it, i.e. the user did not rename it."""
+    return re.sub(r"\.\d{3}$", "", obj.name) in (spec.object_name(bauform, cfg), spec.BY_KEY[bauform].asset)
+
+
 def apply(context, bauform, cfg, aspect):
     """Store a configuration on the active signal or the draft."""
     cfg = spec.fix(bauform, cfg)
@@ -263,13 +260,9 @@ def apply(context, bauform, cfg, aspect):
     obj = _active(context)
     mod = signal_modifier(obj)
     if mod:
-        old = object_state(mod)
-        values = spec.modifier_values(bauform, cfg)
-        values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
-        write_modifier(mod, values)
-        # keep the name in step, unless the user renamed the signal
-        base = re.sub(r"\.\d{3}$", "", obj.name)
-        if base in (spec.object_name(old[0], old[1]), spec.BY_KEY[bauform].asset):
+        auto = auto_named(obj, *object_state(mod)[:2])
+        write_signal(mod, bauform, cfg, aspect)
+        if auto:  # keep the name in step, unless the user renamed the signal
             obj.name = spec.object_name(bauform, cfg)
     else:
         d = context.scene.bii_signal
@@ -383,12 +376,8 @@ def replace_signal(context, obj, old_bauform, old_cfg, aspect, bauform):
     cfg = _carry(old_cfg, bauform)
     mod = signal_modifier(new)
     if mod:
-        values = spec.modifier_values(bauform, cfg)
-        aspect = aspect if aspect in spec.aspects(bauform, cfg) else "Aus"
-        values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
-        write_modifier(mod, values)
-    name = obj.name
-    auto = re.sub(r"\.\d{3}$", "", name) in (spec.object_name(old_bauform, old_cfg), spec.BY_KEY[old_bauform].asset)
+        write_signal(mod, bauform, cfg, aspect)
+    name, auto = obj.name, auto_named(obj, old_bauform, old_cfg)
     selected = obj.select_get()
     bpy.data.objects.remove(obj)
     new.name = spec.object_name(bauform, cfg) if auto else name  # a renamed signal keeps its name
@@ -412,7 +401,7 @@ class SignalSetAspectOperator(bpy.types.Operator):
 
 
 class SignalTakeOperator(bpy.types.Operator):
-    """Use the active signal's setup for new signals (shown when no signal is selected)"""
+    """Use the active signal's setup for new signals: Place Signal places it when no signal is active"""
     bl_idname = "bii_signal.take"
     bl_label = "Use for Placing"
     bl_options = {'REGISTER', 'INTERNAL'}
@@ -427,46 +416,50 @@ class SignalTakeOperator(bpy.types.Operator):
         d.bauform = b
         d.set(cfg)
         d.aspect = aspect
-        if "kennziffer" in cfg:
-            d.kennziffer = cfg["kennziffer"]
         return {'FINISHED'}
 
 
-_asset_names = {}
+_asset_names = {}  # path -> (time looked at, modification time or None, names or None)
+RECHECK_SECONDS = 5
 
 
 def asset_names(path):
-    """Names of the composite signal assets in a .blend file: objects with their node group
-    "Signal <name>" (read once per file version). Older single assets of the same name do not count."""
-    key = (path, os.path.getmtime(path))
-    if key not in _asset_names:
-        with bpy.data.libraries.load(path) as (src, _dst):
-            groups = set(src.node_groups)
-            _asset_names[key] = {o for o in src.objects if f"Signal {o}" in groups}
-    return _asset_names[key]
+    """Names of the composite signal assets in a .blend file, or None without the file: objects with
+    their node group "Signal <name>". Older single assets of the same name do not count. The panel asks
+    on every redraw, so the file is looked at only every few seconds and read once per version."""
+    checked, mtime, names = _asset_names.get(path, (-math.inf, None, None))
+    if time.monotonic() - checked >= RECHECK_SECONDS:
+        new = os.path.getmtime(path) if os.path.isfile(path) else None
+        if new != mtime or names is None:
+            names = None
+            if new is not None:
+                with bpy.data.libraries.load(path) as (src, _dst):
+                    groups = set(src.node_groups)
+                    names = {o for o in src.objects if f"Signal {o}" in groups}
+        _asset_names[path] = (time.monotonic(), new, names)
+    return names
 
 
-def library_path(context, name="AUTO", asset=None):
+def library_path(context, name="", asset=None):
     """(path of DB_Signale.blend, import method, library name) of the asset library to use,
-    or (None, None, None). Automatic takes the first library whose DB_Signale.blend has the
+    or (None, None, None). Without a name, the first library whose DB_Signale.blend has the
     asset: an older library (without the Signal-Baukasten) is skipped."""
     for lib in context.preferences.filepaths.asset_libraries:
-        if name not in ("AUTO", "", lib.name):
+        if name not in ("", lib.name):
             continue
         path = os.path.join(bpy.path.abspath(lib.path), LIBRARY_FILE)
-        if not os.path.isfile(path):
-            continue
-        if asset is None or asset in asset_names(path):
+        names = asset_names(path)
+        if names is not None and (asset is None or asset in names):
             return path, getattr(lib, "import_method", 'APPEND_REUSE'), lib.name
     return None, None, None
 
 
 def missing_text(context, name, asset):
     if library_path(context, name)[0]:
-        which = "this library's" if name not in ("AUTO", "") else "every"
+        which = "this library's" if name else "every"
         return (f"{asset} is not in {which} {LIBRARY_FILE}: it is an older version without the Signal-Baukasten. "
                 "Choose another Library, or refresh the BII asset library.")
-    return (f"No asset library has {LIBRARY_FILE}. Add the BII asset library under "
+    return (f"{'This' if name else 'No'} asset library has {LIBRARY_FILE}. Add the BII asset library under "
             "Preferences > File Paths > Asset Libraries.")
 
 
@@ -539,10 +532,7 @@ class SignalPlaceOperator(bpy.types.Operator):
         context.view_layer.objects.active = obj
         mod = signal_modifier(obj)
         if mod:
-            values = spec.modifier_values(bauform, cfg)
-            aspect = aspect if aspect in spec.aspects(bauform, cfg) else "Aus"
-            values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
-            write_modifier(mod, values)
+            write_signal(mod, bauform, cfg, aspect)
         obj.name = spec.object_name(bauform, cfg)
         return {'FINISHED'}
 
@@ -555,11 +545,12 @@ class SignalTurnOperator(bpy.types.Operator):
 
     @classmethod
     def poll(cls, context):
-        return any(o.select_get() for o in context.view_layer.objects)
+        return any(signal_modifier(o) for o in context.selected_objects)
 
     def execute(self, context):
-        for o in [o for o in context.view_layer.objects if o.select_get()]:
-            o.rotation_euler.z += math.pi
+        for o in context.selected_objects:
+            if signal_modifier(o):
+                o.rotation_euler.z += math.pi
         return {'FINISHED'}
 
 
@@ -605,7 +596,7 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
             if not spec.shown(b, e.key, cfg):
                 continue
             if e.number:
-                draw_number(col, context, mod, e)
+                col.prop(picks, f"pick_{e.key}")
                 continue
             row, zoom = _split(col, len(spec.ELEMENT[e.key].options))
             for value, label, ok in spec.options(b, e.key, cfg):
@@ -633,7 +624,7 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         d = context.scene.bii_signal
         col = layout.column()
         col.use_property_split = True
-        col.prop(d, "library")
+        col.prop_search(d, "library", context.preferences.filepaths, "asset_libraries")
         col.prop(d, "align_to_track")
         row = layout.row(align=True)
         row.scale_y = 1.4
@@ -659,21 +650,6 @@ def _zoom(cell, picks, prop, visible=True):
         cell.template_icon_view(picks, prop, show_labels=False, scale=1.0, scale_popup=POPUP_SCALE)
     else:
         cell.label(text="")
-
-
-def draw_number(layout, context, mod, e):
-    """Number field of a number element: on the active signal's modifier, else on the draft."""
-    if mod is None:
-        layout.prop(context.scene.bii_signal, e.key, text=e.label)
-        return
-    sock = _inputs(mod).get(e.label)
-    if sock is None:
-        return
-    props = getattr(mod, "properties", None)
-    if props is not None and hasattr(props, "inputs"):
-        layout.prop(getattr(props.inputs, sock.identifier), "value", text=e.label)
-    else:
-        layout.prop(mod, f'["{sock.identifier}"]', text=e.label)
 
 
 classes = (

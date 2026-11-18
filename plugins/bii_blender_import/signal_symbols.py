@@ -10,8 +10,7 @@ A symbol is a list of elements, stacked from the foot of the mast upwards, for
 example [("foot",), ("stem", 14), ("ks_head", "bell", "full", False), ("chev",)].
 signal_spec.symbol_elements() builds this list for a signal configuration.
 
-draw() returns preview pixels; mask() renders a symbol at a given pixel scale and
-rotation, as a template for finding symbols on plan images later.
+draw() returns preview pixels.
 """
 
 import math
@@ -59,36 +58,12 @@ class Canvas:
                 ys += [p[2] - p[3], p[2] + p[3]]
         return min(xs), min(ys), max(xs), max(ys)
 
-    def rotated(self, degrees):
-        """Copy turned counterclockwise about the origin (the foot of the mast)."""
-        a = math.radians(degrees)
-        ca, sa = math.cos(a), math.sin(a)
-
-        def r(x, y):
-            return (x * ca - y * sa, x * sa + y * ca)
-
-        out = Canvas()
-        for p in self.prims:
-            if p[0] == "poly":
-                out.prims.append(("poly", [r(*q) for q in p[1]], p[2]))
-            else:
-                out.prims.append(("circ", *r(p[1], p[2]), p[3], p[4]))
-        return out
-
-    def gray(self, size=None, units_px=None, supersample=SUPERSAMPLE):
-        """Gray pixels (1 = paper, 0 = ink), rows from the bottom.
-
-        size: square image, symbol fitted into 84 % of it. units_px: pixels per
-        drawing unit instead, image just large enough for the symbol.
-        """
+    def gray(self, size=SIZE, supersample=SUPERSAMPLE):
+        """Gray pixels (1 = paper, 0 = ink) of a square image, symbol fitted into 84 % of it,
+        rows from the bottom."""
         x0, y0, x1, y1 = self.bounds()
-        if units_px:
-            w = max(1, int(math.ceil((x1 - x0) * units_px)) + 2)
-            h = max(1, int(math.ceil((y1 - y0) * units_px)) + 2)
-            scale = units_px * supersample
-        else:
-            w = h = size or SIZE
-            scale = 0.84 * w * supersample / max(x1 - x0, y1 - y0)
+        w = h = size
+        scale = 0.84 * w * supersample / max(x1 - x0, y1 - y0)
         nw, nh = w * supersample, h * supersample
         img = np.ones((nh, nw), np.float32)
         ox = nw / 2 - (x0 + x1) / 2 * scale
@@ -196,16 +171,6 @@ def _clip_right(pts):
 def draw(elements, size=SIZE):
     """Draw a symbol from its elements; returns RGBA pixels (size x size), rows from the bottom."""
     return build(elements).render(size)
-
-
-def mask(elements, units_px, rotation=0.0):
-    """Ink mask (1 = ink) of a symbol at units_px pixels per drawing unit, turned
-    counterclockwise by rotation degrees about the foot; rows from the bottom.
-
-    For matching symbols on plan images: one drawing unit is about 0.1 of the
-    head's width (a Ks head is 10 units wide).
-    """
-    return 1.0 - build(elements).rotated(rotation).gray(units_px=units_px)
 
 
 def _sh_bars(c, y0, filled_head):

@@ -17,7 +17,7 @@ A configuration is a dict {element key: option value}; config() fills in the
 defaults. Menu inputs on the modifier store the index of the option.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 # ---------------------------------------------------------------- Bauformen
 
@@ -30,7 +30,7 @@ class Bauform:
     system: str         # "Ks", "H/V" or "" (other signals)
     kind: str           # "haupt", "vor", "mehr" (Mehrabschnittssignal) or "zusatz" (other signals)
     group: str = ""     # panel group
-    short: str = ""     # short panel label
+    short: str = ""     # short label (asset tag)
 
     @property
     def is_main_signal(self):
@@ -199,8 +199,7 @@ def fix(bauform, cfg):
 
 
 def combinations(bauform):
-    """All valid configurations of a Bauform (for tests and later symbol detection);
-    number elements keep their default."""
+    """All valid configurations of a Bauform (for tests); number elements keep their default."""
     els = elements(bauform)
     out = [{}]
     for e in els:
@@ -247,7 +246,6 @@ def _hp_terms(cfg):
 
 def all_aspects(bauform):
     """Every aspect the "Signalbild" menu of the composite asset offers, in menu order ("Aus" first)."""
-    b = BY_KEY[bauform]
     extra = ["Hp0 + Sh1", "Hp0 + Zs1", "Hp0 + Zs7"]
     if bauform == "ks_haupt":
         return ["Aus", "Hp0", "Ks1", *extra, "Kennlicht"]
@@ -453,22 +451,3 @@ def _single_object_name(bauform, cfg):
                      [cfg["bauart"]])
     return " ".join(words + [tag])
 
-
-def name(bauform, cfg):
-    """Readable name of a configuration, e.g. "Ks-Hauptsignal Zs3 Licht, Zs1"."""
-    b = BY_KEY[bauform]
-    parts = []
-    for e in elements(bauform):
-        v = cfg[e.key]
-        if e.number:
-            if v and shown(bauform, e.key, cfg):
-                parts.append(f"{e.label} {v}")
-            continue
-        if v == e.default or v in ("ohne", False):
-            continue
-        if e.boolean:
-            parts.append(e.label if v else f"ohne {e.label}")
-        else:
-            parts.append(f"{e.label} {e.option_label(v)}" if e.key not in ("bedienung", "kopf", "hp")
-                         else e.option_label(v))
-    return b.label + (" " + ", ".join(parts) if parts else "")
