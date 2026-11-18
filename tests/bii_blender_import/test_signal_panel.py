@@ -46,21 +46,6 @@ class DraftTest(unittest.TestCase):
         bpy.ops.bii_signal.set_bauform(bauform="ks_haupt")
         self.assertEqual(d.get()["zs3"], "ohne")  # defaults for what ks_vor did not keep
 
-    def test_icon_pickers(self):
-        picks = bpy.context.scene.bii_signal.picks
-        picks.pick_bauform = "ks_haupt"
-        self.assertEqual(bpy.context.scene.bii_signal.bauform, "ks_haupt")
-        picks.pick_zs3 = "tafel"
-        picks.pick_sh1 = "True"
-        cfg = bpy.context.scene.bii_signal.get()
-        self.assertEqual((cfg["zs3"], cfg["sh1"]), ("tafel", True))
-        self.assertEqual(picks.pick_zs3, "tafel")
-        picks.pick_bauform = "hv_haupt"
-        with self.assertRaises(TypeError):  # Hp0/Hp2 does not fit Sh 1: not offered
-            picks.pick_hp = "hp02"
-        picks.pick_hp = "hp01"
-        self.assertEqual(bpy.context.scene.bii_signal.get()["hp"], "hp01")
-
     def test_aspect_falls_back_when_its_lights_go(self):
         bpy.ops.bii_signal.set_bauform(bauform="ks_haupt")
         bpy.ops.bii_signal.set_option(element="sh1", value="True")

@@ -160,11 +160,11 @@ The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images a
 
 Sidebar (N) > BII Signal places railway signals from a Lageplan and sets them up by their symbol: Ks and H/V Haupt-, Vor- and Mehrabschnittssignale, Zusatzsignale (Zs1, Zs2/Zs2v, Zs3, Zs3v, Zs6), Lf 6 and Lf 7, Ne 2, Ne 3 and Ne 4, and Lichtsperrsignale. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
 
-A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the top, the panel shows the symbol of the whole combination, to compare with the plan. Below it is one large tile per choice, showing the current option as its Lageplan symbol; a click on a tile shows all options as large symbols. The names are in the tooltips:
+A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the top, the panel shows the symbol of the whole combination, to compare with the plan. Below it, every option is a card with its Lageplan symbol, one row per choice; the bar under a card chooses it (blue: chosen, white card: nothing). The names are in the tooltips:
 
-| Tile | Lageplan symbol |
+| Row | Lageplan symbol |
 |---|---|
-| Bauform | Only for a new signal. Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bauform | Only for a new signal, the first rows. Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
 | Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
 | Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
 | Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |
@@ -179,7 +179,7 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the
 | Streifen | Ne 3 Vorsignalbake with 1 to 5 stripes |
 | Bauart | Lichtsperrsignal high on a mast, low, or low with Rangierkennlicht |
 
-Options that do not fit the rest are left out. Kennziffer is a number field below the tiles. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
+Options that do not fit the rest are greyed out. Kennziffer is a number field. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 
 - With a placed signal active, the panel changes that signal. Without one, it sets up a new signal.
 - Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
