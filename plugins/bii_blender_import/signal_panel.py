@@ -27,6 +27,10 @@ LIBRARY_FILE = "DB_Signale.blend"
 MODIFIER = "Signal"
 ICON_SIZE = 64
 PREVIEW_SIZE = 256
+TILE_SIZE = 128      # pixels of the option icons in the tiles and popups
+TILE_SCALE = 4.0     # tile size in UI units
+TILE_COLUMNS = 3
+POPUP_SCALE = 5.0
 
 _previews = None
 
@@ -155,7 +159,69 @@ def _kennziffer_changed(self, context):
     _redraw(self, context)
 
 
+# ---------------------------------------------------------------- big icon pickers
+# template_icon_view is the only clickable widget that draws icons large: one tile per element shows
+# the current option, a click opens all options as large icons. The texts are in the tooltips.
+
+_pick_items = {}   # Blender needs the item lists of dynamic enums kept alive
+
+
+def _option_icon(bauform, key, value, cfg):
+    els = spec.option_symbol(bauform, key, value, cfg)
+    return _icon(els, TILE_SIZE) if els else 'X'
+
+
+def _pick_option_items(key):
+    e = spec.ELEMENT[key]
+
+    def items(self, context):
+        b, cfg, _, _ = state(context)
+        out = []
+        if key in cfg:
+            for n, (value, label, ok) in enumerate(spec.options(b, key, cfg)):
+                if ok or cfg[key] == value:  # options that do not fit the rest are left out
+                    out.append((str(value), label, f"{e.label}: {label}", _option_icon(b, key, value, cfg), n))
+        _pick_items[key] = out or [("NONE", "", "", 'BLANK1', -1)]
+        return _pick_items[key]
+
+    def get(self):
+        cfg = state(bpy.context)[1]
+        return e.values().index(cfg[key]) if key in cfg else -1
+
+    def set(self, n):
+        b, cfg, aspect, _ = state(bpy.context)
+        if key in cfg and 0 <= n < len(e.values()):
+            cfg[key] = e.values()[n]
+            apply(bpy.context, b, cfg, aspect)
+
+    return EnumProperty(name=e.label, description=e.description, items=items, get=get, set=set)
+
+
+def _pick_bauform_items(self, context):
+    _pick_items["bauform"] = [
+        (b.key, b.label, f"{b.group}: {b.label}", _icon(spec.symbol_elements(b.key, spec.config(b.key)), TILE_SIZE), n)
+        for n, b in enumerate(spec.BAUFORMEN)]
+    return _pick_items["bauform"]
+
+
+def _pick_bauform_get(self):
+    return [b.key for b in spec.BAUFORMEN].index(bpy.context.scene.bii_signal.bauform)
+
+
+def _pick_bauform_set(self, n):
+    choose_bauform(bpy.context, spec.BAUFORMEN[n].key)
+
+
+# Scene.bii_signal.picks: one enum per element (pick_<key>) and pick_bauform
+SignalPicks = type("SignalPicks", (bpy.types.PropertyGroup,), {"__annotations__": {
+    **{f"pick_{e.key}": _pick_option_items(e.key) for e in spec.ELEMENTS if not e.number},
+    "pick_bauform": EnumProperty(name="Bauform", description="Signal type to place", items=_pick_bauform_items,
+                                 get=_pick_bauform_get, set=_pick_bauform_set),
+}})
+
+
 class SignalDraft(bpy.types.PropertyGroup):
+    picks: bpy.props.PointerProperty(type=SignalPicks)
     bauform: EnumProperty(name="Bauform", items=_bauform_items, update=_redraw)
     config: StringProperty(name="Configuration", default="{}")
     kennziffer: IntProperty(name="Kennziffer", min=0, max=16, update=_kennziffer_changed,
@@ -254,16 +320,21 @@ class SignalSetBauformOperator(bpy.types.Operator):
         return b.label if b else ""
 
     def execute(self, context):
-        d = context.scene.bii_signal
-        old = d.get()
-        d.bauform = self.bauform
-        new = spec.config(self.bauform)
-        for k in new:  # keep the options both Bauformen have
-            if k in old:
-                new[k] = old[k]
-        d.set(spec.fix(self.bauform, new))
-        _redraw(None, context)
+        choose_bauform(context, self.bauform)
         return {'FINISHED'}
+
+
+def choose_bauform(context, bauform):
+    """Switch the draft to another Bauform, keeping the options both have."""
+    d = context.scene.bii_signal
+    old = d.get()
+    d.bauform = bauform
+    new = spec.config(bauform)
+    for k in new:
+        if k in old:
+            new[k] = old[k]
+    d.set(spec.fix(bauform, new))
+    _redraw(None, context)
 
 
 class SignalSetAspectOperator(bpy.types.Operator):
@@ -449,41 +520,28 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         row = box.row()
         row.alignment = 'CENTER'
         row.template_icon(icon_value=_icon(spec.symbol_elements(b, cfg), PREVIEW_SIZE), scale=7.0)
-        wrapped_label(box, context, spec.name(b, cfg))
         if mod:
             box.label(text=f"Active: {_active(context).name}", icon='OBJECT_DATA')
         else:
             box.label(text="New signal (not placed yet)", icon='ADD')
 
+        # one large tile per choice: the current option; a click shows all options (texts in tooltips)
+        picks = context.scene.bii_signal.picks
+        grid = layout.grid_flow(row_major=True, columns=TILE_COLUMNS, even_columns=True, align=False)
         if not mod:
-            for group in spec.GROUPS:
-                col = layout.column(align=True)
-                col.label(text=group)
-                grid = col.grid_flow(columns=3, align=True, even_columns=True)
-                for o in spec.BAUFORMEN:
-                    if o.group != group:
-                        continue
-                    c = spec.config(o.key)
-                    grid.operator(SignalSetBauformOperator.bl_idname, text=o.short,
-                                  icon_value=_icon(spec.symbol_elements(o.key, c)), depress=o.key == b).bauform = o.key
-            layout.separator()
-
+            grid.template_icon_view(picks, "pick_bauform", show_labels=False, scale=TILE_SCALE,
+                                    scale_popup=POPUP_SCALE)
+        numbers = []
         for e in spec.elements(b):
             if not spec.shown(b, e.key, cfg):
                 continue
-            col = layout.column(align=True)
             if e.number:
-                draw_number(col, context, mod, e)
+                numbers.append(e)
                 continue
-            col.label(text=e.label)
-            row = col.row(align=True)
-            for value, label, ok in spec.options(b, e.key, cfg):
-                els = spec.option_symbol(b, e.key, value, cfg)
-                sub = row.row(align=True)
-                sub.enabled = ok
-                kw = {"icon_value": _icon(els)} if els else {"icon": 'X'}
-                op = sub.operator(SignalSetOptionOperator.bl_idname, text=label, depress=cfg[e.key] == value, **kw)
-                op.element, op.value = e.key, str(value)
+            grid.template_icon_view(picks, f"pick_{e.key}", show_labels=False, scale=TILE_SCALE,
+                                    scale_popup=POPUP_SCALE)
+        for e in numbers:
+            draw_number(layout.column(), context, mod, e)
 
         lit = [a for a in spec.aspects(b, cfg) if a != "Aus"]
         col = layout.column(align=True)
@@ -530,6 +588,7 @@ def draw_number(layout, context, mod, e):
 
 
 classes = (
+    SignalPicks,
     SignalDraft,
     SignalSetOptionOperator,
     SignalSetBauformOperator,
