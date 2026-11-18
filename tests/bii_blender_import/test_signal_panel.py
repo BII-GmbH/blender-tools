@@ -116,8 +116,11 @@ class PlaceTest(unittest.TestCase):
     def test_older_library_is_skipped(self):
         import tempfile
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as old_dir:
-            # an older DB_Signale.blend without the composite assets
+            # an older DB_Signale.blend: an object of the same name, but no "Signal" node group
+            old = bpy.data.objects.new("Ks-Vorsignal", bpy.data.meshes.new("old"))
+            bpy.context.scene.collection.objects.link(old)
             bpy.ops.wm.save_as_mainfile(filepath=os.path.join(old_dir, signal_panel.LIBRARY_FILE), copy=True)
+            bpy.data.objects.remove(old)
             libs = bpy.context.preferences.filepaths.asset_libraries
             bpy.ops.preferences.asset_library_add(directory=old_dir)
             libs[-1].name = "old signals"

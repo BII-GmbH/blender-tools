@@ -298,11 +298,13 @@ _asset_names = {}
 
 
 def asset_names(path):
-    """Object names in a .blend file (read once per file version)."""
+    """Names of the composite signal assets in a .blend file: objects with their node group
+    "Signal <name>" (read once per file version). Older single assets of the same name do not count."""
     key = (path, os.path.getmtime(path))
     if key not in _asset_names:
         with bpy.data.libraries.load(path) as (src, _dst):
-            _asset_names[key] = set(src.objects)
+            groups = set(src.node_groups)
+            _asset_names[key] = {o for o in src.objects if f"Signal {o}" in groups}
     return _asset_names[key]
 
 
