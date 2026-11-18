@@ -393,6 +393,67 @@ def option_symbol(bauform, key, value, cfg):
     raise KeyError(key)
 
 
+_BEDIENUNG = {"stellwerk": "", "stellwerk_zug": "stellwerks-/zugbedient", "zug": "zugbedient"}
+
+
+def object_name(bauform, cfg):
+    """Object name "<Name> <Tag>" of a placed signal, e.g. "Vorsignal Ks1/Ks2/Zs3v" or
+    "Blocksignal zugbedient Hp0/Ks1" (the naming of the earlier fixed assets)."""
+    b = BY_KEY[bauform]
+    if not b.is_main_signal:
+        return _single_object_name(bauform, cfg)
+    block = cfg["bedienung"] != "stellwerk"
+    sh1 = cfg.get("sh1", False)
+    licht = cfg.get("licht", "ohne")
+    words = []
+    if b.kind == "haupt":
+        words.append("Blocksignal" if block else "Hauptsperrsignal" if sh1 else "Hauptsignal")
+    elif b.kind == "vor":
+        words.append("Vorsignalwiederholer" if licht == "unten" else "Blockvorsignal" if block else "Vorsignal")
+    else:
+        words.append("Mehrabschnitts-Blocksignal" if block else
+                     "Mehrabschnittssperrsignal" if sh1 else "Mehrabschnittssignal")
+    if block:
+        words.append(_BEDIENUNG[cfg["bedienung"]])
+    if licht == "oben":
+        words.append("mit Kennlicht" if b.kind == "haupt" else "verkürzt")
+    if b.system == "Ks":
+        tags = {"haupt": ["Hp0", "Ks1"], "vor": ["Ks1", "Ks2"], "mehr": ["Hp0", "Ks1", "Ks2"]}[b.kind]
+    else:
+        tags = [] if b.kind == "vor" else ELEMENT["hp"].option_label(cfg["hp"]).split("/")
+        if b.kind != "haupt":
+            tags += ["Vr0", "Vr1", "Vr2"]
+    for key, tag in (("zs3", "Zs3"), ("zs3v", "Zs3v")):
+        v = cfg.get(key, "ohne")
+        if v != "ohne":
+            tags.append(tag + ("-Tafel" if v == "tafel" else ""))
+    if cfg.get("zs6"):
+        tags.append("Zs6")
+    if cfg.get("kopf", "ohne") != "ohne":
+        tags.append(ELEMENT["kopf"].option_label(cfg["kopf"]))
+    if sh1:
+        tags.append("Sh1")
+    return " ".join(words + ["/".join(tags)])
+
+
+def _single_object_name(bauform, cfg):
+    b = BY_KEY[bauform]
+    label, tag = b.label.rsplit(" ", 1)
+    words = [label]
+    if bauform == "zs2" and cfg["art"] == "zs2v":
+        words, tag = ["Richtungsvoranzeiger"], "Zs2v"
+    if cfg.get("ausfuehrung") == "tafel":
+        tag += "-Tafel"
+    if cfg.get("kennziffer") and shown(bauform, "kennziffer", cfg):
+        words.append(f"{cfg['kennziffer'] * 10} km/h")
+    if bauform == "ne3":
+        words.append(f"{cfg['streifen']} Streifen")
+    if bauform == "ls":
+        words.append({"hoch": "hoch", "niedrig": "niedrig", "kennlicht": "niedrig mit Rangierkennlicht"}
+                     [cfg["bauart"]])
+    return " ".join(words + [tag])
+
+
 def name(bauform, cfg):
     """Readable name of a configuration, e.g. "Ks-Hauptsignal Zs3 Licht, Zs1"."""
     b = BY_KEY[bauform]

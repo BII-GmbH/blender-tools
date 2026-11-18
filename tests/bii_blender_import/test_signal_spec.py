@@ -76,6 +76,22 @@ class SpecTest(unittest.TestCase):
         groups = {b.group for b in spec.BAUFORMEN}
         self.assertEqual(groups, set(spec.GROUPS))
 
+    def test_object_names(self):
+        n = spec.object_name
+        self.assertEqual(n("ks_vor", spec.config("ks_vor", zs3v="licht")), "Vorsignal Ks1/Ks2/Zs3v")
+        self.assertEqual(n("ks_haupt", spec.config("ks_haupt", kopf="ohne", sh1=True, zs3="tafel")),
+                         "Hauptsperrsignal Hp0/Ks1/Zs3-Tafel/Sh1")
+        self.assertEqual(n("hv_haupt", spec.config("hv_haupt", bedienung="zug", hp="hp01", kopf="ohne")),
+                         "Blocksignal zugbedient Hp0/Hp1")
+        self.assertEqual(n("lf7", spec.config("lf7", kennziffer=8)), "Geschwindigkeitssignal 80 km/h Lf7")
+        self.assertEqual(n("ne3", spec.config("ne3", streifen=3)), "Vorsignalbake 3 Streifen Ne3")
+        for b in spec.BAUFORMEN:  # mast aside, different configurations get different names
+            names = {}
+            for cfg in spec.combinations(b.key):
+                key = tuple(sorted((k, v) for k, v in cfg.items() if k != "mast"))
+                names.setdefault(n(b.key, cfg), key)
+                self.assertEqual(names[n(b.key, cfg)], key, n(b.key, cfg))
+
     def test_symbol_of_06F(self):
         # Ks-Mehrabschnittssignal, half filled, Zs 3 and Zs 3v lights, no Zs 1 (signals 06F/06FF)
         cfg = spec.config("ks_mehr", bedienung="stellwerk_zug", kopf="ohne", zs3="licht", zs3v="licht")

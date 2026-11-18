@@ -12,6 +12,7 @@ the 3D cursor.
 import json
 import math
 import os
+import re
 
 import bpy
 import bpy.utils.previews
@@ -191,11 +192,17 @@ def apply(context, bauform, cfg, aspect):
     cfg = spec.fix(bauform, cfg)
     if aspect not in spec.aspects(bauform, cfg):
         aspect = "Aus"
-    mod = signal_modifier(_active(context))
+    obj = _active(context)
+    mod = signal_modifier(obj)
     if mod:
+        old = object_state(mod)
         values = spec.modifier_values(bauform, cfg)
         values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
         write_modifier(mod, values)
+        # keep the name in step, unless the user renamed the signal
+        base = re.sub(r"\.\d{3}$", "", obj.name)
+        if base in (spec.object_name(old[0], old[1]), spec.BY_KEY[bauform].asset):
+            obj.name = spec.object_name(bauform, cfg)
     else:
         d = context.scene.bii_signal
         d.set(cfg)
@@ -405,7 +412,7 @@ class SignalPlaceOperator(bpy.types.Operator):
             aspect = aspect if aspect in spec.aspects(bauform, cfg) else "Aus"
             values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
             write_modifier(mod, values)
-        obj.name = b.asset
+        obj.name = spec.object_name(bauform, cfg)
         return {'FINISHED'}
 
 

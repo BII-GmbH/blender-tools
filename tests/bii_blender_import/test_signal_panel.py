@@ -91,9 +91,12 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(cfg, scene.bii_signal.get())
         self.assertEqual(aspect, "Ks1")
 
-        # the panel now edits the placed signal
+        self.assertEqual(obj.name, "Mehrabschnitts-Blocksignal stellwerks-/zugbedient Hp0/Ks1/Ks2/Zs3/Zs3v")
+
+        # the panel now edits the placed signal, and its name follows
         full = len(obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data.polygons)
         bpy.ops.bii_signal.set_option(element="zs3v", value="ohne")
+        self.assertEqual(obj.name, "Mehrabschnitts-Blocksignal stellwerks-/zugbedient Hp0/Ks1/Ks2/Zs3")
         bpy.context.view_layer.update()
         fewer = len(obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).data.polygons)
         self.assertLess(fewer, full)
