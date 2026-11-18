@@ -281,8 +281,11 @@ def apply(context, bauform, cfg, aspect):
 # ---------------------------------------------------------------- operators
 
 def _parse(element, text):
-    e = spec.ELEMENT[element]
-    return text == "True" if e.boolean else text
+    """Option value from its str() in the operator property: "True" -> True, "2" -> 2."""
+    for v in spec.ELEMENT[element].values():
+        if str(v) == text:
+            return v
+    raise ValueError(f"{element}: unknown option {text!r}")
 
 
 class SignalSetOptionOperator(bpy.types.Operator):

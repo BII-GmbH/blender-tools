@@ -61,6 +61,18 @@ class DraftTest(unittest.TestCase):
         picks.pick_hp = "hp01"
         self.assertEqual(bpy.context.scene.bii_signal.get()["hp"], "hp01")
 
+    def test_number_options(self):
+        # options whose values are numbers (Ne 3 stripes) come back as numbers
+        bpy.context.view_layer.objects.active = None
+        bpy.ops.bii_signal.set_bauform(bauform="ne3")
+        self.assertEqual(bpy.ops.bii_signal.set_option(element="streifen", value="2"), {'FINISHED'})
+        self.assertEqual(bpy.context.scene.bii_signal.get()["streifen"], 2)
+        for b in spec.BAUFORMEN:  # every option button value parses
+            for e in spec.elements(b.key):
+                if not e.number:
+                    for v in e.values():
+                        self.assertEqual(signal_panel._parse(e.key, str(v)), v)
+
     def test_aspect_falls_back_when_its_lights_go(self):
         bpy.ops.bii_signal.set_bauform(bauform="ks_haupt")
         bpy.ops.bii_signal.set_option(element="sh1", value="True")
