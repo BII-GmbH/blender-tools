@@ -164,7 +164,7 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the
 
 | Row | Lageplan symbol |
 |---|---|
-| Bauform | Only for a new signal, the first rows (one per group: Ks, H/V, Zusatzsignale, Langsamfahrsignale, Nebensignale, Rangiersignale). Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bauform | The first rows (one per group: Ks, H/V, Zusatzsignale, Langsamfahrsignale, Nebensignale, Rangiersignale). Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
 | Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
 | Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
 | Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |
@@ -181,7 +181,7 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the
 
 Options that do not fit the rest are greyed out. Kennziffer is a number field. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 
-- With a placed signal active, the panel changes that signal. Without one, it sets up a new signal.
+- With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
 - Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
 - The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: Automatic takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
 

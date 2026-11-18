@@ -204,17 +204,20 @@ def _pick_bauform_items(self, context):
 
 
 def _pick_bauform_get(self):
-    return [b.key for b in spec.BAUFORMEN].index(bpy.context.scene.bii_signal.bauform)
+    return [b.key for b in spec.BAUFORMEN].index(state(bpy.context)[0])
 
 
 def _pick_bauform_set(self, n):
-    choose_bauform(bpy.context, spec.BAUFORMEN[n].key)
+    try:
+        choose_bauform(bpy.context, spec.BAUFORMEN[n].key)
+    except RuntimeError as e:
+        print(f"BII Signal: {e}")
 
 
 # Scene.bii_signal.picks: one enum per element (pick_<key>) and pick_bauform
 SignalPicks = type("SignalPicks", (bpy.types.PropertyGroup,), {"__annotations__": {
     **{f"pick_{e.key}": _pick_option_items(e.key) for e in spec.ELEMENTS if not e.number},
-    "pick_bauform": EnumProperty(name="Bauform", description="Signal type to place", items=_pick_bauform_items,
+    "pick_bauform": EnumProperty(name="Bauform", description="Signal type; a placed signal is replaced in place", items=_pick_bauform_items,
                                  get=_pick_bauform_get, set=_pick_bauform_set),
 }})
 
@@ -306,10 +309,10 @@ class SignalSetOptionOperator(bpy.types.Operator):
 
 
 class SignalSetBauformOperator(bpy.types.Operator):
-    """Signal type (Bauform) to place"""
+    """Signal type (Bauform); a placed signal is replaced by one of this type in the same place"""
     bl_idname = "bii_signal.set_bauform"
     bl_label = "Set Bauform"
-    bl_options = {'REGISTER', 'INTERNAL'}
+    bl_options = {'REGISTER', 'UNDO', 'INTERNAL'}
 
     bauform: StringProperty()
 
@@ -319,21 +322,76 @@ class SignalSetBauformOperator(bpy.types.Operator):
         return b.label if b else ""
 
     def execute(self, context):
-        choose_bauform(context, self.bauform)
+        try:
+            choose_bauform(context, self.bauform)
+        except RuntimeError as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
         return {'FINISHED'}
 
 
-def choose_bauform(context, bauform):
-    """Switch the draft to another Bauform, keeping the options both have."""
-    d = context.scene.bii_signal
-    old = d.get()
-    d.bauform = bauform
+def _carry(old_cfg, bauform):
+    """Configuration of bauform with the options both Bauformen have taken from old_cfg."""
     new = spec.config(bauform)
     for k in new:
-        if k in old:
-            new[k] = old[k]
-    d.set(spec.fix(bauform, new))
+        if k in old_cfg:
+            new[k] = old_cfg[k]
+    return spec.fix(bauform, new)
+
+
+def choose_bauform(context, bauform):
+    """Switch to another Bauform, keeping the options both have: the active signal is replaced,
+    else the draft changes. Raises RuntimeError if the library has no such signal."""
+    obj = _active(context)
+    mod = signal_modifier(obj)
+    if mod:
+        old_bauform, old_cfg, aspect = object_state(mod)
+        if bauform != old_bauform:
+            replace_signal(context, obj, old_bauform, old_cfg, aspect, bauform)
+    else:
+        d = context.scene.bii_signal
+        cfg = _carry(d.get(), bauform)
+        d.bauform = bauform
+        d.set(cfg)
     _redraw(None, context)
+
+
+def replace_signal(context, obj, old_bauform, old_cfg, aspect, bauform):
+    """Put a signal of another Bauform in the place of obj (transform, collections, parent,
+    children, name) and delete obj. Returns the new object."""
+    b = spec.BY_KEY[bauform]
+    d = context.scene.bii_signal
+    path, method, _lib = library_path(context, d.library, b.asset)
+    if not path:
+        raise RuntimeError(missing_text(context, d.library, b.asset))
+    try:
+        new = load_signal_object(path, b.asset, method)
+    except (OSError, KeyError) as e:
+        raise RuntimeError(f"Could not load {b.asset}: {e}") from e
+    for c in obj.users_collection:
+        c.objects.link(new)
+    new.parent = obj.parent
+    new.matrix_parent_inverse = obj.matrix_parent_inverse.copy()
+    new.matrix_basis = obj.matrix_basis.copy()
+    for child in obj.children:
+        world = child.matrix_world.copy()
+        child.parent = new
+        child.matrix_world = world
+    cfg = _carry(old_cfg, bauform)
+    mod = signal_modifier(new)
+    if mod:
+        values = spec.modifier_values(bauform, cfg)
+        aspect = aspect if aspect in spec.aspects(bauform, cfg) else "Aus"
+        values["Signalbild"] = spec.all_aspects(bauform).index(aspect)
+        write_modifier(mod, values)
+    name = obj.name
+    auto = re.sub(r"\.\d{3}$", "", name) in (spec.object_name(old_bauform, old_cfg), spec.BY_KEY[old_bauform].asset)
+    selected = obj.select_get()
+    bpy.data.objects.remove(obj)
+    new.name = spec.object_name(bauform, cfg) if auto else name  # a renamed signal keeps its name
+    new.select_set(selected)
+    context.view_layer.objects.active = new
+    return new
 
 
 class SignalSetAspectOperator(bpy.types.Operator):
@@ -527,17 +585,17 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         # every option as a small symbol button (names in the tooltips); the button at the end of a row
         # shows the chosen option and opens all options as large symbols
         picks = context.scene.bii_signal.picks
-        if not mod:
-            col = layout.column()
-            for n, group in enumerate(spec.GROUPS):
-                row, zoom = _split(col, max(sum(o.group == g for o in spec.BAUFORMEN) for g in spec.GROUPS))
-                for o in spec.BAUFORMEN:
-                    if o.group == group:
-                        row.operator(SignalSetBauformOperator.bl_idname, text="",
-                                     icon_value=_icon(spec.symbol_elements(o.key, spec.config(o.key))),
-                                     depress=o.key == b).bauform = o.key
-                _zoom(zoom, picks, "pick_bauform", visible=n == 0)
-            layout.separator()
+        # Bauform; for a placed signal, another Bauform replaces it in the same place
+        col = layout.column()
+        for n, group in enumerate(spec.GROUPS):
+            row, zoom = _split(col, max(sum(o.group == g for o in spec.BAUFORMEN) for g in spec.GROUPS))
+            for o in spec.BAUFORMEN:
+                if o.group == group:
+                    row.operator(SignalSetBauformOperator.bl_idname, text="",
+                                 icon_value=_icon(spec.symbol_elements(o.key, spec.config(o.key))),
+                                 depress=o.key == b).bauform = o.key
+            _zoom(zoom, picks, "pick_bauform", visible=n == 0)
+        layout.separator()
 
         col = layout.column()
         for e in spec.elements(b):

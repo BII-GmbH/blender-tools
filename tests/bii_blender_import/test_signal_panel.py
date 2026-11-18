@@ -131,6 +131,35 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(lit, 1)  # Ks1: the green light
         obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh_clear()
 
+    def test_change_bauform_of_placed_signal(self):
+        scene = bpy.context.scene
+        scene.bii_signal.library = "test signals"
+        bpy.context.view_layer.objects.active = None
+        bpy.ops.bii_signal.set_bauform(bauform="ks_mehr")
+        bpy.ops.bii_signal.set_option(element="zs3", value="licht")
+        scene.cursor.location = (3.0, 4.0, 0.0)
+        bpy.ops.bii_signal.place()
+        old = bpy.context.active_object
+        old.rotation_euler.z = 1.0
+        coll = bpy.data.collections.new("Signale")
+        scene.collection.children.link(coll)
+        coll.objects.link(old)
+        old_name = old.name
+
+        self.assertEqual(bpy.ops.bii_signal.set_bauform(bauform="ks_haupt"), {'FINISHED'})
+        new = bpy.context.view_layer.objects.active
+        self.assertNotIn(old_name, bpy.data.objects)
+        self.assertEqual(tuple(new.location), (3.0, 4.0, 0.0))
+        self.assertAlmostEqual(new.rotation_euler.z, 1.0, places=5)
+        self.assertIn(coll, new.users_collection)
+        b, cfg, _ = signal_panel.object_state(signal_panel.signal_modifier(new))
+        self.assertEqual((b, cfg["zs3"]), ("ks_haupt", "licht"))  # options both have are kept
+        self.assertEqual(new.name, spec.object_name("ks_haupt", cfg))
+
+        new.name = "Mein Signal"  # a renamed signal keeps its name
+        bpy.ops.bii_signal.set_bauform(bauform="hv_haupt")
+        self.assertEqual(bpy.context.view_layer.objects.active.name, "Mein Signal")
+
     def test_older_library_is_skipped(self):
         import tempfile
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as old_dir:
