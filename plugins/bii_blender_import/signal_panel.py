@@ -294,15 +294,40 @@ class SignalTakeOperator(bpy.types.Operator):
         return {'FINISHED'}
 
 
-def library_path(context, name="AUTO"):
-    """Path of DB_Signale.blend and the import method of its asset library, or (None, None)."""
+_asset_names = {}
+
+
+def asset_names(path):
+    """Object names in a .blend file (read once per file version)."""
+    key = (path, os.path.getmtime(path))
+    if key not in _asset_names:
+        with bpy.data.libraries.load(path) as (src, _dst):
+            _asset_names[key] = set(src.objects)
+    return _asset_names[key]
+
+
+def library_path(context, name="AUTO", asset=None):
+    """(path of DB_Signale.blend, import method, library name) of the asset library to use,
+    or (None, None, None). Automatic takes the first library whose DB_Signale.blend has the
+    asset: an older library (without the Signal-Baukasten) is skipped."""
     for lib in context.preferences.filepaths.asset_libraries:
         if name not in ("AUTO", "", lib.name):
             continue
         path = os.path.join(bpy.path.abspath(lib.path), LIBRARY_FILE)
-        if os.path.isfile(path):
-            return path, getattr(lib, "import_method", 'APPEND_REUSE')
-    return None, None
+        if not os.path.isfile(path):
+            continue
+        if asset is None or asset in asset_names(path):
+            return path, getattr(lib, "import_method", 'APPEND_REUSE'), lib.name
+    return None, None, None
+
+
+def missing_text(context, name, asset):
+    if library_path(context, name)[0]:
+        which = "this library's" if name not in ("AUTO", "") else "every"
+        return (f"{asset} is not in {which} {LIBRARY_FILE}: it is an older version without the Signal-Baukasten. "
+                "Choose another Library, or refresh the BII asset library.")
+    return (f"No asset library has {LIBRARY_FILE}. Add the BII asset library under "
+            "Preferences > File Paths > Asset Libraries.")
 
 
 def load_signal_object(path, asset, method):
@@ -348,12 +373,11 @@ class SignalPlaceOperator(bpy.types.Operator):
     def execute(self, context):
         d = context.scene.bii_signal
         bauform, cfg, aspect, _ = state(context)
-        path, method = library_path(context, d.library)
-        if not path:
-            self.report({'ERROR'}, f"No asset library with {LIBRARY_FILE}: add the BII asset library "
-                                   "under Preferences > File Paths > Asset Libraries")
-            return {'CANCELLED'}
         b = spec.BY_KEY[bauform]
+        path, method, _lib = library_path(context, d.library, b.asset)
+        if not path:
+            self.report({'ERROR'}, missing_text(context, d.library, b.asset))
+            return {'CANCELLED'}
         try:
             obj = load_signal_object(path, b.asset, method)
         except (OSError, RuntimeError, KeyError) as e:
@@ -474,9 +498,11 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         row.scale_y = 1.4
         row.operator(SignalPlaceOperator.bl_idname, text="Place Another" if mod else "Place Signal",
                      icon='EMPTY_SINGLE_ARROW')
-        if not library_path(context, d.library)[0]:
-            wrapped_label(layout, context, f"! No asset library has {LIBRARY_FILE}. Add the BII asset library under "
-                                           "Preferences > File Paths > Asset Libraries.", 'ERROR')
+        lib = library_path(context, d.library, bf.asset)[2]
+        if lib:
+            col.label(text=f"From: {lib}", icon='ASSET_MANAGER')
+        else:
+            wrapped_label(layout, context, missing_text(context, d.library, bf.asset), 'ERROR')
 
 
 def draw_number(layout, context, mod, e):

@@ -113,6 +113,22 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(lit, 1)  # Ks1: the green light
         obj.evaluated_get(bpy.context.evaluated_depsgraph_get()).to_mesh_clear()
 
+    def test_older_library_is_skipped(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as old_dir:
+            # an older DB_Signale.blend without the composite assets
+            bpy.ops.wm.save_as_mainfile(filepath=os.path.join(old_dir, signal_panel.LIBRARY_FILE), copy=True)
+            libs = bpy.context.preferences.filepaths.asset_libraries
+            bpy.ops.preferences.asset_library_add(directory=old_dir)
+            libs[-1].name = "old signals"
+            try:
+                ctx = bpy.context
+                self.assertEqual(signal_panel.library_path(ctx, "AUTO", "Ks-Vorsignal")[2], "test signals")
+                self.assertIsNone(signal_panel.library_path(ctx, "old signals", "Ks-Vorsignal")[0])
+                self.assertIn("older version", signal_panel.missing_text(ctx, "old signals", "Ks-Vorsignal"))
+            finally:
+                bpy.ops.preferences.asset_library_remove(index=len(libs) - 1)
+
     def test_speed_sign_with_kennziffer(self):
         scene = bpy.context.scene
         scene.bii_signal.library = "test signals"
