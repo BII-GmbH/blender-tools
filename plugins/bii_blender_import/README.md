@@ -160,11 +160,11 @@ The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images a
 
 Sidebar (N) > BII Signal places railway signals from a Lageplan and sets them up by their symbol: Ks and H/V Haupt-, Vor- and Mehrabschnittssignale, Zusatzsignale (Zs1, Zs2/Zs2v, Zs3, Zs3v, Zs6), Lf 6 and Lf 7, Ne 2, Ne 3 and Ne 4, and Lichtsperrsignale. It uses the composite signals (Signal-Baukasten) of `DB_Signale.blend` in the BII asset library: add that library under Preferences > File Paths > Asset Libraries. The signals are built from the object library of DB InfraGO AG and may be used only for projects of DB InfraGO AG.
 
-A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the top, the panel shows the symbol of the whole combination, to compare with the plan. Below it, every option is a card with its Lageplan symbol, one row per choice; the bar under a card chooses it (blue: chosen, white card: nothing). The names are in the tooltips:
+A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the top, the panel shows the symbol of the whole combination, to compare with the plan. Below it, one row per choice shows every option as a small symbol button (names in the tooltips). The button at the end of a row shows the chosen option; a click on it shows all options as large symbols to choose from:
 
 | Row | Lageplan symbol |
 |---|---|
-| Bauform | Only for a new signal, the first rows. Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
+| Bauform | Only for a new signal, the first rows (one per group: Ks, H/V, Zusatzsignale, Langsamfahrsignale, Nebensignale, Rangiersignale). Head: Ks screen (Hauptsignal rounded on top, Vorsignal rounded below, Mehrabschnittssignal rounded on both ends), H/V circles and distant-signal lights |
 | Bedienung | Head filled (stellwerksbedient), right half filled (stellwerks- oder zugbedient) or empty (zugbedient); block signals get the white-yellow Mastschild |
 | Hp | H/V: one or two circles, a bar beside them for Hp0/Hp2 |
 | Kopf | `^` Zs1 (Ersatzsignal), `V` Zs7 (Vorsichtsignal) or nothing on top |

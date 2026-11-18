@@ -14,8 +14,6 @@ import math
 import os
 import re
 
-import numpy as np
-
 import bpy
 import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
@@ -29,9 +27,9 @@ LIBRARY_FILE = "DB_Signale.blend"
 MODIFIER = "Signal"
 ICON_SIZE = 64
 PREVIEW_SIZE = 256
-CARD_SIZE = 128      # pixels of the option symbols
-CARD_MAX_SCALE = 4.0 # largest card in UI units
-BAUFORM_COLUMNS = 4
+TILE_SIZE = 128      # pixels of the option icons in the popups
+POPUP_SCALE = 5.0    # size of the popup's symbols in UI units
+ZOOM_SPLIT = 0.86    # share of a row for the option buttons
 
 _previews = None
 
@@ -45,8 +43,7 @@ def _icon(elements, size=ICON_SIZE):
         return _previews[key].icon_id
     p = _previews.new(key)
     p.image_size = (size, size)
-    px = symbols.draw(elements, size) if elements else np.ones((size, size, 4))  # empty: "ohne"
-    p.image_pixels_float = px.ravel().tolist()
+    p.image_pixels_float = symbols.draw(elements, size).ravel().tolist()
     return p.icon_id
 
 
@@ -161,7 +158,69 @@ def _kennziffer_changed(self, context):
     _redraw(self, context)
 
 
+# ---------------------------------------------------------------- big icon pickers
+# template_icon_view is the only widget that shows icons large: its button at the end of a row shows the
+# chosen option, a click opens all options as large icons.
+
+_pick_items = {}   # Blender needs the item lists of dynamic enums kept alive
+
+
+def _option_icon(bauform, key, value, cfg):
+    els = spec.option_symbol(bauform, key, value, cfg)
+    return _icon(els, TILE_SIZE) if els else 'X'
+
+
+def _pick_option_items(key):
+    e = spec.ELEMENT[key]
+
+    def items(self, context):
+        b, cfg, _, _ = state(context)
+        out = []
+        if key in cfg:
+            for n, (value, label, ok) in enumerate(spec.options(b, key, cfg)):
+                if ok or cfg[key] == value:  # options that do not fit the rest are left out
+                    out.append((str(value), label, f"{e.label}: {label}", _option_icon(b, key, value, cfg), n))
+        _pick_items[key] = out or [("NONE", "", "", 'BLANK1', -1)]
+        return _pick_items[key]
+
+    def get(self):
+        cfg = state(bpy.context)[1]
+        return e.values().index(cfg[key]) if key in cfg else -1
+
+    def set(self, n):
+        b, cfg, aspect, _ = state(bpy.context)
+        if key in cfg and 0 <= n < len(e.values()):
+            cfg[key] = e.values()[n]
+            apply(bpy.context, b, cfg, aspect)
+
+    return EnumProperty(name=e.label, description=e.description, items=items, get=get, set=set)
+
+
+def _pick_bauform_items(self, context):
+    _pick_items["bauform"] = [
+        (b.key, b.label, f"{b.group}: {b.label}", _icon(spec.symbol_elements(b.key, spec.config(b.key)), TILE_SIZE), n)
+        for n, b in enumerate(spec.BAUFORMEN)]
+    return _pick_items["bauform"]
+
+
+def _pick_bauform_get(self):
+    return [b.key for b in spec.BAUFORMEN].index(bpy.context.scene.bii_signal.bauform)
+
+
+def _pick_bauform_set(self, n):
+    choose_bauform(bpy.context, spec.BAUFORMEN[n].key)
+
+
+# Scene.bii_signal.picks: one enum per element (pick_<key>) and pick_bauform
+SignalPicks = type("SignalPicks", (bpy.types.PropertyGroup,), {"__annotations__": {
+    **{f"pick_{e.key}": _pick_option_items(e.key) for e in spec.ELEMENTS if not e.number},
+    "pick_bauform": EnumProperty(name="Bauform", description="Signal type to place", items=_pick_bauform_items,
+                                 get=_pick_bauform_get, set=_pick_bauform_set),
+}})
+
+
 class SignalDraft(bpy.types.PropertyGroup):
+    picks: bpy.props.PointerProperty(type=SignalPicks)
     bauform: EnumProperty(name="Bauform", items=_bauform_items, update=_redraw)
     config: StringProperty(name="Configuration", default="{}")
     kennziffer: IntProperty(name="Kennziffer", min=0, max=16, update=_kennziffer_changed,
@@ -465,32 +524,37 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         else:
             box.label(text="New signal (not placed yet)", icon='ADD')
 
-        # every option as a card: its symbol large, a bar below to choose it (names in the tooltips)
+        # every option as a small symbol button (names in the tooltips); the button at the end of a row
+        # shows the chosen option and opens all options as large symbols
+        picks = context.scene.bii_signal.picks
         if not mod:
-            opts = [o for g in spec.GROUPS for o in spec.BAUFORMEN if o.group == g]
-            for i in range(0, len(opts), BAUFORM_COLUMNS):
-                row = layout.row()
-                for o in opts[i:i + BAUFORM_COLUMNS]:
-                    op = _card(row, context, BAUFORM_COLUMNS,
-                               _icon(spec.symbol_elements(o.key, spec.config(o.key)), CARD_SIZE),
-                               SignalSetBauformOperator.bl_idname, o.key == b)
-                    op.bauform = o.key
-                for _ in range(BAUFORM_COLUMNS - len(opts[i:i + BAUFORM_COLUMNS])):
-                    row.column().label(text="")  # keep the cards of the last row as wide as the others
-            layout.separator(type='LINE')
+            col = layout.column()
+            for n, group in enumerate(spec.GROUPS):
+                row, zoom = _split(col, max(sum(o.group == g for o in spec.BAUFORMEN) for g in spec.GROUPS))
+                for o in spec.BAUFORMEN:
+                    if o.group == group:
+                        row.operator(SignalSetBauformOperator.bl_idname, text="",
+                                     icon_value=_icon(spec.symbol_elements(o.key, spec.config(o.key))),
+                                     depress=o.key == b).bauform = o.key
+                _zoom(zoom, picks, "pick_bauform", visible=n == 0)
+            layout.separator()
 
+        col = layout.column()
         for e in spec.elements(b):
             if not spec.shown(b, e.key, cfg):
                 continue
             if e.number:
-                draw_number(layout.column(), context, mod, e)
+                draw_number(col, context, mod, e)
                 continue
-            opts = spec.options(b, e.key, cfg)
-            row = layout.row()
-            for value, label, ok in opts:
-                op = _card(row, context, len(opts), _icon(spec.option_symbol(b, e.key, value, cfg), CARD_SIZE),
-                           SignalSetOptionOperator.bl_idname, cfg[e.key] == value, ok)
+            row, zoom = _split(col, len(spec.ELEMENT[e.key].options))
+            for value, label, ok in spec.options(b, e.key, cfg):
+                els = spec.option_symbol(b, e.key, value, cfg)
+                sub = row.column(align=True)
+                sub.enabled = ok
+                kw = {"icon_value": _icon(els)} if els else {"icon": 'X'}
+                op = sub.operator(SignalSetOptionOperator.bl_idname, text="", depress=cfg[e.key] == value, **kw)
                 op.element, op.value = e.key, str(value)
+            _zoom(zoom, picks, f"pick_{e.key}")
 
         lit = [a for a in spec.aspects(b, cfg) if a != "Aus"]
         col = layout.column(align=True)
@@ -521,20 +585,19 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
             wrapped_label(layout, context, missing_text(context, d.library, bf.asset), 'ERROR')
 
 
-def _card(row, context, count, icon_id, operator, selected, enabled=True):
-    """One option: its symbol as large as count cards fit in the sidebar, and a bar below that chooses it.
-    Blender draws preview icons large only in template_icon, which takes no clicks, hence the bar."""
-    unit = 20.0 * context.preferences.system.ui_scale
-    width = (context.region.width / unit - 1.5) if context.region else 12.0
-    scale = max(1.5, min(CARD_MAX_SCALE, width / count - 0.6))
-    col = row.column(align=True)
-    col.enabled = enabled
-    top = col.row()
-    top.alignment = 'CENTER'
-    top.template_icon(icon_value=icon_id, scale=scale)
-    bar = col.row(align=True)
-    bar.scale_y = 0.6
-    return bar.operator(operator, text="", depress=selected)
+def _split(layout, columns):
+    """(grid for the option buttons, cell at the end for the large-symbol button)"""
+    split = layout.split(factor=ZOOM_SPLIT, align=True)
+    grid = split.grid_flow(row_major=True, columns=columns, even_columns=True, align=True)
+    return grid, split.row(align=True)
+
+
+def _zoom(cell, picks, prop, visible=True):
+    """Button at the end of a row: the chosen option; a click shows all options as large symbols."""
+    if visible:
+        cell.template_icon_view(picks, prop, show_labels=False, scale=1.0, scale_popup=POPUP_SCALE)
+    else:
+        cell.label(text="")
 
 
 def draw_number(layout, context, mod, e):
@@ -553,6 +616,7 @@ def draw_number(layout, context, mod, e):
 
 
 classes = (
+    SignalPicks,
     SignalDraft,
     SignalSetOptionOperator,
     SignalSetBauformOperator,
