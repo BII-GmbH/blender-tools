@@ -77,7 +77,7 @@ The image is made from the original file the plan was imported from (PDF, TIFF, 
 
 ### Crop
 
-The mesh outline is the crop: the UV map follows the vertex positions (Geometry Nodes modifier "BII Plan Sheet"), so moving or cutting edges in Edit Mode hides parts of the sheet without moving the image. Crop Rectangle crops by two clicks on the sheet. Full Sheet shows the whole sheet again, for example to read the Legende, and keeps the crop.
+The mesh outline is the crop: the UV map follows the vertex positions (Geometry Nodes modifier "BII Plan Sheet"), so moving or cutting edges in Edit Mode hides parts of the sheet without moving the image. Crop Rectangle crops by two clicks on the sheet. Auto Crop (the button next to it, also for several selected plans) crops to the drawing: it removes the empty paper and the sheet's frame lines, but keeps the title block and legends inside the frame; trim those with Crop Rectangle if needed. Full Sheet shows the whole sheet again, for example to read the Legende, and keeps the crop.
 
 The mesh coordinates are sheet coordinates: image, crop and grid crosses depend on them. Do not apply the object's scale or rotation (the scale is the Maßstab), and do not use Set Origin. The panel warns when the outline lies outside the sheet; undo the step, or use Reset Crop.
 
@@ -88,6 +88,14 @@ Opacity fades the whole plan, Background sets how much of its white paper shows:
 - Values in between mix the two in Material Preview and Rendered view. Solid view cannot mix: it hides the paper below 0.5 and shows it from 0.5 on. Solid view also shows pixels this light in every channel (230 of 255) as paper. Copies of a plan (Shift+D) share its image, so in Solid view they show the paper alike; Opacity and Background in Material Preview and Rendered view stay separate.
 
 The plan's colors stay exactly as in the file. In Material Preview and Rendered view, Blender's default View Transform AgX makes them paler and lowers the contrast; the panel offers to switch the scene to Standard (Render Properties > Color Management), which shows them as printed.
+
+### Check Placement
+
+Check Placement (for a flat plan) compares the plan's drawing with the flat plans it overlaps and with the BII Umgebung track axes, and reports how far it should move to match each of them best, for example "5102CR0P: off by 3.2 m (move -3.0, +1.1 m)". Use it after placing a plan in a project that already has plans or tracks.
+
+- It is reliable when both show the same drawing, such as overlapping copies or neighbour sheets, or a plan's tracks against the track axes. Between different kinds of drawing (a scanned Lageplan against a Signallageplan) it often finds no clear match and says so: then compare by eye, with the plan's Opacity lowered.
+- Along a straight track the match does not fix the position along it; the report then names the direction ("along 34° not fixed").
+- The track axes come from OpenStreetMap: a few meters off is normal there. A plan placed by its coordinate grid is more accurate than they are.
 
 ### FBX export
 
@@ -138,7 +146,7 @@ For DB Lagepläne without grid crosses: they show the Kilometrierung of the Stre
 3. Click + and then a point on the plan track: a hectometer mark, a landmark. Shift-click + to add several, until Esc. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
 4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays, unless Fit Scale is on: then the fit measures the Maßstab from the km points and landmarks and scales the plan, as Place in Scene does with grid crosses. That needs km points or landmarks some distance apart, else the plan keeps its Maßstab and the report says so. Fit Scale is the same switch as in Align to Scene. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
 
-Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation, often a few meters off along the track): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
+Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation: a few meters off along the track, in places 20 m or more; on plans with a coordinate grid, use Georeference instead): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
 
 The panel shows the residual of each point and warns:
 
@@ -148,6 +156,29 @@ The panel shows the residual of each point and warns:
 - when a km is not on the Kilometrierung lines of the scene.
 
 Two km points far apart fix the plan. One km point and a few track points far from it also do; there the track points fix the rotation and the km point the position along the track.
+
+### Scripting
+
+For scripts and AI agents, `plan_api` has the plan functions in one place:
+
+```python
+from bl_ext.user_default.bii_blender_import import plan_api
+
+plan_api.plans(bpy.context.scene)                   # the plan objects
+plan_api.plan_to_world(plan, 1820, 450, 'PDF')      # world Vector of a point on the plan
+plan_api.world_to_plan(plan, (x, y, z), 'IMAGE')    # and back
+plan_api.georeference(plan, [(u, v, easting, northing), ...], 'IMAGE', crs='DB_REF')  # grid crosses
+plan_api.align_to_scene(plan, [(u, v, (x, y, z)), ...], 'PDF')  # points onto scene points
+plan_api.attach_to_neighbor(plan, other, [(u1, v1), (u2, v2)], [(u1, v1), (u2, v2)], 'IMAGE')
+plan_api.align_by_km(plan, [(u, v, "5,3"), (u, v, "5,4")], strecke="5240")
+plan_api.crop(plan, 63.5, 318.5, 2187, 603.5, 'PDF')
+plan_api.auto_crop(plan)
+for r in plan_api.check_placement(plan):            # dicts: shift, distance, score, reliable, along_deg
+    print(plan_api.describe(r))
+plan_api.overlay(plan, other, center_xy, "check.png")  # red: plan, blue: other plan or "TRACKS"
+```
+
+Units of a point on a plan: `'SHEET'` (meters on the paper, y up, the mesh's own coordinates), `'PDF'` (points of the PDF page, y down), `'IMAGE'` (pixels of the plan's image in Blender, y down), `'SOURCE'` (pixels of the original TIFF or PNG, y down). `overlay()` writes a PNG with the plan's ink red, the other plan's or the track axes' ink blue and both together dark purple, with a 10 m grid: where the plan sits right, red lies on blue.
 
 ### Neighbor sheets (Anschlussblatt)
 
@@ -189,7 +220,7 @@ Options that do not fit the rest are greyed out. Kennziffer is a number field. S
 
 - With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
 - Where to put the 3D cursor: at the foot of the symbol, the end of its stem (the bar across it), not its middle. A symbol without a stem sits there with its lower end.
-- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). On Terrain (on by default) puts it on the BII Umgebung terrain under the cursor, so a cursor snapped to the plan sheet above the ground still gives a signal on the ground; without terrain there, it stays at the cursor's height. The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
+- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis. It then faces the trains of the direction it stands right of (DB Regelfall: a signal stands to the right of the track it applies to); a signal on the track axis itself, or one left of its track, may need Turn 180°. On Terrain (on by default) puts it on the BII Umgebung terrain under the cursor, so a cursor snapped to the plan sheet above the ground still gives a signal on the ground; without terrain there, it stays at the cursor's height. The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
 - The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: left empty, it takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
 
 Save Symbol Key writes all symbols as one PNG: every Bauform and each of its options, with the option in words, its value for scripts (`zs3="tafel"`) and a red dot where the signal's foot belongs. Print it as a key, or give it to an AI agent to compare with a plan.
@@ -212,7 +243,7 @@ sp.terrain_height(bpy.context, x, y)         # z of the BII Umgebung terrain, or
 signal_legend.write("key.png")               # the symbol key, also without Blender
 ```
 
-- `place_signal(bauform, config, location, rotation=None, aspect="Aus", *, align_to_track, on_terrain, library, collection, name)`: `location` is the foot of the mast. `rotation` in radians about Z; None with `align_to_track` turns it along the nearest track (add `math.pi` for the other direction). The name is "<Name> <Tag>" from the configuration.
+- `place_signal(bauform, config, location, rotation=None, aspect="Aus", *, align_to_track, on_terrain, library, collection, name)`: `location` is the foot of the mast. `rotation` in radians about Z; None with `align_to_track` turns it along the nearest track, facing the trains of the direction it stands right of (add `math.pi` for a signal left of its track). The name is "<Name> <Tag>" from the configuration.
 - Configurations: `bauform` is a key of `signal_spec.BY_KEY`; `config` holds element keys and values as in the symbol key (missing ones keep their defaults). An unknown key or value, options that do not fit together, or an aspect the signal cannot show raise `ValueError` with the allowed values; nothing is changed silently. No asset library with the signal raises `RuntimeError`.
 - Do not read the modifier with `mod[...]`: Blender 5.2 and later keep the inputs in `mod.properties`. `read_signal` handles both.
 
