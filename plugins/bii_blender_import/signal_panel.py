@@ -222,7 +222,8 @@ class SignalDraft(bpy.types.PropertyGroup):
                             f"{LIBRARY_FILE}). Empty: the first one that has the signal")
     align_to_track: BoolProperty(
         name="Align to Track", default=True,
-        description="Turn the signal to the nearest Umgebung track axis (Gleisachse), lamps facing along it")
+        description="Turn the signal to the nearest Umgebung track axis (Gleisachse), facing the trains of "
+                    "the track it stands right of (DB Regelfall)")
     on_terrain: BoolProperty(
         name="On Terrain", default=True,
         description="Put the signal on the BII Umgebung terrain under the 3D cursor (the cursor's height "
@@ -501,20 +502,41 @@ def load_signal_object(path, asset, method):
 
 def track_direction(context, point):
     """Unit XY tangent of the nearest Umgebung track axis at point (x, y), or None."""
+    hit = nearest_track(context, point)
+    return hit[1] if hit else None
+
+
+def nearest_track(context, point):
+    """(distance, tangent, nearest point) of the nearest Umgebung track axis at point (x, y), or None."""
     best = None
     for pts in plan_place.track_polylines(context.scene, ""):
-        d, _q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point[0], point[1])
+        d, q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point[0], point[1])
         if best is None or d < best[0]:
-            best = (d, tangent)
-    return best[1] if best else None
+            best = (d, tangent, q)
+    return best
+
+
+SIDE_TOLERANCE = 0.3  # m: closer to the track axis than this, the side is not known
 
 
 def track_rotation(context, point):
     """Z rotation that turns a signal at point (x, y) along the nearest Umgebung track axis, or None.
-    Local +Y runs along the track, the lamps (-Y) face the trains coming along -tangent; Turn 180°
-    (rotation + pi) faces the other direction."""
-    t = track_direction(context, point)
-    return None if t is None else math.atan2(t[1], t[0]) - math.pi / 2
+
+    The signal faces the trains it stands right of (DB Regelfall: a signal stands to the right of
+    the track it applies to, seen in the direction of travel). Its foot is where the symbol's foot is
+    on the plan, beside the track, so the side gives the direction. On the track axis itself
+    (closer than SIDE_TOLERANCE) the side is unknown and the direction of the track line is used;
+    Turn 180° (rotation + pi) faces the other way, e.g. for a signal left of the track."""
+    hit = nearest_track(context, point)
+    if hit is None:
+        return None
+    d, t, q = hit
+    tx, ty = t[0], t[1]
+    side = tx * (point[1] - q[1]) - ty * (point[0] - q[0])   # > 0: left of the direction t
+    if d >= SIDE_TOLERANCE and side > 0:
+        tx, ty = -tx, -ty
+    # local +Y along the direction of travel: the lamps (-Y) face the trains coming towards them
+    return math.atan2(ty, tx) - math.pi / 2
 
 
 def terrain_height(context, x, y):

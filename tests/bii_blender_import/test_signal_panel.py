@@ -73,6 +73,25 @@ class DraftTest(unittest.TestCase):
                     for v in e.values():
                         self.assertEqual(signal_panel._parse(e.key, str(v)), v)
 
+    def test_faces_trains_of_its_side(self):
+        # a track along +x; a signal right of it (south) faces trains running +x, so its lamps (-Y) face -x
+        coll = bpy.data.collections.new("Gleise 5102")
+        bpy.context.scene.collection.children.link(coll)
+        curve = bpy.data.curves.new("Gleis", 'CURVE')
+        spline = curve.splines.new('POLY')
+        spline.points.add(1)
+        spline.points[0].co = (-100.0, 0.0, 0.0, 1.0)
+        spline.points[1].co = (100.0, 0.0, 0.0, 1.0)
+        obj = bpy.data.objects.new("Gleis 1", curve)
+        obj["track_number"] = 1
+        coll.objects.link(obj)
+        import math
+        right = signal_panel.track_rotation(bpy.context, (0.0, -3.0))
+        left = signal_panel.track_rotation(bpy.context, (0.0, 3.0))
+        self.assertAlmostEqual(math.cos(right), math.cos(-math.pi / 2), places=6)
+        self.assertAlmostEqual(math.sin(right), math.sin(-math.pi / 2), places=6)
+        self.assertAlmostEqual(math.sin(left), 1.0, places=6)   # lamps face +x: trains running -x
+
     def test_aspect_falls_back_when_its_lights_go(self):
         bpy.ops.bii_signal.set_bauform(bauform="ks_haupt")
         bpy.ops.bii_signal.set_option(element="sh1", value="True")
