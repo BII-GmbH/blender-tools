@@ -293,7 +293,7 @@ def _single_symbol(bauform, cfg):
     if bauform == "zs1":
         return [("chev",)]
     if bauform == "zs2":
-        return [("square", True), ("hv", 1)] if cfg["art"] == "zs2" else [("square", False)]
+        return [("square", cfg["art"] == "zs2")]
     if bauform == "zs3":
         return [("tri_up", cfg["ausfuehrung"] == "licht")]
     if bauform == "zs3v":
@@ -305,7 +305,7 @@ def _single_symbol(bauform, cfg):
     if bauform == "lf7":
         return [F, S(14), ("lf7",)]
     if bauform == "ne2":
-        return [("ne2",)]
+        return [F, S(14), ("ne2",)]
     if bauform == "ne3":
         return [F, S(6), ("bake", cfg["streifen"])]
     if bauform == "ne4":

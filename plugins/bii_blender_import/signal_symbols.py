@@ -141,17 +141,29 @@ def _arc(cx, cy, r, a0, a1, n=24):
     return [(cx + r * math.cos(a0 + (a1 - a0) * i / n), cy + r * math.sin(a0 + (a1 - a0) * i / n)) for i in range(n + 1)]
 
 
-def _outline(shape, y):
-    """Outline polygon and height of a signal head shape with its bottom at y."""
+def _outline(shape, y, extra=0.0):
+    """Outline polygon and height of a signal head shape with its bottom at y; extra makes the
+    straight part longer (room for the Sh 1 bars)."""
     if shape == "circle":
         return _arc(0, y + 5, 5, 0, 2 * math.pi, 48)[:-1], 10
     if shape == "bell":  # Ks Hauptsignal: rounded top
-        return [(-5, y), (5, y)] + _arc(0, y + 6, 5, 0, math.pi), 11
+        return [(-5, y), (5, y)] + _arc(0, y + 6 + extra, 5, 0, math.pi), 11 + extra
     if shape == "cup":  # Ks Vorsignal: rounded bottom
-        return _arc(0, y + 5, 5, math.pi, 2 * math.pi) + [(5, y + 10), (-5, y + 10)], 10
+        return _arc(0, y + 5, 5, math.pi, 2 * math.pi) + [(5, y + 10 + extra), (-5, y + 10 + extra)], 10 + extra
     if shape == "caps":  # Ks Mehrabschnittssignal: rounded top and bottom
-        return _arc(0, y + 5, 5, math.pi, 2 * math.pi) + _arc(0, y + 12, 5, 0, math.pi), 17
+        return _arc(0, y + 5, 5, math.pi, 2 * math.pi) + _arc(0, y + 12 + extra, 5, 0, math.pi), 17 + extra
     raise ValueError(shape)
+
+
+SH_PART = 4.6  # length of the Sh 1 part of a Ks head
+
+
+def _sh_part(shape, y):
+    """(bottom, top) of the Sh 1 part of a Ks head with its bottom at y: the lower end of a
+    Hauptsignal, the middle of a Mehrabschnittssignal."""
+    if shape == "caps":
+        return y + 8.5, y + 8.5 + SH_PART
+    return y, y + SH_PART
 
 
 def _inset(pts, w=1.0):
@@ -163,17 +175,23 @@ def _inset(pts, w=1.0):
     return [(cx + (x - cx) * (hx - w) / hx, cy + (y - cy) * (hy - w) / hy) for x, y in pts]
 
 
-def _clip_right(pts):
-    """Part of a polygon with x >= 0 (Sutherland-Hodgman with one edge)."""
+def _clip(pts, d):
+    """Part of a polygon where d(x, y) >= 0, d linear (Sutherland-Hodgman with one edge)."""
     out = []
     for i, (x0, y0) in enumerate(pts):
         x1, y1 = pts[(i + 1) % len(pts)]
-        if x0 >= 0:
+        d0, d1 = d(x0, y0), d(x1, y1)
+        if d0 >= 0:
             out.append((x0, y0))
-        if (x0 >= 0) != (x1 >= 0):
-            t = x0 / (x0 - x1)
-            out.append((0.0, y0 + t * (y1 - y0)))
+        if (d0 >= 0) != (d1 >= 0):
+            t = d0 / (d0 - d1)
+            out.append((x0 + t * (x1 - x0), y0 + t * (y1 - y0)))
     return out
+
+
+def _clip_right(pts):
+    """Part of a polygon with x >= 0."""
+    return _clip(pts, lambda x, y: x)
 
 
 def anchor(elements, size=SIZE):
@@ -187,26 +205,30 @@ def draw(elements, size=SIZE):
     return build(elements).render(size)
 
 
-def _sh_bars(c, y0, filled_head):
-    """Sh 1 bars inside a head (white on a filled head, outlined on an empty one)."""
-    if filled_head:
-        c.rect(-3.8, y0 + 1.6, 3.8, y0 + 5.2, 1)
-        c.line([(-3.8, y0 + 3.4), (3.8, y0 + 3.4)], 0.9)
-    else:
-        c.rect(-3.8, y0 + 1.6, 3.8, y0 + 5.2, 0)
-        c.rect(-3.0, y0 + 2.3, 3.0, y0 + 4.5, 1)
-        c.line([(-3.0, y0 + 3.4), (3.0, y0 + 3.4)], 0.7)
+def _head(c, shape, fill, y, sh=False):
+    """Draw a head shape filled ("full"), right half filled ("half") or empty; returns its height.
 
-
-def _head(c, shape, fill, y):
-    """Draw a head shape filled ("full"), right half filled ("half") or empty; returns its height."""
-    pts, h = _outline(shape, y)
+    sh: Ks head with Sh 1. The head gets longer by a part with two bars across it: on a
+    filled head two white bars, on a half filled or empty head two empty fields divided by
+    lines across the whole head (the fill stays outside that part).
+    """
+    pts, h = _outline(shape, y, SH_PART if sh else 0.0)
     c.poly(pts, 0)
+    inner = _inset(pts)
     if fill != "full":
-        inner = _inset(pts)
         c.poly(inner, 1)
         if fill == "half":
             c.poly(_clip_right(inner), 0)
+    if sh:
+        b0, b1 = _sh_part(shape, y)
+        if fill == "full":
+            for k in (0.3, 0.7):
+                c.rect(-3.9, b0 + SH_PART * k - 0.4, 3.9, b0 + SH_PART * k + 0.4, 1)
+        else:
+            c.poly(_clip(_clip(inner, lambda x, yy: yy - b0), lambda x, yy: b1 - yy), 1)
+            lines = (b0, (b0 + b1) / 2, b1) if shape == "caps" else ((b0 + b1) / 2, b1)
+            for ly in lines:
+                c.line([(-4.4, ly), (4.4, ly)], 0.9)
     return h
 
 
@@ -260,9 +282,7 @@ def build(elements):
             y0 = y
             if kind == "ks_head":  # ("ks_head", shape, fill, sh): Ks head, shape bell / cup / caps
                 shape, fill, sh = args
-                y += _head(c, shape, fill, y)
-                if sh:
-                    _sh_bars(c, y0, fill == "full")
+                y += _head(c, shape, fill, y, sh)
             elif kind == "hv_head":  # ("hv_head", circles, fill, bar): H/V main signal lights
                 n, fill, bar = args
                 for k in range(n):
@@ -312,9 +332,9 @@ def build(elements):
                 c.rect(-3.5, y + 0.9, 3.5, y + 5.1, 1)
                 c.line([(-3.5, y + 3), (3.5, y + 3)], 0.9)
                 y += 6
-            elif kind == "kenn":
-                c.ring(0, y + 2.2, 1.6)
-                y += 4
+            elif kind == "kenn":  # Rangierkennlicht: small circle at the top right corner of the Ls
+                top = heads[-1][1] if heads else y
+                c.ring(4.5, top + 0.6, 1.6)
             elif kind == "disc":
                 c.ring(0, y + 5, 5, 1.2)
                 c.line([(-3.4, y + 5), (3.4, y + 5)], 1.8)
@@ -350,12 +370,12 @@ def build(elements):
                 c.rect(-4, y, 4, y + 10)
                 c.rect(-2.9, y + 1.1, 2.9, y + 8.9, 1)
                 y += 10
-            elif kind == "ne2":
-                c.rect(-4, y, 4, y + 11)
-                c.rect(-3, y + 1, 3, y + 10, 1)
-                c.poly([(-3, y + 10), (3, y + 10), (0, y + 5.5)])
-                c.poly([(-3, y + 1), (3, y + 1), (0, y + 5.5)])
-                y += 11
+            elif kind == "ne2":  # Vorsignaltafel: board with a cross from corner to corner
+                c.rect(-4, y, 4, y + 10)
+                c.rect(-3.1, y + 0.9, 3.1, y + 9.1, 1)
+                c.line([(-3.1, y + 0.9), (3.1, y + 9.1)], 0.8)
+                c.line([(-3.1, y + 9.1), (3.1, y + 0.9)], 0.8)
+                y += 10
             elif kind == "tri_up":
                 _tri(c, [(-4.5, y + 0.8), (4.5, y + 0.8), (0, y + 7)], args[0])
                 y += 7

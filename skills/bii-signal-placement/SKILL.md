@@ -58,7 +58,8 @@ separately, not "which signal is this":
   Mehrabschnittssignal; H/V: circles / two dots), filled, right half filled or empty (Bedienung);
 - above the head: `^` (Zs1), `V` (Zs7), triangle (Zs3) filled or empty; below the head: triangle (Zs3v)
   filled or empty, square with diagonal (Zs6); small circle at the head and where (Zusatzlicht);
-  bars in the head (Sh1);
+  two bars across the head, which is longer by them (Sh1; on a half filled or empty head two empty
+  fields below the fill);
 - a stem with a foot bar, or no stem (Signalbrücke: `mast=False`); for Lf 6/Lf 7 and Zs3/Zs3v plates
   the printed number (Kennziffer = km/h / 10).
 
@@ -67,7 +68,7 @@ Write down `bauform` and `config` with the values from the key, e.g.
 Two triangles, one above and one below, means both `zs3` and `zs3v`. When a detail is unclear,
 crop larger (`scale=3`) and ask again; when still unclear, list it as uncertain instead of guessing.
 
-## 4. Foot point
+## 4. Foot point and head point
 
 The signal belongs at the **foot of its symbol**: the end of the stem, the short bar across it (the
 red dot in the key), never the middle of the symbol. Without a stem: the lower end of the symbol,
@@ -75,20 +76,27 @@ or for a signal on a bridge the point on the bridge line. Ask image-reader for t
 the foot bar's center in the crop, then add the crop's offset (`box[0] - pad`, `box[1] - pad`, divided by
 `scale` first) to get IMAGE pixels of the plan.
 
+Ask in the same call for the **head point**: the center of the far end of the symbol (the top of
+the topmost mark, e.g. the tip of the Zs 1 chevron or of the head). From head to foot is the
+direction the signal faces: a symbol drawn with its top to the west and its foot to the east looks
+upright when seen from the east, so the signal faces east. Symbols are drawn rotated in any angle;
+never take the facing from the side of the track or the km direction.
+
 ## 5. Place
 
 ```python
 sig = sp.place_signal("ks_haupt", {"zs3": "tafel", "kennziffer": 6},
-                      location=plan_api.plan_to_world(plan, u, v, 'IMAGE'),
+                      location=plan_api.plan_to_world(plan, u, v, 'IMAGE'),          # foot
+                      head=plan_api.plan_to_world(plan, u_head, v_head, 'IMAGE'),    # top end
                       align_to_track=True, on_terrain=True,
                       collection=bpy.data.collections["Signale"])
 sig["plan_label"] = "06N601"
 ```
 
 - `on_terrain`: the signal stands on the BII Umgebung terrain, not on the plan sheet above it.
-- `align_to_track`: the signal turns along the nearest track and faces the trains of the direction
-  it stands right of (DB Regelfall). A signal that stands left of its track (the plan says so, or
-  the symbol's head points the other way) needs `sig.rotation_euler.z += math.pi`.
+- `head`: the signal faces from the head towards the foot, as its symbol is drawn.
+- `align_to_track`: the signal turns along the nearest track, in the track direction closer to the
+  symbol's. Leave it off for a signal whose symbol is drawn across the track or far from any track.
 - Keep the name `place_signal` gives ("<Name> <Tag>", e.g. "Vorsignal Ks1/Ks2/Zs3v"); put the plan
   label into the custom property `plan_label`.
 - A `ValueError` lists the allowed values: fix the configuration, do not work around it.
@@ -117,8 +125,9 @@ for o in bpy.data.collections["Signale"].objects:
 - Position: mark the placed feet on the plan and let image-reader compare: crop the plan around a
   group of signals, draw a small circle at each `world_to_plan` position (Pillow), ask "is each
   circle on the foot bar of its symbol?".
-- Facing: for each signal say from which side trains see it (km rising or falling) and check that it
-  matches the plan.
+- Facing: for each signal compare its direction (lamps along local -Y: `(sin z, -cos z)`) with its
+  symbol's head-to-foot direction on the plan; they must point the same way. Report the facing as
+  km rising or falling.
 
 ## 8. Report
 
