@@ -1,6 +1,6 @@
 ---
 name: bii-plan-placement
-description: Import plans (Lagepläne, Signallagepläne, Ansichten; PDF or TIFF) into a Blender project with the BII Import plugin, place them correctly (grid crosses, existing plans, neighbor sheets, Kilometrierung), crop them, and check the placement against existing plans and tracks. Use for any "load / place / position / align / crop plans" task in Blender, in empty projects and in projects that already have plans.
+description: Import plans (Lagepläne, Signallagepläne, Ansichten; PDF or TIFF) into a Blender project with the BII Import plugin, place them correctly (grid crosses, existing plans, Kilometrierung, neighbor sheets), crop them, and check the placement against existing plans and tracks. Use for any "load / place / position / align / crop plans" task in Blender, in empty projects and in projects that already have plans.
 ---
 
 # Place plans in Blender (BII Import)
@@ -75,11 +75,18 @@ Schnitte are `orientation='UPRIGHT'`; everything below is for flat plans.
 1. **The plan has a coordinate grid** (crosses with Rechtswert/Hochwert, Gauß-Krüger or UTM):
    Georeference. Most accurate (a few cm).
 2. **It overlaps a plan already placed** and has no grid: Align to Scene with points on features both
-   plans show (switch tips, platform ends, bridge edges, track crossings), or attach it as neighbor
-   sheet if it continues a placed sheet at a match line.
-3. **Only Kilometrierung** (hectometer labels): Align by Kilometrierung. Least accurate: the scene's
-   Kilometrierung comes from OpenStreetMap and can be 20 m and more off along the track. Add
-   landmarks (Align to Scene points) whenever you can.
+   plans show (switch tips, platform ends, bridge edges, track crossings), spread over the whole
+   overlap.
+3. **Kilometrierung** (hectometer labels): Align by Kilometrierung. The scene's Kilometrierung comes
+   from OpenStreetMap and can be 20 m and more off along the track. Add landmarks (Align to Scene
+   points) whenever you can.
+4. **Neighbor sheet** only when nothing above works: attach it to a placed sheet at their match line.
+   Each attached sheet adds the error of its match line, so a chain of sheets drifts further at every
+   sheet. Do not chain more than one or two sheets; place each sheet by 1 to 3 where it can be done.
+
+A sheet with too few grid crosses, points or km of its own can combine them: e.g. Kilometrierung
+plus the match line to a sheet placed by grid crosses (Align by Kilometrierung keeps the match line
+with Neighbor Weight).
 
 ### Georeference
 
@@ -105,19 +112,19 @@ pairs = [(u_new, v_new, plan_api.plan_to_world(other, u_old, v_old, 'IMAGE')), .
 residuals = plan_api.align_to_scene(plan, pairs, unit='IMAGE')   # 3+ pairs far apart
 ```
 
-### Neighbor sheet
-
-```python
-plan_api.attach_to_neighbor(plan, other, own=[(u1, v1), (u2, v2)], other=[(u1, v1), (u2, v2)], unit='IMAGE')
-```
-First point: where the track crosses the match line; second: another point on the match line.
-
 ### Kilometrierung
 
 ```python
 lines = plan_api.align_by_km(plan, [(u, v, "53,9"), (u, v, "54,2"), (u, v, "")], strecke="5102", unit='SOURCE')
 ```
 Points on the plan's track at printed km; `""` = a point that only lies on the track.
+
+### Neighbor sheet
+
+```python
+plan_api.attach_to_neighbor(plan, other, own=[(u1, v1), (u2, v2)], other=[(u1, v1), (u2, v2)], unit='IMAGE')
+```
+First point: where the track crosses the match line; second: another point on the match line.
 
 ## 4. Crop
 
