@@ -1,12 +1,17 @@
 ---
 name: bii-plan-placement
-description: Import plans (Lagepläne, Signallagepläne, Ansichten; PDF or TIFF) into a Blender project with the BII Import plugin, place them correctly (grid crosses, existing plans, Kilometrierung, neighbor sheets), crop them, and check the placement against existing plans and tracks. Use for any "load / place / position / align / crop plans" task in Blender, in empty projects and in projects that already have plans.
+description: Import plans (Lagepläne, Signallagepläne, Ansichten; PDF or TIFF) into a Blender project with the BII Import plugin, place them correctly (grid crosses, existing plans, Kilometrierung, neighbor sheets) in the scene of the BII Umgebung plugin (project coordinates, Kilometrierung, track axes, terrain; asks before loading them), crop them, and check the placement against existing plans and tracks. Use for any "load / place / position / align / crop plans" task in Blender, in empty projects and in projects that already have plans.
 ---
 
 # Place plans in Blender (BII Import)
 
 Work through Blender's MCP (`execute_blender_code`). Do every step in order. Do not skip the
-checks in step 6: a plan that is a few meters off ruins everything placed from it later.
+checks in step 7: a plan that is a few meters off ruins everything placed from it later.
+
+Plans are placed into the scene the **BII Umgebung** plugin builds: its project coordinates
+(`scene["lat"]` / `scene["lon"]`) are what grid crosses are converted into, its Kilometrierung
+lines are what Kilometrierung placement fits to, its track axes are what the checks compare with,
+and its terrain is what the plans are placed over.
 
 ## Rules
 
@@ -47,7 +52,9 @@ result = {
   "origin": (scene.get("lat"), scene.get("lon")),   # Umgebung / georeference origin
   "plans": [(p.name, p.bii_plan.orientation, p.bii_plan.massstab, len(p.bii_plan.points),
              len(p.bii_plan_place.km_points), getattr(p.bii_plan_place.attach_parent, "name", None)) for p in plans],
-  "tracks": len(plan_place.track_polylines(scene, "")),
+  "umgebung": hasattr(scene, "railway_chainage"),         # BII Umgebung installed
+  "kilometrierung": plan_place.scene_strecken(scene),     # Strecken with a Kilometrierung line
+  "tracks": len(plan_place.track_polylines(scene, "")),   # Umgebung track axes
   "terrain": [o.name for o in scene.objects if o.get("dem_service")],
 }
 ```
@@ -57,7 +64,53 @@ result = {
 - Existing plans: note how each was placed (grid points, km points, attached to a neighbor). They are
   the references for the new ones.
 
-## 2. Import
+## 2. Umgebung data (ask before loading)
+
+Find out what the plans need, then ask the user before loading anything (it downloads data and
+changes the scene):
+
+- **No terrain:** ask whether to load the terrain (Umgebung: Gelände und Korridor, with a height
+  model or flat).
+- **No Kilometrierung line for the plan's Strecke**, and the plan has no grid and does not overlap a
+  placed plan (step 4, method 3): ask whether to load the Kilometrierung of that Strecke.
+- **No track axes:** ask whether to load them; Check Placement and the signal placement use them.
+- **Project coordinates:**
+  - Scene with an origin: everything fits to it; keep it.
+  - Empty scene and a plan with grid crosses: place that plan first (Georeference sets the origin to
+    the plan's center), then load the Umgebung data around it; Umgebung then uses that origin.
+  - Empty scene and no plan with a grid: Umgebung needs the area first. Ask the user for the place
+    (station, coordinates or Strecke and km range).
+  - Umgebung objects but no origin: Georeference reports it; tell the user, don't guess.
+- Umgebung is not installed: tell the user; only Align to Scene onto placed plans works without it.
+
+If the user wants you to load it (otherwise they use the sidebar tab Umgebung), for example around
+the placed plans:
+
+```python
+from mathutils import Vector
+from bl_ext.user_default.bii_blender_import import plan_geo
+rc = scene.railway_chainage
+proj = plan_geo.SceneProjection(scene["lat"], scene["lon"])
+corners = [p.matrix_world @ Vector(c) for p in plans_to_cover for c in p.bound_box]
+geo = [proj.to_geographic(c.x, c.y) for c in corners]          # (lat, lon)
+m = 0.005                                                       # about 500 m margin
+rc.area_mode = 'BBOX'
+rc.min_lat, rc.max_lat = min(g[0] for g in geo) - m, max(g[0] for g in geo) + m
+rc.min_lon, rc.max_lon = min(g[1] for g in geo) - m, max(g[1] for g in geo) + m
+rc.use_scene_origin = True
+bpy.ops.railway_chainage.scan()                                 # Strecken in the area
+for r in rc.routes:
+    r.selected = r.ref == "5102"                                # the plan's Strecke
+bpy.ops.railway_chainage.generate()                             # Kilometrierung lines
+bpy.ops.railway_chainage.generate_rails()                       # track axes
+rc.terrain_source = 'DEM'                                       # or 'FLAT'
+bpy.ops.railway_chainage.import_terrain()                       # terrain along the Kilometrierung
+```
+
+Each call reports errors (no network, no access to the data server): pass them on to the user.
+The Umgebung plugin's `README.de.md` explains the settings.
+
+## 3. Import
 
 ```python
 bpy.ops.import_image.bii_plan(filepath=r"...\plan.pdf", massstab=1000, orientation='FLAT')
@@ -68,15 +121,16 @@ Several sheets of one plan: `bpy.ops.import_image.bii_plan_sheets(directory=...,
 Read the Maßstab from the title block if the user did not give it. Ansichten and
 Schnitte are `orientation='UPRIGHT'`; everything below is for flat plans.
 
-## 3. Choose how to place it (first that applies)
+## 4. Choose how to place it (first that applies)
 
 1. **The plan has a coordinate grid** (crosses with Rechtswert/Hochwert, Gauß-Krüger or UTM):
    Georeference. Most accurate (a few cm).
 2. **It overlaps a plan already placed** and has no grid: Align to Scene with points on features both
    plans show (switch tips, platform ends, bridge edges, track crossings), spread over the whole
    overlap.
-3. **Kilometrierung** (hectometer labels): Align by Kilometrierung. The scene's Kilometrierung comes
-   from OpenStreetMap and can be 20 m and more off along the track. Add landmarks (Align to Scene
+3. **Kilometrierung** (hectometer labels): Align by Kilometrierung. Needs the Umgebung
+   Kilometrierung line of the plan's Strecke (step 2). That Kilometrierung comes from
+   OpenStreetMap and can be 20 m and more off along the track. Add landmarks (Align to Scene
    points) whenever you can.
 4. **Neighbor sheet** only when nothing above works: attach it to a placed sheet at their match line.
    Each attached sheet adds the error of its match line, so a chain of sheets drifts further at every
@@ -124,7 +178,7 @@ plan_api.attach_to_neighbor(plan, other, own=[(u1, v1), (u2, v2)], other=[(u1, v
 ```
 First point: where the track crosses the match line; second: another point on the match line.
 
-## 4. Crop
+## 5. Crop
 
 ```python
 rect = plan_api.auto_crop(plan)          # removes empty paper and the sheet frame
@@ -133,12 +187,12 @@ Auto Crop keeps the title block and legends inside the frame. Check on the image
 part still contains title block or legend, and trim with `plan_api.crop(plan, u0, v0, u1, v1, unit)`.
 Keep all plan drawing, track stubs and "Anschluss Blatt" labels.
 
-## 5. Height
+## 6. Height
 
 Plans keep the height they were imported at. They hide terrain and objects below them in top views:
 for renders that check other objects, hide the plans.
 
-## 6. Check the placement (always)
+## 7. Check the placement (always)
 
 ```python
 for r in plan_api.check_placement(plan):
@@ -164,7 +218,7 @@ how many meters and in which direction (right/left/up/down)?"
 Also check: Georeference RMS ≤ 0.5 m and largest residual ≤ 1 m (more: a misread cross; fix it,
 don't drop it silently). Neighbor sheets: their match line shows no step.
 
-## 7. Report
+## 8. Report
 
 For each plan: how it was placed, the numbers (Maßstab, residuals), the check results against each
 plan and the tracks, and what stayed uncertain. Say plainly when a check could not decide.

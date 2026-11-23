@@ -15,8 +15,15 @@ earlier projects came from skipping steps 2, 4 and 7.
 - Functions: `from bl_ext.user_default.bii_blender_import import plan_api, signal_panel as sp,
   signal_spec as spec, signal_legend`. The extension's `README.md` (sections Signals and Scripting)
   has the details. `result` in `execute_blender_code` must be a dict.
-- Do not load `DB_Signale.blend` yourself or write the modifier: `sp.place_signal`,
-  `sp.configure_signal` and `sp.read_signal` do that and check every value.
+- **Signal models:** the signals come from the BII asset library (`DB_Signale.blend`), which the
+  user must have added under Preferences > File Paths > Asset Libraries. Check first:
+  `sp.library_path(bpy.context, "", "Ks-Hauptsignal")[0]` is None: no library has the signals (or
+  only an old one); tell the user `sp.missing_text(bpy.context, "", "Ks-Hauptsignal")` and stop.
+- Place, change and read signals only with `sp.place_signal`, `sp.configure_signal` and
+  `sp.read_signal`: they load the model from that library, set the modifier and check every value.
+- **Terrain and track axes** of the BII Umgebung plugin: signals stand on the terrain and turn
+  along the track axes. If they are missing, ask the user whether to load them (skill
+  `bii-plan-placement`, step 2).
 
 ## 1. Symbol key
 
