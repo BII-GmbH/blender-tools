@@ -10,9 +10,8 @@ checks in step 6: a plan that is a few meters off ruins everything placed from i
 
 ## Rules
 
-- **Images:** ask one question per look, at most 2 images at a time, and name exactly what to
-  report (numbers, pixel positions, "yes/no and by how many meters"). Small images answer more
-  reliably than whole sheets. Do what you can with numbers first (Python, Pillow, numpy).
+- Do what you can with numbers first (Python, Pillow, numpy); look at images where numbers
+  cannot decide.
 - **Do not rebuild** what is in the scene. Do not move plans that are already placed unless the user
   asks; if you find one wrong, report it and ask.
 - **Never** apply scale or rotation of a plan object, never Set Origin, never edit its mesh by hand:
@@ -158,7 +157,7 @@ It compares the plan with every flat plan it overlaps and with the Umgebung trac
 for i, c in enumerate(plan_api.overlap_centers(plan, other, 3)):   # other: a plan or "TRACKS"
     plan_api.overlay(plan, other, c, rf"{folder}\overlay_{i}.png", size=80)
 ```
-Look at each image alone: "Red is plan A, blue is plan B (or the track axes), dark
+Look at each image: "Red is plan A, blue is plan B (or the track axes), dark
 purple where both lie, grid 10 m, north up. Do the red track lines lie on the blue ones? If not, by
 how many meters and in which direction (right/left/up/down)?"
 

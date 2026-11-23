@@ -12,8 +12,6 @@ earlier projects came from skipping steps 2, 4 and 7.
 
 - **Plans placed and checked** with the skill `bii-plan-placement`. A signal is only as right as the
   plan under it.
-- **Images:** look at at most 2 images at a time (a symbol crop and the matching part of the
-  symbol key), one signal or one question per look, and name exactly what to report.
 - Functions: `from bl_ext.user_default.bii_blender_import import plan_api, signal_panel as sp,
   signal_spec as spec, signal_legend`. The extension's `README.md` (sections Signals and Scripting)
   has the details. `result` in `execute_blender_code` must be a dict.
@@ -51,8 +49,7 @@ Vorsignalbaken (Ne3, plates with 1 to 5 diagonal stripes) and Lf 6/Lf 7 plates w
 
 ## 3. Classify each signal
 
-Look at the symbol crop next to the key image of its group and ask for each attribute
-separately, not "which signal is this":
+Compare the symbol crop with the key image of its group, attribute by attribute, not "which signal is this":
 - head shape (Ks: rounded top = Hauptsignal, rounded bottom = Vorsignal, rounded both ends =
   Mehrabschnittssignal; H/V: circles / two dots), filled, right half filled or empty (Bedienung);
 - above the head: `^` (Zs1), `V` (Zs7), triangle (Zs3) filled or empty; below the head: triangle (Zs3v)
