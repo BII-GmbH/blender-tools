@@ -130,6 +130,24 @@ class GeoreferenceOperatorTest(unittest.TestCase):
         self.assertLess((a - targets[0]).xy.length, 1e-3)
         self.assertLess((b - targets[1]).xy.length, 1e-3)  # 100 m apart, Maßstab kept
 
+    def test_align_to_scene_fit_scale(self):
+        # 0.1 m on the sheet is 105 m in the scene: Maßstab 1:1050. The targets lie
+        # on terrain at different heights, which must not change the scale.
+        targets = [Vector((10.0, 20.0, 3.0)), Vector((10.0, 125.0, 40.0)),
+                   Vector((-42.5, 20.0, 12.0))]
+        for (x, y), target in zip(((0.0, 0.0), (0.1, 0.0), (0.0, 0.05)), targets):
+            pair = self.pg.pairs.add()
+            pair.x, pair.y = x, y
+            pair.target = target
+        self.pg.fit_scale = True
+        self.assertEqual(bpy.ops.bii_plan.align(), {'FINISHED'})
+        bpy.context.view_layer.update()
+        self.assertAlmostEqual(self.pg.massstab, 1050, delta=0.01)
+        for pair, target in zip(self.pg.pairs, targets):
+            got = self.obj.matrix_world @ Vector((pair.x, pair.y, 0.0))
+            self.assertLess((got - target).xy.length, 1e-3)
+            self.assertLess(pair.residual, 1e-3)  # heights do not count on a flat plan
+
 
 if __name__ == "__main__":
     unittest.main()

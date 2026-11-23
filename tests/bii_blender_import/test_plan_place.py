@@ -158,6 +158,29 @@ class PlanPlaceTest(unittest.TestCase):
         new.km_text = "5,6"  # typed: read from the plan
         self.assertFalse(new.km_guessed)
 
+    def test_align_by_km_fit_scale(self):
+        # The plan was printed at 1:1050 but imported at 1:1000.
+        plan = self.import_plan()
+        truth = self.true_matrix() @ Matrix.Diagonal((1.05, 1.05, 1.05, 1))
+        place = plan.bii_plan_place
+        place.strecke = "5240"
+        for km in ("5,25", "5,4", "5,55"):
+            p = place.km_points.add()
+            p.name = f"K{len(place.km_points)}"
+            p.x, p.y = self.sheet_xy(truth, km_point(plan_km.parse_km(km)))
+            p.km_text = km
+        plan.location.z = 2.0
+        bpy.context.view_layer.update()
+        self.assertEqual(bpy.ops.bii_plan.align_km(), {'FINISHED'})
+        self.assertIn("!", place.report)  # Maßstab locked: large residuals
+        plan.bii_plan.fit_scale = True
+        self.assertEqual(bpy.ops.bii_plan.align_km(), {'FINISHED'})
+        self.assertAlmostEqual(plan.bii_plan.massstab, 1050, delta=1)
+        self.assert_placed(plan, truth, tolerance=0.3)
+        self.assertAlmostEqual(plan.matrix_world.translation.z, 2.0)
+        self.assertIn("measured", place.report)
+        self.assertNotIn("!", place.report)
+
     def test_landmark_label_sets_strecke_and_wins(self):
         plan = self.import_plan()
         truth = self.true_matrix()

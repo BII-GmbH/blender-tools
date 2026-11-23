@@ -51,13 +51,19 @@ The plan becomes a plane at its true size: the sheet size comes from the file's 
 |---|---|
 | Maßstab 1: | Scale printed on the plan. Can be changed later in the sidebar. |
 | Orientation | Flat for Lagepläne (on the ground), Upright for Ansichten and Schnitte. |
-| Background | Opacity of the white paper, see below. 0 (default): the lines lie over maps and models. 1: the plan as printed. Can be changed later in the sidebar. |
+| Background | Opacity of the white paper, see below. 0: the lines lie over maps and models. 1 (default): the plan as printed. Can be changed later in the sidebar. Edit > Preferences > Add-ons > BII Blender Import > Plan Background sets the default. |
 | Resolution | Long side of the plan image, 16384 px (the most GPUs show) down to 1024 px. 8192 px by default, which keeps most plans readable at a quarter of the memory. Can be changed later. |
 | PDF Page | Page of a PDF with several pages. |
 | PDF Resolution | 0 uses the resolution of the scan in the PDF, or 300 dpi for vector drawings. |
 | Check GPU Memory | Imports the plan only if the GPU has memory left for it, see below. On by default for every import. |
 
 The PNG goes into a `plans` folder next to the .blend file. If the .blend file is not saved yet, the PNG is packed into it.
+
+### Files and Relink
+
+The panel shows where the plan's original (PDF, TIFF, ...) and its image (the PNG) are; a red icon marks a missing file. Both paths can be edited there. The path to the original is stored relative to the .blend file (`//`) if the original lies in the .blend file's folder or below it, else absolute. Saving into another folder (Save As) updates it.
+
+To pass a project on, send the .blend file with its `plans` folder, or pack the images first (File > External Data > Pack Resources). Without them, the plans show purple. Relink (in the panel, for all selected plans) then helps: choose a folder, and it looks there and in its subfolders for each plan's original by its file name, links the plan to it and writes the missing image again from it, at the plan's resolution. Crop, points and placement stay.
 
 The sidebar (N) > BII Plan shows the settings of the selected plan. With several plans selected, it shows only what can change for all of them at once: Maßstab, Orientation, Opacity, Background, Full Sheet, Reset Crop and Change Resolution. Fields where the plans differ say "(mixed)" and show the active plan's value; a change sets it on all selected plans. Crop, Georeference, Neighbor Sheets, Kilometrierung and Align to Scene work on one plan and show when it is selected alone.
 
@@ -121,7 +127,7 @@ The coordinates go through WGS84 with the 7-parameter transformations PROJ uses 
 
 ### Align to Scene
 
-For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. Shift-click + to add several points in a row, moving the 3D cursor with Shift + right click in between. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
+For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. Shift-click + to add several points in a row, moving the 3D cursor with Shift + right click in between. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on: then two or more points measure the Maßstab (on a flat plan from their horizontal distances only, so the terrain height at the 3D cursor does not count). One point only moves the plan.
 
 ### Place by Kilometrierung
 
@@ -130,7 +136,7 @@ For DB Lagepläne without grid crosses: they show the Kilometrierung of the Stre
 1. Enter the Strecke (5240). Empty works when the scene has only one Strecke. The panel shows the km range of its Kilometrierung lines.
 2. Move the plan roughly into place by hand (optional: two km points far apart fix it from anywhere).
 3. Click + and then a point on the plan track: a hectometer mark, a landmark. Shift-click + to add several, until Esc. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
-4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
+4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays, unless Fit Scale is on: then the fit measures the Maßstab from the km points and landmarks and scales the plan, as Place in Scene does with grid crosses. That needs km points or landmarks some distance apart, else the plan keeps its Maßstab and the report says so. Fit Scale is the same switch as in Align to Scene. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
 
 Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation, often a few meters off along the track): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
 
@@ -182,10 +188,33 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the
 Options that do not fit the rest are greyed out. Kennziffer is a number field. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 
 - With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
-- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
+- Where to put the 3D cursor: at the foot of the symbol, the end of its stem (the bar across it), not its middle. A symbol without a stem sits there with its lower end.
+- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). On Terrain (on by default) puts it on the BII Umgebung terrain under the cursor, so a cursor snapped to the plan sheet above the ground still gives a signal on the ground; without terrain there, it stays at the cursor's height. The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
 - The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: left empty, it takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
 
+Save Symbol Key writes all symbols as one PNG: every Bauform and each of its options, with the option in words, its value for scripts (`zs3="tafel"`) and a red dot where the signal's foot belongs. Print it as a key, or give it to an AI agent to compare with a plan.
+
 The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library.
+
+### Scripting
+
+For scripts and AI agents (for example through the Blender MCP), `signal_panel` has functions that check their input and say what is allowed when it is not:
+
+```python
+from bl_ext.user_default.bii_blender_import import signal_panel as sp, signal_legend
+
+obj = sp.place_signal("ks_mehr", {"zs3": "licht", "zs3v": "licht", "kopf": "ohne"},
+                      location=(x, y, 0.0), aspect="Ks1", align_to_track=True, on_terrain=True)
+sp.read_signal(obj)                          # ("ks_mehr", {...full configuration...}, "Ks1")
+obj = sp.configure_signal(obj, {"zs3": "tafel"})   # changes only what is given
+obj = sp.configure_signal(obj, bauform="ks_haupt") # a new object in the same place
+sp.terrain_height(bpy.context, x, y)         # z of the BII Umgebung terrain, or None
+signal_legend.write("key.png")               # the symbol key, also without Blender
+```
+
+- `place_signal(bauform, config, location, rotation=None, aspect="Aus", *, align_to_track, on_terrain, library, collection, name)`: `location` is the foot of the mast. `rotation` in radians about Z; None with `align_to_track` turns it along the nearest track (add `math.pi` for the other direction). The name is "<Name> <Tag>" from the configuration.
+- Configurations: `bauform` is a key of `signal_spec.BY_KEY`; `config` holds element keys and values as in the symbol key (missing ones keep their defaults). An unknown key or value, options that do not fit together, or an aspect the signal cannot show raise `ValueError` with the allowed values; nothing is changed silently. No asset library with the signal raises `RuntimeError`.
+- Do not read the modifier with `mod[...]`: Blender 5.2 and later keep the inputs in `mod.properties`. `read_signal` handles both.
 
 ## Tests
 

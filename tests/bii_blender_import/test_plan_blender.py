@@ -46,8 +46,8 @@ class PlanImportTest(unittest.TestCase):
         self.assertTrue(pg.is_plan)
         self.assertAlmostEqual(pg.width, 600 / 300 * 0.0254, places=6)
         self.assertAlmostEqual(pg.massstab, 1000)
-        self.assertEqual(pg.background, 0.0)
-        self.assertEqual(pg.image.alpha_mode, 'STRAIGHT')
+        self.assertEqual(pg.background, 1.0)  # without add-on preferences
+        self.assertEqual(pg.image.alpha_mode, 'NONE')  # Solid view shows the paper
 
     def test_modifier_sets_uv_from_positions(self):
         depsgraph = bpy.context.evaluated_depsgraph_get()

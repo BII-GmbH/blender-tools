@@ -58,16 +58,24 @@ class Canvas:
                 ys += [p[2] - p[3], p[2] + p[3]]
         return min(xs), min(ys), max(xs), max(ys)
 
+    def _fit(self, size):
+        """(scale, ox, oy): symbol units to pixels of a square image of size, fitted into 84 % of it."""
+        x0, y0, x1, y1 = self.bounds()
+        scale = 0.84 * size / max(x1 - x0, y1 - y0)
+        return scale, size / 2 - (x0 + x1) / 2 * scale, size / 2 - (y0 + y1) / 2 * scale
+
+    def pixel(self, x, y, size=SIZE):
+        """(column, row from the top) of a point of the symbol in the image of gray(size)."""
+        scale, ox, oy = self._fit(size)
+        return x * scale + ox, size - (y * scale + oy)
+
     def gray(self, size=SIZE, supersample=SUPERSAMPLE):
         """Gray pixels (1 = paper, 0 = ink) of a square image, symbol fitted into 84 % of it,
         rows from the bottom."""
-        x0, y0, x1, y1 = self.bounds()
         w = h = size
-        scale = 0.84 * w * supersample / max(x1 - x0, y1 - y0)
         nw, nh = w * supersample, h * supersample
         img = np.ones((nh, nw), np.float32)
-        ox = nw / 2 - (x0 + x1) / 2 * scale
-        oy = nh / 2 - (y0 + y1) / 2 * scale
+        scale, ox, oy = self._fit(nw)
         for p in self.prims:
             if p[0] == "poly":
                 pts = [(q[0] * scale + ox, q[1] * scale + oy) for q in p[1]]
@@ -166,6 +174,12 @@ def _clip_right(pts):
             t = x0 / (x0 - x1)
             out.append((0.0, y0 + t * (y1 - y0)))
     return out
+
+
+def anchor(elements, size=SIZE):
+    """(column, row from the top) of the signal's origin in draw(elements, size): the middle of the
+    foot bar, or the bottom of the symbol without a mast. The 3D signal's origin belongs there."""
+    return build(elements).pixel(0.0, 0.0, size)
 
 
 def draw(elements, size=SIZE):
@@ -355,9 +369,12 @@ def build(elements):
                 c.line([(-4, y + 1), (4, y + 7)])
                 c.line([(-4, y + 7), (4, y + 1)])
                 y += 7
-            elif kind == "zus":  # additional light top left of the last head
-                hy = heads[-1][1] if heads else y
-                c.ring(-6.6, hy - 1.2, 1.8)
+            elif kind == "zus":  # ("zus"[, "unten"]): additional light left of the last head, top or bottom
+                if args and args[0] == "unten":
+                    hy = heads[-1][0] + 1.2 if heads else y
+                else:
+                    hy = (heads[-1][1] if heads else y) - 1.2
+                c.ring(-6.6, hy, 1.8)
             else:
                 raise ValueError(kind)
             heads.append((y0, y))

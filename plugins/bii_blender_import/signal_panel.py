@@ -18,6 +18,8 @@ import time
 import bpy
 import bpy.utils.previews
 from bpy.props import BoolProperty, EnumProperty, IntProperty, StringProperty
+from bpy_extras.io_utils import ExportHelper
+from mathutils import Vector
 
 from . import plan_km, plan_place, signal_spec as spec, signal_symbols as symbols
 from .import_plan import _redraw
@@ -221,6 +223,10 @@ class SignalDraft(bpy.types.PropertyGroup):
     align_to_track: BoolProperty(
         name="Align to Track", default=True,
         description="Turn the signal to the nearest Umgebung track axis (Gleisachse), lamps facing along it")
+    on_terrain: BoolProperty(
+        name="On Terrain", default=True,
+        description="Put the signal on the BII Umgebung terrain under the 3D cursor (the cursor's height "
+                    "where there is no terrain)")
 
     def get(self):
         cfg = json.loads(self.config or "{}")
@@ -482,19 +488,155 @@ def load_signal_object(path, asset, method):
         raise RuntimeError(f"{asset} not found in {path}")
     if obj.library is not None:
         obj = obj.make_local()  # object local, mesh and node groups stay linked / packed
+    if obj.library is not None:
+        # Blender 5.3 keeps a packed object linked here (its name is read-only): a local copy
+        # instead, which uses the same linked / packed mesh and node groups
+        linked, obj = obj, obj.copy()
+        if linked.users == 0:
+            bpy.data.objects.remove(linked)
     if obj.asset_data:
         obj.asset_clear()
     return obj
 
 
 def track_direction(context, point):
-    """Unit XY tangent of the nearest Umgebung track axis at point, or None."""
+    """Unit XY tangent of the nearest Umgebung track axis at point (x, y), or None."""
     best = None
     for pts in plan_place.track_polylines(context.scene, ""):
-        d, _q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point.x, point.y)
+        d, _q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point[0], point[1])
         if best is None or d < best[0]:
             best = (d, tangent)
     return best[1] if best else None
+
+
+def track_rotation(context, point):
+    """Z rotation that turns a signal at point (x, y) along the nearest Umgebung track axis, or None.
+    Local +Y runs along the track, the lamps (-Y) face the trains coming along -tangent; Turn 180°
+    (rotation + pi) faces the other direction."""
+    t = track_direction(context, point)
+    return None if t is None else math.atan2(t[1], t[0]) - math.pi / 2
+
+
+def terrain_height(context, x, y):
+    """Height of the BII Umgebung terrain (meshes with the property "dem_service") at world (x, y),
+    or None where there is none. With overlapping terrain pieces, the highest one counts."""
+    best = None
+    for obj in context.scene.objects:
+        if obj.type != 'MESH' or not obj.get("dem_service"):
+            continue
+        corners = [obj.matrix_world @ Vector(c) for c in obj.bound_box]
+        if not (min(c.x for c in corners) <= x <= max(c.x for c in corners)
+                and min(c.y for c in corners) <= y <= max(c.y for c in corners)):
+            continue
+        top = max(c.z for c in corners) + 1.0
+        inv = obj.matrix_world.inverted()
+        origin = inv @ Vector((x, y, top))
+        direction = (inv.to_3x3() @ Vector((0.0, 0.0, -1.0))).normalized()
+        hit, loc, _normal, _index = obj.ray_cast(origin, direction)
+        if hit:
+            z = (obj.matrix_world @ loc).z
+            best = z if best is None else max(best, z)
+    return best
+
+
+# ---------------------------------------------------------------- scripting API
+# For scripts and AI agents (e.g. through the Blender MCP). signal_spec lists the Bauformen
+# (spec.BAUFORMEN), their elements and options (spec.elements, spec.options) and the aspects
+# (spec.aspects); signal_legend.write() draws all of them as a key with the values to use here.
+
+def checked_config(bauform, values):
+    """Full configuration of bauform from {element: value}; the rest stays at the defaults.
+    Raises ValueError with the allowed values when bauform, an element or a value is unknown or
+    when options do not fit together (no silent changes)."""
+    if bauform not in spec.BY_KEY:
+        raise ValueError(f"unknown bauform {bauform!r}; one of {', '.join(spec.BY_KEY)}")
+    keys = [e.key for e in spec.elements(bauform)]
+    for k, v in values.items():
+        if k not in keys:
+            raise ValueError(f"{bauform} has no element {k!r}; it has {', '.join(keys)}")
+        if v not in spec.ELEMENT[k].values():
+            raise ValueError(f"{k}: unknown value {v!r}; one of {spec.ELEMENT[k].values()}")
+    cfg = spec.config(bauform, **values)
+    bad = [f"{k}={cfg[k]!r}" for k in keys if not spec.allowed(bauform, k, cfg[k], cfg)]
+    if bad:
+        raise ValueError(f"{bauform}: {', '.join(bad)} does not fit the rest of {cfg}")
+    return cfg
+
+
+def _checked_aspect(bauform, cfg, aspect):
+    if aspect not in spec.aspects(bauform, cfg):
+        raise ValueError(f"aspect {aspect!r} lights nothing on this signal; one of "
+                         f"{spec.aspects(bauform, cfg)}")
+    return aspect
+
+
+def read_signal(obj):
+    """(bauform, config, aspect) of a placed signal, or None if obj is not one."""
+    mod = signal_modifier(obj)
+    return object_state(mod) if mod else None
+
+
+def place_signal(bauform, config=None, location=(0.0, 0.0, 0.0), rotation=None, aspect="Aus", *,
+                 align_to_track=False, on_terrain=False, library="", collection=None, name=None,
+                 context=None):
+    """Place a new signal and return its object.
+
+    bauform: a key of spec.BY_KEY ("ks_haupt", "lf7", ...). config: {element: value}, e.g.
+    {"zs3": "licht", "kennziffer": 8}; missing elements keep their defaults. location: world
+    (x, y, z) of the foot of the mast, which is the bottom of the symbol on the plan (the red dot of
+    the symbol key). rotation: Z angle in radians; None turns it along the nearest track with
+    align_to_track, else 0. on_terrain: z from the BII Umgebung terrain under (x, y), if any.
+    library: name of the asset library, "" for the first one with the signal. collection: default
+    the active collection. name: default "<Name> <Tag>" from the configuration.
+    Raises ValueError for a configuration or aspect that does not exist or fit, RuntimeError when
+    no asset library has the signal.
+    """
+    context = context or bpy.context
+    cfg = checked_config(bauform, config or {})
+    aspect = _checked_aspect(bauform, cfg, aspect)
+    b = spec.BY_KEY[bauform]
+    path, method, _lib = library_path(context, library, b.asset)
+    if not path:
+        raise RuntimeError(missing_text(context, library, b.asset))
+    obj = load_signal_object(path, b.asset, method)
+    (collection or context.collection).objects.link(obj)
+    x, y, z = location
+    if on_terrain:
+        h = terrain_height(context, x, y)
+        z = z if h is None else h
+    if rotation is None and align_to_track:
+        rotation = track_rotation(context, (x, y))
+    obj.location = (x, y, z)
+    obj.rotation_euler = (0.0, 0.0, rotation or 0.0)
+    write_signal(signal_modifier(obj), bauform, cfg, aspect)
+    obj.name = name or spec.object_name(bauform, cfg)
+    return obj
+
+
+def configure_signal(obj, config=None, aspect=None, bauform=None, context=None):
+    """Change a placed signal and return it: config {element: value} on top of its current
+    configuration, aspect (None keeps it if it still lights), bauform (another Bauform replaces the
+    object in the same place, see replace_signal; the returned object is then a new one). The name
+    follows unless the user renamed the signal. Raises ValueError like place_signal."""
+    context = context or bpy.context
+    state_ = read_signal(obj)
+    if state_ is None:
+        raise ValueError(f"{obj.name} is not a signal of {LIBRARY_FILE}")
+    old_bauform, old_cfg, old_aspect = state_
+    if bauform and bauform != old_bauform:
+        checked_config(bauform, {})
+        obj = replace_signal(context, obj, old_bauform, old_cfg, old_aspect, bauform)
+        old_bauform, old_cfg, old_aspect = read_signal(obj)
+    values = {k: v for k, v in old_cfg.items() if not (config and k in config)}
+    cfg = checked_config(old_bauform, {**values, **(config or {})})
+    if aspect is None:
+        aspect = old_aspect if old_aspect in spec.aspects(old_bauform, cfg) else "Aus"
+    aspect = _checked_aspect(old_bauform, cfg, aspect)
+    auto = auto_named(obj, old_bauform, old_cfg)
+    write_signal(signal_modifier(obj), old_bauform, cfg, aspect)
+    if auto:
+        obj.name = spec.object_name(old_bauform, cfg)
+    return obj
 
 
 class SignalPlaceOperator(bpy.types.Operator):
@@ -506,34 +648,50 @@ class SignalPlaceOperator(bpy.types.Operator):
     def execute(self, context):
         d = context.scene.bii_signal
         bauform, cfg, aspect, _ = state(context)
-        b = spec.BY_KEY[bauform]
-        path, method, _lib = library_path(context, d.library, b.asset)
-        if not path:
-            self.report({'ERROR'}, missing_text(context, d.library, b.asset))
-            return {'CANCELLED'}
+        cursor = context.scene.cursor.location
+        rotation = track_rotation(context, cursor) if d.align_to_track else None
+        if rotation is None:
+            rotation = context.scene.cursor.rotation_euler.z
+        z = cursor.z
+        if d.on_terrain:
+            h = terrain_height(context, cursor.x, cursor.y)
+            if h is None:
+                self.report({'INFO'}, "No BII Umgebung terrain under the 3D cursor: placed at its height")
+            else:
+                z = h
         try:
-            obj = load_signal_object(path, b.asset, method)
-        except (OSError, RuntimeError, KeyError) as e:
-            self.report({'ERROR'}, f"Could not load {b.asset}: {e}")
+            obj = place_signal(bauform, cfg, (cursor.x, cursor.y, z), rotation,
+                               aspect if aspect in spec.aspects(bauform, cfg) else "Aus",
+                               library=d.library, context=context)
+        except (OSError, RuntimeError, KeyError, ValueError) as e:
+            self.report({'ERROR'}, f"Could not place {spec.BY_KEY[bauform].asset}: {e}")
             return {'CANCELLED'}
-        context.collection.objects.link(obj)
-        cursor = context.scene.cursor
-        obj.location = cursor.location
-        obj.rotation_euler = (0.0, 0.0, cursor.rotation_euler.z)
-        if d.align_to_track:
-            t = track_direction(context, cursor.location)
-            if t is not None:
-                # local +Y along the track: the lamps (-Y) face the trains coming along -t
-                obj.rotation_euler = (0.0, 0.0, math.atan2(t[1], t[0]) - math.pi / 2)
         for o in context.view_layer.objects:
             if o.select_get():
                 o.select_set(False)
         obj.select_set(True)
         context.view_layer.objects.active = obj
-        mod = signal_modifier(obj)
-        if mod:
-            write_signal(mod, bauform, cfg, aspect)
-        obj.name = spec.object_name(bauform, cfg)
+        return {'FINISHED'}
+
+
+class SignalLegendOperator(bpy.types.Operator, ExportHelper):
+    """Save all signal symbols with their options as one PNG: a key to compare with plans, with the
+    values for scripts and a red dot where the signal's foot belongs"""
+    bl_idname = "bii_signal.export_legend"
+    bl_label = "Save Symbol Key"
+    bl_options = {'REGISTER'}
+
+    filename_ext = ".png"
+    filter_glob: StringProperty(default="*.png", options={'HIDDEN'})
+
+    def execute(self, context):
+        from . import signal_legend
+        try:
+            w, h = signal_legend.write(self.filepath)
+        except (OSError, ImportError) as e:
+            self.report({'ERROR'}, f"Could not save the symbol key: {e}")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Symbol key saved: {self.filepath} ({w} x {h} px)")
         return {'FINISHED'}
 
 
@@ -626,6 +784,7 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
         col.use_property_split = True
         col.prop_search(d, "library", context.preferences.filepaths, "asset_libraries")
         col.prop(d, "align_to_track")
+        col.prop(d, "on_terrain")
         row = layout.row(align=True)
         row.scale_y = 1.4
         row.operator(SignalPlaceOperator.bl_idname, text="Place Another" if mod else "Place Signal",
@@ -635,6 +794,7 @@ class VIEW3D_PT_bii_signal(bpy.types.Panel):
             col.label(text=f"From: {lib}", icon='ASSET_MANAGER')
         else:
             wrapped_label(layout, context, missing_text(context, d.library, bf.asset), 'ERROR')
+        layout.operator(SignalLegendOperator.bl_idname, icon='IMAGE_DATA')
 
 
 def _split(layout, columns):
@@ -660,6 +820,7 @@ classes = (
     SignalSetAspectOperator,
     SignalTakeOperator,
     SignalPlaceOperator,
+    SignalLegendOperator,
     SignalTurnOperator,
     VIEW3D_PT_bii_signal,
 )
