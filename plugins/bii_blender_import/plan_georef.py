@@ -1041,7 +1041,9 @@ def _draw_several(layout, context, plans):
         mixed = import_plan.values_differ(plans, name)
         layout.prop(multi, name, text=text + (" (mixed)" if mixed else ""), **kwargs)
     layout.use_property_split = False
-    layout.operator(import_plan.PlanCropResetOperator.bl_idname, icon='LOOP_BACK')
+    row = layout.row(align=True)
+    row.operator("bii_plan.auto_crop", icon='FULLSCREEN_EXIT')
+    row.operator(import_plan.PlanCropResetOperator.bl_idname, icon='LOOP_BACK')
     wrapped_label(layout, context, "A change goes to all selected plans. To crop, "
                   "georeference or place a plan, select it alone", 'INFO')
     _draw_view_hints(layout, context)
@@ -1091,8 +1093,11 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
         row = layout.row(align=True)
         op = row.operator(PlanPickOperator.bl_idname, text="Crop Rectangle", icon='SELECT_SET')
         op.mode = 'CROP'
+        row.operator("bii_plan.auto_crop", text="", icon='FULLSCREEN_EXIT')
         row.operator(import_plan.PlanCropResetOperator.bl_idname, text="", icon='LOOP_BACK')
         layout.label(text="Or edit the outline in Edit Mode", icon='INFO')
+        if pg.orientation == 'FLAT':
+            layout.operator("bii_plan.check_placement", icon='CHECKMARK')
         _draw_view_hints(layout, context)
 
 

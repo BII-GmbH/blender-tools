@@ -520,6 +520,11 @@ class PlanAlignKmOperator(bpy.types.Operator):
         except ValueError as e:
             self.report({'ERROR'}, str(e))
             return {'CANCELLED'}
+        if not (obj.bii_plan_place.landmark_weight > 0 and len(obj.bii_plan.pairs)):
+            lines.append("Only km points: the position along the track follows the OSM Kilometrierung, "
+                         "which can be off by 20 m or more. If the plan has a coordinate grid, use "
+                         "Georeference instead; else add landmarks (Align to Scene points). Check "
+                         "Placement compares the plan with other plans and the tracks")
         context.view_layer.update()
         moved, kept, warnings = place_chain(context.scene, obj)
         if moved:

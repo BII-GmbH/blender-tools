@@ -82,6 +82,16 @@ class GeoreferenceOperatorTest(unittest.TestCase):
             import_plan.set_point_value(p, "easting", E0 + STEP * i, 'READ')
             import_plan.set_point_value(p, "northing", N0 + STEP * j, 'READ')
 
+    def test_plan_api_georeference(self):
+        from bii_blender_import import plan_api
+        crosses = [(*cross_sheet(i, j), E0 + STEP * i, N0 + STEP * j) for i, j in CROSSES]
+        scale, rms, worst, warnings = plan_api.georeference(self.obj, crosses, 'SHEET', crs='DB_REF')
+        self.assertAlmostEqual(scale, 1000, delta=5)
+        self.assertLess(rms, 0.2)
+        self.assertEqual(len(self.pg.points), 4)
+        plan_api.georeference(self.obj, crosses[:2], 'SHEET')  # replaces the points
+        self.assertEqual(len(self.pg.points), 2)
+
     def test_snap_finds_the_cross_center(self):
         x, y = cross_sheet(1, 0)
         sx, sy = plan_georef.snap_to_cross(self.pg, x + 0.0004, y - 0.0003)
