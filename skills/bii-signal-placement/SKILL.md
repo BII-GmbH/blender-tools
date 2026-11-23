@@ -12,9 +12,8 @@ earlier projects came from skipping steps 2, 4 and 7.
 
 - **Plans placed and checked** with the skill `bii-plan-placement`. A signal is only as right as the
   plan under it.
-- **Images:** if you cannot view images yourself (heimdall-claude / edda), give every viewing task
-  to the `heimdall:image-reader` subagent: at most 2 images per call (a symbol crop and the matching
-  part of the symbol key), one signal or one question per call, and name exactly what to report.
+- **Images:** look at at most 2 images at a time (a symbol crop and the matching part of the
+  symbol key), one signal or one question per look, and name exactly what to report.
 - Functions: `from bl_ext.user_default.bii_blender_import import plan_api, signal_panel as sp,
   signal_spec as spec, signal_legend`. The extension's `README.md` (sections Signals and Scripting)
   has the details. `result` in `execute_blender_code` must be a dict.
@@ -47,12 +46,12 @@ for i, g in enumerate(groups):
 Make a table with one row per group: what it is (signal, sign, label/km text, note, other equipment
 such as GSA/GSE track circuit marks), its plan label (e.g. 06N601) and km. A group can hold several
 symbols and their labels; split it then. **Every group gets a row.** Before placing, check the table
-against the plan once more (image-reader: "list every red symbol in this crop") so nothing is missed:
+against the plan once more ("list every red symbol in this crop") so nothing is missed:
 Vorsignalbaken (Ne3, plates with 1 to 5 diagonal stripes) and Lf 6/Lf 7 plates were missed before.
 
 ## 3. Classify each signal
 
-Send image-reader the symbol crop plus the key image of its group and ask for each attribute
+Look at the symbol crop next to the key image of its group and ask for each attribute
 separately, not "which signal is this":
 - head shape (Ks: rounded top = Hauptsignal, rounded bottom = Vorsignal, rounded both ends =
   Mehrabschnittssignal; H/V: circles / two dots), filled, right half filled or empty (Bedienung);
@@ -72,11 +71,11 @@ crop larger (`scale=3`) and ask again; when still unclear, list it as uncertain 
 
 The signal belongs at the **foot of its symbol**: the end of the stem, the short bar across it (the
 red dot in the key), never the middle of the symbol. Without a stem: the lower end of the symbol,
-or for a signal on a bridge the point on the bridge line. Ask image-reader for the pixel position of
+or for a signal on a bridge the point on the bridge line. Measure the pixel position of
 the foot bar's center in the crop, then add the crop's offset (`box[0] - pad`, `box[1] - pad`, divided by
 `scale` first) to get IMAGE pixels of the plan.
 
-Ask in the same call for the **head point**: the center of the far end of the symbol (the top of
+Measure the **head point** too: the center of the far end of the symbol (the top of
 the topmost mark, e.g. the tip of the Zs 1 chevron or of the head). From head to foot is the
 direction the signal faces: a symbol drawn with its top to the west and its foot to the east looks
 upright when seen from the east, so the signal faces east. Symbols are drawn rotated in any angle;
@@ -122,7 +121,7 @@ for o in bpy.data.collections["Signale"].objects:
 
 - Configuration equals the inventory table; height above ground is 0; every inventory row that is a
   signal or sign has exactly one object.
-- Position: mark the placed feet on the plan and let image-reader compare: crop the plan around a
+- Position: mark the placed feet on the plan and compare: crop the plan around a
   group of signals, draw a small circle at each `world_to_plan` position (Pillow), ask "is each
   circle on the foot bar of its symbol?".
 - Facing: for each signal compare its direction (lamps along local -Y: `(sin z, -cos z)`) with its

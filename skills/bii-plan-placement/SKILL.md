@@ -10,10 +10,9 @@ checks in step 6: a plan that is a few meters off ruins everything placed from i
 
 ## Rules
 
-- **Images:** if you cannot view images yourself (heimdall-claude / edda), give every viewing task
-  to the `heimdall:image-reader` subagent: one question per call, at most 2 images, and name exactly
-  what to report (numbers, pixel positions, "yes/no and by how many meters"). Do what you can with
-  numbers first (Python, Pillow, numpy).
+- **Images:** ask one question per look, at most 2 images at a time, and name exactly what to
+  report (numbers, pixel positions, "yes/no and by how many meters"). Small images answer more
+  reliably than whole sheets. Do what you can with numbers first (Python, Pillow, numpy).
 - **Do not rebuild** what is in the scene. Do not move plans that are already placed unless the user
   asks; if you find one wrong, report it and ask.
 - **Never** apply scale or rotation of a plan object, never Set Origin, never edit its mesh by hand:
@@ -67,7 +66,7 @@ plan = bpy.context.view_layer.objects.active
 ```
 
 Several sheets of one plan: `bpy.ops.import_image.bii_plan_sheets(directory=..., files=[{"name": ...}, ...], massstab=1000)`.
-Read the Maßstab from the title block (image-reader) if the user did not give it. Ansichten and
+Read the Maßstab from the title block if the user did not give it. Ansichten and
 Schnitte are `orientation='UPRIGHT'`; everything below is for flat plans.
 
 ## 3. Choose how to place it (first that applies)
@@ -90,7 +89,7 @@ with Neighbor Weight).
 
 ### Georeference
 
-Find at least 4 grid crosses near the corners (image-reader: "pixel position of the cross center and
+Find at least 4 grid crosses near the corners (look for: "pixel position of the cross center and
 the coordinate labels printed at it"). Then:
 
 ```python
@@ -131,7 +130,7 @@ First point: where the track crosses the match line; second: another point on th
 ```python
 rect = plan_api.auto_crop(plan)          # removes empty paper and the sheet frame
 ```
-Auto Crop keeps the title block and legends inside the frame. Ask image-reader whether the cropped
+Auto Crop keeps the title block and legends inside the frame. Check on the image whether the cropped
 part still contains title block or legend, and trim with `plan_api.crop(plan, u0, v0, u1, v1, unit)`.
 Keep all plan drawing, track stubs and "Anschluss Blatt" labels.
 
@@ -159,7 +158,7 @@ It compares the plan with every flat plan it overlaps and with the Umgebung trac
 for i, c in enumerate(plan_api.overlap_centers(plan, other, 3)):   # other: a plan or "TRACKS"
     plan_api.overlay(plan, other, c, rf"{folder}\overlay_{i}.png", size=80)
 ```
-Send each image to image-reader alone: "Red is plan A, blue is plan B (or the track axes), dark
+Look at each image alone: "Red is plan A, blue is plan B (or the track axes), dark
 purple where both lie, grid 10 m, north up. Do the red track lines lie on the blue ones? If not, by
 how many meters and in which direction (right/left/up/down)?"
 
