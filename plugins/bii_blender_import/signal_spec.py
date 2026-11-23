@@ -345,7 +345,7 @@ def symbol_elements(bauform, cfg):
         shape = {"haupt": "bell", "vor": "cup", "mehr": "caps"}[b.kind]
         els.append(("ks_head", shape, fill, bool(cfg.get("sh1"))))
         if zus:
-            els.append(("zus",))
+            els.append(("zus", "unten") if cfg.get("licht") == "unten" else ("zus",))
     zs3 = cfg.get("zs3", "ohne")
     if zs3 != "ohne":
         els.append(("tri_up", zs3 == "licht"))
@@ -381,7 +381,8 @@ def option_symbol(bauform, key, value, cfg):
         b = BY_KEY[bauform]
         if b.system == "H/V":
             return [("hv_dots", "full", True)]
-        return [("ks_head", {"haupt": "bell", "vor": "cup", "mehr": "caps"}[b.kind], "full", False), ("zus",)]
+        return [("ks_head", {"haupt": "bell", "vor": "cup", "mehr": "caps"}[b.kind], "full", False),
+                ("zus", "unten") if value == "unten" else ("zus",)]
     if key in ("art", "ausfuehrung", "streifen", "bauart"):
         return symbol_elements(bauform, dict(cfg, **{key: value}))
     if key == "mast":

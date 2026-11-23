@@ -223,5 +223,73 @@ class PlaceTest(unittest.TestCase):
         self.assertLess(faces(), with_number)  # the digits are gone
 
 
+    def test_scripting_api(self):
+        bpy.context.scene.bii_signal.library = "test signals"
+        obj = signal_panel.place_signal("ks_mehr", {"zs3": "licht", "zs3v": "licht", "kopf": "ohne"},
+                                        (5.0, 6.0, 1.5), rotation=0.5, aspect="Ks1",
+                                        library="test signals")
+        self.assertEqual(tuple(obj.location), (5.0, 6.0, 1.5))
+        self.assertAlmostEqual(obj.rotation_euler.z, 0.5, places=6)
+        b, cfg, aspect = signal_panel.read_signal(obj)
+        self.assertEqual((b, cfg["zs3"], cfg["zs3v"], cfg["kopf"], aspect), ("ks_mehr", "licht", "licht", "ohne", "Ks1"))
+        self.assertEqual(obj.name, spec.object_name(b, cfg))
+
+        obj = signal_panel.configure_signal(obj, {"zs3": "tafel"})
+        b, cfg, aspect = signal_panel.read_signal(obj)
+        self.assertEqual((cfg["zs3"], cfg["zs3v"], aspect), ("tafel", "licht", "Ks1"))  # the rest stays
+        self.assertEqual(obj.name, spec.object_name(b, cfg))  # the name follows
+
+        new = signal_panel.configure_signal(obj, bauform="ks_haupt")
+        self.assertEqual(signal_panel.read_signal(new)[0], "ks_haupt")
+        self.assertEqual(tuple(new.location), (5.0, 6.0, 1.5))
+
+        with self.assertRaisesRegex(ValueError, "no element"):
+            signal_panel.place_signal("ks_vor", {"sh1": True})
+        with self.assertRaisesRegex(ValueError, "unknown bauform"):
+            signal_panel.place_signal("ks_main")
+        with self.assertRaisesRegex(ValueError, "does not fit"):
+            signal_panel.place_signal("hv_haupt", {"hp": "hp02", "sh1": True})
+        with self.assertRaisesRegex(ValueError, "lights nothing"):
+            signal_panel.place_signal("ks_haupt", aspect="Hp0 + Sh1")
+        self.assertIsNone(signal_panel.read_signal(bpy.data.objects.new("plain", None)))
+
+    def test_on_terrain(self):
+        # a tilted terrain piece of BII Umgebung: z = 10 + 0.1 x
+        me = bpy.data.meshes.new("terrain")
+        me.from_pydata([(-50, -50, 5), (50, -50, 15), (50, 50, 15), (-50, 50, 5)], [], [(0, 1, 2, 3)])
+        ground = bpy.data.objects.new("Gelände Test", me)
+        ground["dem_service"] = "test"
+        bpy.context.scene.collection.objects.link(ground)
+        ground.location.z = 2.0
+        bpy.context.view_layer.update()
+        self.assertAlmostEqual(signal_panel.terrain_height(bpy.context, 20.0, 0.0), 14.0, places=4)
+        self.assertIsNone(signal_panel.terrain_height(bpy.context, 500.0, 0.0))
+
+        obj = signal_panel.place_signal("lf7", {"kennziffer": 8}, (20.0, 0.0, 99.0), on_terrain=True,
+                                        library="test signals")
+        self.assertAlmostEqual(obj.location.z, 14.0, places=4)
+
+        scene = bpy.context.scene
+        scene.cursor.location = (-10.0, 0.0, 50.0)
+        bpy.context.view_layer.objects.active = None
+        scene.bii_signal.library = "test signals"
+        scene.bii_signal.on_terrain = True
+        bpy.ops.bii_signal.place()
+        self.assertAlmostEqual(bpy.context.view_layer.objects.active.location.z, 11.0, places=4)
+        scene.bii_signal.on_terrain = False
+        bpy.context.view_layer.objects.active = None
+        bpy.ops.bii_signal.place()
+        self.assertAlmostEqual(bpy.context.view_layer.objects.active.location.z, 50.0, places=4)
+
+
+class LegendTest(unittest.TestCase):
+    def test_export_legend(self):
+        import tempfile
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
+            path = os.path.join(d, "key.png")
+            self.assertEqual(bpy.ops.bii_signal.export_legend(filepath=path), {'FINISHED'})
+            self.assertGreater(os.path.getsize(path), 10000)
+
+
 if __name__ == "__main__":
     unittest.main()

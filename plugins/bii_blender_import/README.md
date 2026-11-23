@@ -188,10 +188,33 @@ A signal symbol in the Lageplan is a head (Bauform) with marks around it. At the
 Options that do not fit the rest are greyed out. Kennziffer is a number field. Signalbild lights the lamps of one aspect; it offers only the aspects whose lights the combination has.
 
 - With a placed signal active, the panel changes that signal; another Bauform replaces it by a signal of that Bauform in the same place (transform, collections, parent, the options both have, and its name unless renamed). Without one, it sets up a new signal.
-- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
+- Where to put the 3D cursor: at the foot of the symbol, the end of its stem (the bar across it), not its middle. A symbol without a stem sits there with its lower end.
+- Place Signal puts the signal as shown at the 3D cursor, with the cursor's rotation, or, with Align to Track, turned to the nearest Umgebung track axis (lamps facing along it). On Terrain (on by default) puts it on the BII Umgebung terrain under the cursor, so a cursor snapped to the plan sheet above the ground still gives a signal on the ground; without terrain there, it stays at the cursor's height. The new signal is then active, so the panel changes it; Place Another places one more like it. Turn 180° turns the selected signals to face the other direction. Use for Placing keeps the active signal's setup for when no signal is selected.
 - The signal is imported like the Asset Browser does it (Pack, Link or Append, from the asset library's setting). Library: left empty, it takes the first asset library whose `DB_Signale.blend` has the signal, so an older copy without the Signal-Baukasten (for example a not yet refreshed remote library) is skipped; the panel shows which library it uses.
 
+Save Symbol Key writes all symbols as one PNG: every Bauform and each of its options, with the option in words, its value for scripts (`zs3="tafel"`) and a red dot where the signal's foot belongs. Print it as a key, or give it to an AI agent to compare with a plan.
+
 The settings are inputs of the signal's Geometry Nodes modifier "Signal", so they also work without the panel and can be changed in the modifier. `signal_spec.py` describes the Bauformen, elements and combinations; `signal_symbols.py` draws the symbols. Both have no bpy, so they also build the asset library.
+
+### Scripting
+
+For scripts and AI agents (for example through the Blender MCP), `signal_panel` has functions that check their input and say what is allowed when it is not:
+
+```python
+from bl_ext.user_default.bii_blender_import import signal_panel as sp, signal_legend
+
+obj = sp.place_signal("ks_mehr", {"zs3": "licht", "zs3v": "licht", "kopf": "ohne"},
+                      location=(x, y, 0.0), aspect="Ks1", align_to_track=True, on_terrain=True)
+sp.read_signal(obj)                          # ("ks_mehr", {...full configuration...}, "Ks1")
+obj = sp.configure_signal(obj, {"zs3": "tafel"})   # changes only what is given
+obj = sp.configure_signal(obj, bauform="ks_haupt") # a new object in the same place
+sp.terrain_height(bpy.context, x, y)         # z of the BII Umgebung terrain, or None
+signal_legend.write("key.png")               # the symbol key, also without Blender
+```
+
+- `place_signal(bauform, config, location, rotation=None, aspect="Aus", *, align_to_track, on_terrain, library, collection, name)`: `location` is the foot of the mast. `rotation` in radians about Z; None with `align_to_track` turns it along the nearest track (add `math.pi` for the other direction). The name is "<Name> <Tag>" from the configuration.
+- Configurations: `bauform` is a key of `signal_spec.BY_KEY`; `config` holds element keys and values as in the symbol key (missing ones keep their defaults). An unknown key or value, options that do not fit together, or an aspect the signal cannot show raise `ValueError` with the allowed values; nothing is changed silently. No asset library with the signal raises `RuntimeError`.
+- Do not read the modifier with `mod[...]`: Blender 5.2 and later keep the inputs in `mod.properties`. `read_signal` handles both.
 
 ## Tests
 

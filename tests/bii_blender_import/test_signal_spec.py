@@ -4,6 +4,7 @@ Run: python -m unittest discover tests/bii_blender_import
 (also inside Blender via run_in_blender.py).
 """
 
+import json
 import os
 import sys
 import unittest
@@ -119,6 +120,34 @@ class SymbolsTest(unittest.TestCase):
     def test_deterministic(self):
         els = spec.symbol_elements("hv_mehr", spec.config("hv_mehr", zs3="licht", kopf="zs7"))
         self.assertTrue((symbols.draw(els, 64) == symbols.draw(els, 64)).all())
+
+
+
+class LegendTest(unittest.TestCase):
+    def test_anchor_is_the_foot(self):
+        els = spec.symbol_elements("ks_haupt", spec.config("ks_haupt"))
+        x, y = symbols.anchor(els, 100)
+        self.assertAlmostEqual(x, 50.0, places=3)  # middle of the foot bar
+        self.assertGreater(y, 85)                  # at the bottom (rows from the top)
+        px = symbols.draw(els, 100)[::-1, :, 0]
+        self.assertLess(px[int(round(y)), int(round(x))], 0.5)  # on ink
+
+    def test_entries_and_render(self):
+        try:
+            import PIL  # noqa: F401
+        except ImportError:
+            self.skipTest("Pillow missing")
+        import signal_legend as legend
+        rows = legend.entries()
+        self.assertEqual([b.key for b, _ in rows], [b.key for b in spec.BAUFORMEN])
+        codes = {c for _, tiles in rows for _, c, _ in tiles}
+        self.assertIn('zs3="tafel"', codes)
+        self.assertIn("streifen=5", codes)
+        self.assertNotIn("mast=False", codes)  # not visible in the symbol
+        for _, tiles in rows:  # no two tiles of a Bauform look the same
+            self.assertEqual(len({json.dumps(els) for _, _, els in tiles}), len(tiles))
+        w, h = legend.render().size
+        self.assertGreater(h, w)
 
 
 if __name__ == "__main__":
