@@ -14,6 +14,7 @@ scales it. Works for upright views (Ansichten) too.
 """
 
 import math
+import os
 
 import blf
 import bpy
@@ -957,12 +958,20 @@ class BII_UL_plan_pairs(bpy.types.UIList):
         sub.label(text="" if item.residual < 0 else f"{item.residual:.3f} m")
 
 
+def _active_unselected(context):
+    """True if there is an active object, but it is not selected (clicked into empty
+    space). The sidebar then shows no plan."""
+    return context.object is not None and not context.object.select_get()
+
+
 def _plan(context):
     """The active plan, if it is the only plan selected; else None.
 
     Georeference, Kilometrierung, neighbor sheets and Align to Scene place
     one plan, so their panels show only then.
     """
+    if _active_unselected(context):
+        return None
     plans = import_plan.selected_plans(context)
     if len(plans) != 1 or plans[0] != context.object:
         return None
@@ -985,6 +994,24 @@ def _draw_view_hints(layout, context):
         layout.prop_enum(view, "view_transform", 'Standard', text="Use Standard")
 
 
+def _draw_files(layout, context, pg):
+    """Where the plan's original and its image (texture) are, and the Relink button."""
+    col = layout.column(align=True)
+    source = import_plan.absolute_path(pg.source)
+    col.prop(pg, "source", text="Original", icon='FILE' if os.path.isfile(source) else 'ERROR')
+    image = pg.image
+    if image is not None:
+        if image.packed_file is not None:
+            col.label(text="Image packed into the .blend file", icon='PACKAGE')
+        else:
+            missing = import_plan.texture_missing(image)
+            col.prop(image, "filepath", text="Image", icon='ERROR' if missing else 'IMAGE_DATA')
+            if missing:
+                wrapped_label(col, context, "The image file is missing. Relink writes it "
+                              "again from the original", 'ERROR')
+    col.operator(import_plan.PlanRelinkOperator.bl_idname, icon='FILE_REFRESH')
+
+
 def _draw_several(layout, context, plans):
     """The sidebar with several plans selected: only what applies to all of them."""
     col = layout.column(align=True)
@@ -994,6 +1021,11 @@ def _draw_several(layout, context, plans):
     row.label(text=f"{sum(import_plan.image_megabytes(i) for i in images.values()):.0f} MB RAM "
               f"for {len(images)} images")
     row.operator(import_plan.PlanResolutionOperator.bl_idname, text="", icon='IMAGE_REFERENCE')
+    missing = [i for i in images.values() if import_plan.texture_missing(i)]
+    if missing:
+        wrapped_label(col, context, f"{len(missing)} image files missing. Relink writes "
+                      "them again from the originals", 'ERROR')
+    col.operator(import_plan.PlanRelinkOperator.bl_idname, icon='FILE_REFRESH')
     if any(import_plan.outline_off_sheet(o) for o in plans):
         box = layout.box()
         wrapped_label(box, context, "The outline of a plan lies outside its sheet: select it "
@@ -1025,7 +1057,7 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
         layout = self.layout
         obj = _plan(context)
         if obj is None:
-            plans = import_plan.selected_plans(context)
+            plans = [] if _active_unselected(context) else import_plan.selected_plans(context)
             if plans:
                 _draw_several(layout, context, plans)
                 return
@@ -1047,6 +1079,7 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
                       f"{import_plan.image_megabytes(pg.image):.0f} MB RAM")
             row.operator(import_plan.PlanResolutionOperator.bl_idname, text="",
                          icon='IMAGE_REFERENCE')
+        _draw_files(layout, context, pg)
         layout.use_property_split = True
         layout.use_property_decorate = False
         layout.prop(pg, "massstab", text="Maßstab 1:")

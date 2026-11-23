@@ -255,9 +255,60 @@ def update_solid_paper(pg):
         pg.image.alpha_mode = 'NONE' if pg.background >= 0.5 else 'STRAIGHT'
 
 
+def stored_path(path, blend_path=None):
+    """How a plan stores the path of a file: relative ("//...") if the file lies in
+    the folder of the .blend file or below it, else absolute.
+
+    The relative path keeps working when the folder moves or goes to another
+    PC with the .blend file. blend_path: the .blend file the path is for,
+    default the open one; unsaved, the path stays absolute.
+    """
+    if not path:
+        return ""
+    blend = bpy.data.filepath if blend_path is None else blend_path
+    path = absolute_path(path)
+    if blend:
+        folder = os.path.dirname(os.path.abspath(blend))
+        try:
+            rel = os.path.relpath(path, folder)
+        except ValueError:  # another drive
+            return path
+        if rel != os.pardir and not rel.startswith(os.pardir + os.sep):
+            return "//" + rel.replace(os.sep, "/")
+    return path
+
+
+def absolute_path(path, blend_path=None):
+    """The absolute path of a stored path ("//" is the folder of blend_path, default
+    the open .blend file)."""
+    if not path:
+        return ""
+    start = os.path.dirname(os.path.abspath(blend_path)) if blend_path else None
+    return os.path.normpath(bpy.path.abspath(path, start=start))
+
+
+# Blender 4.5+ warns about "//" in path properties without this option (4.2 lacks it).
+RELATIVE_PATH = ({'PATH_SUPPORTS_BLEND_RELATIVE'}
+                 if "is_path_supports_blend_relative" in bpy.types.Property.bl_rna.properties
+                 else set())
+_saving = False  # the save handlers store paths for another .blend location
+
+
+def _source_changed(self, context):
+    # A path typed or browsed in the panel: relative if it lies below the .blend file.
+    if _saving:
+        return
+    stored = stored_path(self.source)
+    if stored != self.source:
+        self.source = stored
+
+
 class PlanSettings(bpy.types.PropertyGroup):
     is_plan: BoolProperty()
-    source: StringProperty(name="Source", subtype='FILE_PATH')
+    source: StringProperty(
+        name="Original", subtype='FILE_PATH', update=_source_changed, options=RELATIVE_PATH,
+        description="The file the plan was imported from. Relative (//) if it lies in the "
+        "folder of the .blend file or below it")
     image: PointerProperty(type=bpy.types.Image)
     material: PointerProperty(type=bpy.types.Material)
     width: FloatProperty(name="Sheet Width", subtype='DISTANCE', precision=4,
@@ -287,7 +338,7 @@ class PlanSettings(bpy.types.PropertyGroup):
         "printed. Solid view shows the paper from 0.5 on")
     page: IntProperty(default=1, min=1, description="PDF page of the plan")
     full_png: StringProperty(
-        subtype='FILE_PATH', description="The plan's PNG at its import resolution, kept when "
+        subtype='FILE_PATH', options=RELATIVE_PATH, description="The plan's PNG at its import resolution, kept when "
         "the resolution was lowered: the source for going back up if the original file is "
         "gone")
 
@@ -312,7 +363,9 @@ class PlanSettings(bpy.types.PropertyGroup):
     pairs: CollectionProperty(type=AlignPair)
     pair_index: IntProperty()
     fit_scale: BoolProperty(name="Fit Scale", default=False,
-                            description="Also change the scale. Off keeps the Maßstab")
+                            description="Align to Scene and Align by Kilometrierung also "
+                            "measure the Maßstab from the points and scale the plan, as Place "
+                            "in Scene does. Off keeps the Maßstab")
 
 
 # ---------------------------------------------------------------- several plans
@@ -602,6 +655,52 @@ def _add_export_shaders(*_args):
             add_export_shader(pg.material)
 
 
+_PATH_PROPS = ("source", "full_png")
+_paths_before_save = {}
+
+
+@bpy.app.handlers.persistent
+def _paths_for_save(filepath, *_args):
+    """Store the plans' file paths for where the .blend file is saved to.
+
+    Blender remaps the relative paths of images on Save As, but not those of
+    add-on properties. A first save, or a save into another folder, makes the
+    paths relative or absolute anew. bpy.data.filepath is still the old
+    location here; filepath is the new one.
+    """
+    global _saving
+    _paths_before_save.clear()
+    _saving = True
+    try:
+        for obj in bpy.data.objects:
+            pg = getattr(obj, "bii_plan", None)
+            if pg is None or not pg.is_plan or obj.library is not None:
+                continue
+            for name in _PATH_PROPS:
+                value = getattr(pg, name)
+                if not value:
+                    continue
+                path = absolute_path(value)
+                _paths_before_save[(obj.name, name)] = path
+                new = stored_path(path, filepath)
+                if new != value:
+                    setattr(pg, name, new)
+    finally:
+        _saving = False
+
+
+@bpy.app.handlers.persistent
+def _paths_after_save(*_args):
+    """After Save Copy the open file stays where it was: its paths go back to it."""
+    for (obj_name, name), path in _paths_before_save.items():
+        obj = bpy.data.objects.get(obj_name)
+        if obj is not None:
+            value = stored_path(path)
+            if getattr(obj.bii_plan, name) != value:
+                setattr(obj.bii_plan, name, value)
+    _paths_before_save.clear()
+
+
 def load_plan_image(png_path):
     image = bpy.data.images.load(png_path)
     # The alpha marks paper for Solid view; the shader lays the image on white.
@@ -669,6 +768,49 @@ def _image_file(image):
     return path if os.path.isfile(path) else None
 
 
+def texture_missing(image):
+    """True if the plan's image is neither packed nor on disk where it is expected."""
+    return (image is not None and image.packed_file is None
+            and not os.path.isfile(absolute_path(image.filepath)))
+
+
+def find_file(folder, name):
+    """Path of the file named name in folder, else in its subfolders, else None."""
+    path = os.path.join(folder, name)
+    if os.path.isfile(path):
+        return path
+    for root, dirs, files in os.walk(folder):
+        dirs.sort()
+        match = next((f for f in files if f.lower() == name.lower()), None)
+        if match:
+            return os.path.join(root, match)
+    return None
+
+
+def rebuild_texture(obj):
+    """Write the plan's missing image file again from the original, at the plan's
+    resolution, where the image expects it. Raises OSError or ValueError."""
+    from . import plan_raster
+    pg = obj.bii_plan
+    source = absolute_path(pg.source)
+    if not os.path.isfile(source):
+        raise OSError(f"the original {source or '(none)'} is missing")
+    long_side = max(1, round(max(pg.width, pg.height) / 0.0254 * pg.dpi))
+    is_pdf = os.path.splitext(source)[1].lower() in plan_raster.PDF_EXTENSIONS
+    sheet = plan_raster.load(source, pg.page - 1, pg.dpi if is_pdf else 0.0)
+    sheet = plan_raster.with_sheet_size(sheet, pg.width, pg.height)
+    sheet = plan_raster.downscale(sheet, long_side)
+    path = absolute_path(pg.image.filepath)
+    if not path:
+        raise OSError("the image has no file path")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    plan_raster.write_png(sheet, path)
+    pg.image.reload()
+    update_solid_paper(pg)
+    from . import plan_georef
+    plan_georef.clear_pixel_cache()
+
+
 def change_resolution(obj, long_side):
     """Write the plan's image again with long_side pixels on its long side.
 
@@ -725,7 +867,7 @@ def change_resolution(obj, long_side):
         opg.image = new
         opg.dpi = sheet.image.width / (opg.width / 0.0254)
         if keep_full:
-            opg.full_png = bpy.path.relpath(keep_full) if bpy.data.filepath else keep_full
+            opg.full_png = stored_path(keep_full)
         if opg.material is not None:
             for node in opg.material.node_tree.nodes:
                 if node.type == 'TEX_IMAGE' and node.image == old:
@@ -772,7 +914,7 @@ def create_plan_object(context, sheet, png_path, source, massstab, orientation, 
     context.collection.objects.link(obj)
     pg = obj.bii_plan
     pg.is_plan = True
-    pg.source = source
+    pg.source = stored_path(source)
     pg.image = image
     pg.width = sheet.width_m
     pg.height = sheet.height_m
@@ -821,11 +963,12 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         name="Orientation",
         items=[('FLAT', "Flat", "Lageplan: lies on the ground (XY)"),
                ('UPRIGHT', "Upright", "Ansicht or Schnitt: stands upright (XZ)")])
+    # SKIP_SAVE: unset, it comes from the add-on preferences.
     background: FloatProperty(
-        name="Background", min=0, max=1, default=0, subtype='FACTOR',
+        name="Background", min=0, max=1, default=1, subtype='FACTOR', options={'SKIP_SAVE'},
         description="Opacity of the white paper, can be changed later. 0: the plan lies on "
         "the scene like a print on tracing paper, the lines over maps and models. 1: the "
-        "plan as printed")
+        "plan as printed. The default is in the add-on preferences")
     resolution: EnumProperty(name="Resolution", items=RESOLUTIONS, default='8192',
                              description="Long side of the plan image. Can be changed later")
     # SKIP_SAVE: page and resolution belong to one file, not to the next import.
@@ -851,10 +994,14 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
 
     def invoke(self, context, event):
         # A dropped file has its path set: show the options, not the file browser.
+        if not self.properties.is_property_set("background"):
+            self.background = default_background(context)
         return self.invoke_popup(context)
 
     def execute(self, context):
         from . import plan_raster
+        if not self.properties.is_property_set("background"):
+            self.background = default_background(context)
         path = self.filepath
         try:
             page_index, page_count = 0, 1
@@ -964,7 +1111,14 @@ class PlanResolutionOperator(bpy.types.Operator):
         extra = 0.0
         for o in plans:
             img = o.bii_plan.image
-            if img is None or not o.visible_get() or max(img.size) >= long_side:
+            if img is None or not o.visible_get():
+                continue
+            if not max(img.size):  # image file missing: on the GPU it takes nothing yet
+                pg = o.bii_plan
+                factor = long_side / max(pg.width, pg.height)
+                extra += plan_gpu.texture_megabytes(pg.width * factor, pg.height * factor)
+                continue
+            if max(img.size) >= long_side:
                 continue
             factor = long_side / max(img.size)
             extra += (plan_gpu.texture_megabytes(img.size[0] * factor, img.size[1] * factor)
@@ -1009,6 +1163,83 @@ class PlanResolutionOperator(bpy.types.Operator):
         return {'FINISHED'} if len(problems) < len(plans) else {'CANCELLED'}
 
 
+class PlanRelinkOperator(bpy.types.Operator):
+    """Look for the selected plans' original files in a folder and its subfolders, by
+    file name, and link the plans to them. Missing plan images are written again
+    from the originals"""
+    bl_idname = "bii_plan.relink"
+    bl_label = "Relink Originals"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    directory: StringProperty(subtype='DIR_PATH', options={'SKIP_SAVE'})
+    filter_folder: BoolProperty(default=True, options={'HIDDEN', 'SKIP_SAVE'})
+
+    @classmethod
+    def poll(cls, context):
+        return context.mode == 'OBJECT' and bool(selected_plans(context))
+
+    def invoke(self, context, event):
+        if not self.directory and bpy.data.filepath:
+            self.directory = os.path.dirname(bpy.data.filepath) + os.sep
+        context.window_manager.fileselect_add(self)
+        return {'RUNNING_MODAL'}
+
+    def execute(self, context):
+        folder = bpy.path.abspath(self.directory) if self.directory else ""
+        if not os.path.isdir(folder):
+            self.report({'ERROR'}, f"No folder {folder or '(none)'}")
+            return {'CANCELLED'}
+        plans = selected_plans(context)
+        linked, rebuilt, problems = 0, 0, []
+        if context.window:
+            context.window.cursor_set('WAIT')
+        try:
+            for obj in plans:
+                pg = obj.bii_plan
+                name = os.path.basename(absolute_path(pg.source))
+                found = find_file(folder, name) if name else None
+                if found:
+                    pg.source = stored_path(found)
+                    linked += 1
+                elif not os.path.isfile(absolute_path(pg.source)):
+                    problems.append(f"{obj.name}: no {name or 'original'} in the folder")
+                    continue
+                if texture_missing(pg.image):
+                    try:
+                        rebuild_texture(obj)
+                        rebuilt += 1
+                    except (OSError, ValueError, ImportError) as e:
+                        traceback.print_exc()
+                        problems.append(f"{obj.name}: {e}")
+        finally:
+            if context.window:
+                context.window.cursor_set('DEFAULT')
+        text = f"{linked} of {len(plans)} plans relinked, {rebuilt} images written again"
+        if problems:
+            text += ". " + "; ".join(problems)
+        self.report({'WARNING'} if problems else {'INFO'}, text)
+        return {'FINISHED'} if linked or rebuilt else {'CANCELLED'}
+
+
+def default_background(context=None):
+    """Background of new plans, from the add-on preferences (1 without them)."""
+    addon = (context or bpy.context).preferences.addons.get(__package__)
+    prefs = getattr(addon, "preferences", None)
+    return prefs.plan_background if prefs is not None else 1.0
+
+
+class BIIImportPreferences(bpy.types.AddonPreferences):
+    bl_idname = __package__
+
+    plan_background: FloatProperty(
+        name="Plan Background", min=0, max=1, default=1, subtype='FACTOR',
+        description="Background of newly imported plans: opacity of the white paper. 0: "
+        "the plan lies on the scene like a print on tracing paper. 1: the plan as printed")
+
+    def draw(self, context):
+        self.layout.prop(self, "plan_background")
+
+
 class IO_FH_bii_plan(bpy.types.FileHandler):
     """Drop PDF plans into the 3D viewport"""
     bl_idname = "IO_FH_bii_plan"
@@ -1026,7 +1257,8 @@ def menu_func_import(self, context):
 
 
 classes = (PlanPoint, AlignPair, PlanSettings, PlanMultiSettings, ImportPlanOperator,
-           PlanCropResetOperator, PlanResolutionOperator, IO_FH_bii_plan)
+           PlanCropResetOperator, PlanResolutionOperator, PlanRelinkOperator,
+           BIIImportPreferences, IO_FH_bii_plan)
 
 
 def register():
@@ -1036,6 +1268,8 @@ def register():
     bpy.types.Scene.bii_plan_multi = PointerProperty(type=PlanMultiSettings)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
     bpy.app.handlers.load_post.append(_add_export_shaders)
+    bpy.app.handlers.save_pre.append(_paths_for_save)
+    bpy.app.handlers.save_post.append(_paths_after_save)
     # The file open when the extension is enabled; bpy.data is not ready during register.
     bpy.app.timers.register(_add_export_shaders, first_interval=0.1)
 
@@ -1043,8 +1277,11 @@ def register():
 def unregister():
     if bpy.app.timers.is_registered(_add_export_shaders):
         bpy.app.timers.unregister(_add_export_shaders)
-    if _add_export_shaders in bpy.app.handlers.load_post:
-        bpy.app.handlers.load_post.remove(_add_export_shaders)
+    for handlers, func in ((bpy.app.handlers.load_post, _add_export_shaders),
+                           (bpy.app.handlers.save_pre, _paths_for_save),
+                           (bpy.app.handlers.save_post, _paths_after_save)):
+        if func in handlers:
+            handlers.remove(func)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
     del bpy.types.Scene.bii_plan_multi
     del bpy.types.Object.bii_plan

@@ -51,13 +51,19 @@ The plan becomes a plane at its true size: the sheet size comes from the file's 
 |---|---|
 | Maßstab 1: | Scale printed on the plan. Can be changed later in the sidebar. |
 | Orientation | Flat for Lagepläne (on the ground), Upright for Ansichten and Schnitte. |
-| Background | Opacity of the white paper, see below. 0 (default): the lines lie over maps and models. 1: the plan as printed. Can be changed later in the sidebar. |
+| Background | Opacity of the white paper, see below. 0: the lines lie over maps and models. 1 (default): the plan as printed. Can be changed later in the sidebar. Edit > Preferences > Add-ons > BII Blender Import > Plan Background sets the default. |
 | Resolution | Long side of the plan image, 16384 px (the most GPUs show) down to 1024 px. 8192 px by default, which keeps most plans readable at a quarter of the memory. Can be changed later. |
 | PDF Page | Page of a PDF with several pages. |
 | PDF Resolution | 0 uses the resolution of the scan in the PDF, or 300 dpi for vector drawings. |
 | Check GPU Memory | Imports the plan only if the GPU has memory left for it, see below. On by default for every import. |
 
 The PNG goes into a `plans` folder next to the .blend file. If the .blend file is not saved yet, the PNG is packed into it.
+
+### Files and Relink
+
+The panel shows where the plan's original (PDF, TIFF, ...) and its image (the PNG) are; a red icon marks a missing file. Both paths can be edited there. The path to the original is stored relative to the .blend file (`//`) if the original lies in the .blend file's folder or below it, else absolute. Saving into another folder (Save As) updates it.
+
+To pass a project on, send the .blend file with its `plans` folder, or pack the images first (File > External Data > Pack Resources). Without them, the plans show purple. Relink (in the panel, for all selected plans) then helps: choose a folder, and it looks there and in its subfolders for each plan's original by its file name, links the plan to it and writes the missing image again from it, at the plan's resolution. Crop, points and placement stay.
 
 The sidebar (N) > BII Plan shows the settings of the selected plan. With several plans selected, it shows only what can change for all of them at once: Maßstab, Orientation, Opacity, Background, Full Sheet, Reset Crop and Change Resolution. Fields where the plans differ say "(mixed)" and show the active plan's value; a change sets it on all selected plans. Crop, Georeference, Neighbor Sheets, Kilometrierung and Align to Scene work on one plan and show when it is selected alone.
 
