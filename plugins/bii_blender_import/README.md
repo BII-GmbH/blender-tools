@@ -121,7 +121,7 @@ The coordinates go through WGS84 with the 7-parameter transformations PROJ uses 
 
 ### Align to Scene
 
-For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. Shift-click + to add several points in a row, moving the 3D cursor with Shift + right click in between. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on. One point only moves the plan.
+For plans without coordinates, such as Ansichten: put the 3D cursor on a scene point (Shift + right click, with snapping), click + and then the matching point on the sheet. Repeat for a second point, then Align. Shift-click + to add several points in a row, moving the 3D cursor with Shift + right click in between. The plan turns about the vertical axis only and keeps its Maßstab, unless Fit Scale is on: then two or more points measure the Maßstab (on a flat plan from their horizontal distances only, so the terrain height at the 3D cursor does not count). One point only moves the plan.
 
 ### Place by Kilometrierung
 
@@ -130,7 +130,7 @@ For DB Lagepläne without grid crosses: they show the Kilometrierung of the Stre
 1. Enter the Strecke (5240). Empty works when the scene has only one Strecke. The panel shows the km range of its Kilometrierung lines.
 2. Move the plan roughly into place by hand (optional: two km points far apart fix it from anywhere).
 3. Click + and then a point on the plan track: a hectometer mark, a landmark. Shift-click + to add several, until Esc. Type the km printed there, as on the plan: `5,3`, `5,504`, `13,4+23,05`, or the whole landmark label (`5240/5,504/1616`, which also sets the Strecke). New points get a predicted km (≈, a guess) once two km are typed or the plan is placed; click ? to confirm it, or type the right one. A point without km (or with a guessed km) only lies on the track: it pulls the plan track onto the scene track, across the track.
-4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
+4. Align by Kilometrierung turns the plan about the vertical axis and moves it. The Maßstab stays, unless Fit Scale is on: then the fit measures the Maßstab from the km points and landmarks and scales the plan, as Place in Scene does with grid crosses. That needs km points or landmarks some distance apart, else the plan keeps its Maßstab and the report says so. Fit Scale is the same switch as in Align to Scene. Each km point lies at its km along the Strecke and on the track; Track sets which scene lines count as the track: the Kilometrierung line, or the track axes (Gleisachsen) BII Umgebung built for the Strecke (Auto takes the track axes when there are any).
 
 Landmarks you can find in the scene, such as a bridge edge on the map or a model, are more accurate than the OSM Kilometrierung (which is an approximation, often a few meters off along the track): put the 3D cursor there and add an Align to Scene point (see below) on the plan. Align by Kilometrierung uses those points with Landmark Weight (10 against 1 for a km point; 0 leaves them out).
 

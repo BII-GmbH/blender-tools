@@ -3,9 +3,9 @@
 Kilometrierung: DB Lagepläne without grid crosses still show the km of the
 Strecke (hectometer labels 5,3 / 5,4 / 5,5) and landmarks with their km. Click
 points on the plan track and type their km; the Kilometrierung lines of the
-Umgebung extension give the scene position of each km. The fit keeps the
-Maßstab and only turns the plan about the vertical axis and moves it (see
-plan_km.fit_rigid). Points on the plan track without km pull the plan track
+Umgebung extension give the scene position of each km. The fit turns the
+plan about the vertical axis and moves it (see plan_km.fit_rigid); it keeps
+the Maßstab unless Fit Scale is on. Points on the plan track without km pull the plan track
 onto the scene track, Align to Scene points (3D cursor) count as landmarks
 with a high weight.
 
@@ -317,9 +317,11 @@ def build_observations(scene, obj):
     return obs, checks, messages
 
 
-def delta_matrix(angle, pivot, shift):
-    return (Matrix.Translation((pivot[0] + shift[0], pivot[1] + shift[1], 0.0))
-            @ Matrix.Rotation(angle, 4, 'Z') @ Matrix.Translation((-pivot[0], -pivot[1], 0.0)))
+def delta_matrix(angle, pivot, shift, scale=1.0, z=0.0):
+    """Turn and scale about (pivot, z), then shift in XY. z stays where it is."""
+    return (Matrix.Translation((pivot[0] + shift[0], pivot[1] + shift[1], z))
+            @ Matrix.Rotation(angle, 4, 'Z') @ Matrix.Diagonal((scale, scale, scale, 1.0))
+            @ Matrix.Translation((-pivot[0], -pivot[1], -z)))
 
 
 def align_by_km(scene, obj):
@@ -329,10 +331,14 @@ def align_by_km(scene, obj):
     if pg.orientation != 'FLAT':
         raise ValueError("Only flat plans (Lagepläne) can be placed by Kilometrierung")
     obs, checks, lines = build_observations(scene, obj)
-    fit = plan_km.fit_rigid(obs)
+    fit = plan_km.fit_rigid(obs, fit_scale=pg.fit_scale)
     if fit is None:
         raise ValueError("The points do not fix the plan")
-    obj.matrix_world = delta_matrix(fit.angle, fit.pivot, fit.shift) @ obj.matrix_world
+    z = obj.matrix_world.translation.z
+    obj.matrix_world = (delta_matrix(fit.angle, fit.pivot, fit.shift, fit.scale, z)
+                        @ obj.matrix_world)
+    # Spacing on the plan as fitted, so a Maßstab the fit corrected gives no warning.
+    checks = [(name, km, fit.apply(*wp), pos) for name, km, wp, pos in checks]
 
     by_name = {}
     for o in fit.observations:
@@ -353,7 +359,8 @@ def align_by_km(scene, obj):
     moved = math.hypot(*fit.shift)
     text = (f"{n_km} km points, {n_track} track points, {n_land} landmarks"
             + (", neighbor" if place.attach_parent and place.attach_weight > 0 else "")
-            + f": turned {math.degrees(fit.angle):.2f}°, moved {moved:.1f} m")
+            + f": turned {math.degrees(fit.angle):.2f}°, moved {moved:.1f} m"
+            + (f", Maßstab 1:{pg.massstab:.1f} measured" if fit.scale != 1.0 else ""))
     lines.insert(0, text)
     lines.insert(1, f"Residuals {rms:.2f} m RMS, largest {worst:.2f} m ({worst_name})")
     if 'ROTATION' in fit.weak:
@@ -362,8 +369,12 @@ def align_by_km(scene, obj):
     if 'SHIFT' in fit.weak:
         lines.append("!The position along the track is not fixed: type the km of a point, "
                      "or add a landmark")
+    if 'SCALE' in fit.weak:
+        lines.append("!The Maßstab is not fixed: add km points or landmarks farther apart. "
+                     "The plan keeps its Maßstab")
     if rms > RMS_WARNING:
-        lines.append("!Large residuals: check the km values, the Strecke and the Maßstab")
+        lines.append("!Large residuals: check the km values, the Strecke and the Maßstab"
+                     + ("" if pg.fit_scale else ", or turn on Fit Scale"))
     if worst > max(3.0, 3 * rms) and len(by_name) > 2:
         lines.append(f"!{worst_name} is {worst:.1f} m off: check its km")
     lines += ["!" + w for w in plan_km.spacing_warnings(checks)]
@@ -491,9 +502,9 @@ def _plan_poll(context):
 
 
 class PlanAlignKmOperator(bpy.types.Operator):
-    """Turn and move the plan so its km points lie at their km on the Strecke, keeping the
-    Maßstab. Points without km pull the plan track onto the scene track, Align to Scene
-    points count as landmarks"""
+    """Turn and move the plan so its km points lie at their km on the Strecke; with Fit
+    Scale also scale it. Points without km pull the plan track onto the scene track, Align
+    to Scene points count as landmarks"""
     bl_idname = "bii_plan.align_km"
     bl_label = "Align by Kilometrierung"
     bl_options = {'REGISTER', 'UNDO'}
@@ -814,8 +825,10 @@ class ImportPlanSheetsOperator(bpy.types.Operator, ImportHelper):
     directory: StringProperty(subtype='DIR_PATH', options={'HIDDEN', 'SKIP_SAVE'})
     massstab: FloatProperty(name="Maßstab 1:", default=1000, min=1e-6, soft_min=1,
                             description="Scale printed on the sheets, the same for all")
-    background: FloatProperty(name="Background", min=0, max=1, default=0, subtype='FACTOR',
-                              description="Opacity of the white paper, see Import Plan")
+    background: FloatProperty(name="Background", min=0, max=1, default=1, subtype='FACTOR',
+                              options={'SKIP_SAVE'},
+                              description="Opacity of the white paper, see Import Plan. The "
+                              "default is in the add-on preferences")
     gap: FloatProperty(name="Gap", default=20.0, min=0.0, subtype='DISTANCE',
                        description="Space between the sheets in the scene")
     resolution: EnumProperty(name="Resolution", items=import_plan.RESOLUTIONS, default='8192',
@@ -840,8 +853,14 @@ class ImportPlanSheetsOperator(bpy.types.Operator, ImportHelper):
         col.prop(self, "dpi")
         layout.prop(self, "check_gpu")
 
+    def invoke(self, context, event):
+        self.background = import_plan.default_background(context)
+        return ImportHelper.invoke(self, context, event)
+
     def execute(self, context):
         from . import plan_raster
+        if not self.properties.is_property_set("background"):
+            self.background = import_plan.default_background(context)
         names = [f.name for f in self.files if f.name] or [os.path.basename(self.filepath)]
         folder = self.directory or os.path.dirname(self.filepath)
         paths = [os.path.join(folder, n) for n in sorted(names, key=natural_key)]
@@ -1064,6 +1083,7 @@ class VIEW3D_PT_bii_plan_km(bpy.types.Panel):
         col.prop(place, "landmark_weight", text=f"Landmarks ({n_pairs})")
         if place.attach_parent is not None:
             col.prop(place, "attach_weight")
+        layout.prop(obj.bii_plan, "fit_scale")
         layout.operator(PlanAlignKmOperator.bl_idname, icon='CURVE_PATH')
         if place.report:
             _report(layout.column(align=True), context, place.report)

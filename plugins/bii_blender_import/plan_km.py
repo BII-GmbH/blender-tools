@@ -3,8 +3,8 @@
 DB Lagepläne often have no grid crosses, only the Kilometrierung of the
 Strecke (hectometer labels like 5,3 / 5,4 along the track) and landmarks
 labeled with Strecke and km ("EÜ (Weg) 5240/5,504/1616"). The plan is placed
-by a rigid fit in the ground plane, with the Maßstab locked: rotation about
-the vertical axis and a shift.
+by a rigid fit in the ground plane: rotation about the vertical axis and a
+shift, with the Maßstab locked or, on request, fitted too.
 
 Observations, all in scene meters (XY):
 
@@ -289,17 +289,18 @@ def _rows(obs, px, py):
 
 
 class RigidFit:
-    """Result of fit_rigid: turn by angle about pivot, then shift by (tx, ty)."""
+    """Result of fit_rigid: scale and turn by angle about pivot, then shift by (tx, ty)."""
 
-    def __init__(self, angle, pivot, shift, observations, weak):
+    def __init__(self, angle, pivot, shift, observations, weak, scale=1.0):
         self.angle = angle
         self.pivot = pivot
         self.shift = shift
+        self.scale = scale
         self.observations = observations
-        self.weak = weak  # set of 'ROTATION', 'ALONG' ... the data leave open
+        self.weak = weak  # set of 'ROTATION', 'SHIFT', 'SCALE' the data leave open
 
     def apply(self, x, y):
-        c, s = math.cos(self.angle), math.sin(self.angle)
+        c, s = self.scale * math.cos(self.angle), self.scale * math.sin(self.angle)
         dx, dy = x - self.pivot[0], y - self.pivot[1]
         return (self.pivot[0] + c * dx - s * dy + self.shift[0],
                 self.pivot[1] + s * dx + c * dy + self.shift[1])
@@ -310,76 +311,110 @@ class RigidFit:
         return math.sqrt(sum(r * r for r in res) / len(res)) if res else 0.0
 
 
-def _solve3(m, v):
-    """3x3 linear system by Cramer's rule; None if singular."""
-    def det(a):
-        return (a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1])
-                - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
-                + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0]))
-    d = det(m)
-    if abs(d) < 1e-300:
-        return None
-    out = []
-    for k in range(3):
-        a = [row[:] for row in m]
-        for i in range(3):
-            a[i][k] = v[i]
-        out.append(det(a) / d)
+def _solve(m, v):
+    """Linear system by Gauss elimination with partial pivoting; None if singular."""
+    n = len(v)
+    a = [list(row) + [v[i]] for i, row in enumerate(m)]
+    size = max(abs(x) for row in m for x in row) or 1.0
+    for k in range(n):
+        p = max(range(k, n), key=lambda i: abs(a[i][k]))
+        if abs(a[p][k]) < 1e-15 * size:
+            return None
+        a[k], a[p] = a[p], a[k]
+        for i in range(k + 1, n):
+            f = a[i][k] / a[k][k]
+            for j in range(k, n + 1):
+                a[i][j] -= f * a[k][j]
+    out = [0.0] * n
+    for k in range(n - 1, -1, -1):
+        out[k] = (a[k][n] - sum(a[k][j] * out[j] for j in range(k + 1, n))) / a[k][k]
     return out
 
 
-def fit_rigid(observations, iterations=60, damping=1e-6):
+def _inverse(m):
+    """Inverse of a small matrix, or None if singular."""
+    n = len(m)
+    cols = [_solve(m, [1.0 if i == j else 0.0 for i in range(n)]) for j in range(n)]
+    if any(c is None for c in cols):
+        return None
+    return [[cols[j][i] for j in range(n)] for i in range(n)]
+
+
+def fit_rigid(observations, iterations=60, damping=1e-6, fit_scale=False):
     """Least-squares rotation about the vertical axis plus shift, scale locked.
 
     Gauss-Newton; LINE observations take their nearest line point again in
     every step, so the plan track slides onto the scene track. A tiny damping
     toward no movement keeps what the data leave open (say, the position
     along a straight track without any km) where the plan lies now; such
-    degrees of freedom are reported in RigidFit.weak. Returns None without
-    observations.
+    degrees of freedom are reported in RigidFit.weak. With fit_scale the
+    scale is fitted too (a similarity transform, as for grid crosses); if the
+    observations do not fix it, the fit runs again with the scale locked and
+    'SCALE' is in RigidFit.weak. Returns None without observations.
     """
     obs = [o for o in observations if o.weight > 0]
     if not obs:
         return None
+    if not fit_scale:
+        return _fit(obs, iterations, damping, False)
+    fit = _fit(obs, iterations, damping, True)
+    if fit is not None and 'SCALE' not in fit.weak:
+        return fit
+    fit = _fit(obs, iterations, damping, False)
+    if fit is not None:
+        fit.weak.add('SCALE')
+    return fit
+
+
+def _fit(obs, iterations, damping, fit_scale):
     wsum = sum(o.weight for o in obs)
     cx = sum(o.p[0] * o.weight for o in obs) / wsum
     cy = sum(o.p[1] * o.weight for o in obs) / wsum
     lever2 = max(1.0, sum(o.weight * ((o.p[0] - cx) ** 2 + (o.p[1] - cy) ** 2)
                           for o in obs) / wsum)
     angle, tx, ty = _initial_guess(obs, (cx, cy))
+    k = 0.0  # scale - 1
+    n = 4 if fit_scale else 3
     ata = None
     for _ in range(iterations):
+        sc = 1.0 + k
         c, s = math.cos(angle), math.sin(angle)
-        ata = [[0.0] * 3 for _ in range(3)]
-        atb = [0.0] * 3
+        ata = [[0.0] * n for _ in range(n)]
+        atb = [0.0] * n
         for o in obs:
             dx, dy = o.p[0] - cx, o.p[1] - cy
-            px, py = cx + c * dx - s * dy + tx, cy + s * dx + c * dy + ty
-            ddx, ddy = -s * dx - c * dy, c * dx - s * dy  # d(moved point)/d(angle)
+            rx, ry = c * dx - s * dy, s * dx + c * dy  # turned, not scaled
+            px, py = cx + sc * rx + tx, cy + sc * ry + ty
+            # d(moved point) / d(angle, tx, ty, scale)
             for (nx, ny), (qx, qy) in _rows(o, px, py):
                 r = nx * (px - qx) + ny * (py - qy)
-                row = (nx * ddx + ny * ddy, nx, ny)
-                for i in range(3):
+                row = (sc * (ny * rx - nx * ry), nx, ny, nx * rx + ny * ry)[:n]
+                for i in range(n):
                     atb[i] -= o.weight * row[i] * r
-                    for j in range(3):
+                    for j in range(n):
                         ata[i][j] += o.weight * row[i] * row[j]
-        # Damping toward the current place, in comparable units (angle * lever).
+        # Damping toward the current place, in comparable units (angle and
+        # scale change times the lever), pulling the parameters back, not
+        # only the step.
+        params = [angle, tx, ty, k][:n]
+        units = [lever2, 1.0, 1.0, lever2][:n]
         damped = [row[:] for row in ata]
-        damped[0][0] += damping * wsum * lever2
-        damped[1][1] += damping * wsum
-        damped[2][2] += damping * wsum
-        # Pull the parameters back toward zero, not only the step.
-        rhs = [atb[0] - damping * wsum * lever2 * angle, atb[1] - damping * wsum * tx,
-               atb[2] - damping * wsum * ty]
-        step = _solve3(damped, rhs)
+        rhs = atb[:]
+        for i in range(n):
+            damped[i][i] += damping * wsum * units[i]
+            rhs[i] -= damping * wsum * units[i] * params[i]
+        step = _solve(damped, rhs)
         if step is None:
             return None
         angle += step[0]
         tx += step[1]
         ty += step[2]
-        if abs(step[0]) * math.sqrt(lever2) < 1e-6 and math.hypot(step[1], step[2]) < 1e-6:
+        if fit_scale:
+            k += step[3]
+        turn_scale = max(abs(step[0]), abs(step[3]) if fit_scale else 0.0)
+        if turn_scale * math.sqrt(lever2) < 1e-6 and math.hypot(step[1], step[2]) < 1e-6:
             break
-    fit = RigidFit(angle, (cx, cy), (tx, ty), obs, _weak_dofs(ata, wsum, lever2))
+    fit = RigidFit(angle, (cx, cy), (tx, ty), obs, _weak_dofs(ata, wsum), 1.0 + k)
     _set_residuals(fit)
     return fit
 
@@ -427,37 +462,34 @@ def _initial_guess(obs, pivot):
     return angle, qc[0] - moved[0], qc[1] - moved[1]
 
 
-def _weak_dofs(ata, wsum, lever2):
+def _weak_dofs(ata, wsum):
     """Degrees of freedom the observations hardly fix.
 
-    Rotation: its normal equation with the shift eliminated (Schur
-    complement), as an effective lever; under 2 m the rotation is not fixed.
-    Shift: the smaller eigenvalue of the shift block with the rotation
-    eliminated.
+    ata: normal matrix of (angle, tx, ty[, scale change]). Rotation and
+    scale: their information with the other parameters eliminated (one over
+    the diagonal of the inverse), as an effective lever; under 2 m they are
+    not fixed. Shift: the smaller eigenvalue of the shift block with the
+    other parameters eliminated.
     """
-    weak = set()
     if ata is None:
-        return {'ROTATION', 'SHIFT'}
-    t = [[ata[1][1], ata[1][2]], [ata[2][1], ata[2][2]]]
-    det_t = t[0][0] * t[1][1] - t[0][1] * t[1][0]
-    if det_t > 1e-12 * wsum * wsum:
-        inv = [[t[1][1] / det_t, -t[0][1] / det_t], [-t[1][0] / det_t, t[0][0] / det_t]]
-        b = (ata[0][1], ata[0][2])
-        schur = ata[0][0] - sum(b[i] * inv[i][j] * b[j] for i in range(2) for j in range(2))
-    else:
-        schur = 0.0
-    if schur / wsum < 4.0:  # effective lever under 2 m
-        weak.add('ROTATION')
-    # Shift block with the rotation eliminated.
-    a00 = ata[0][0]
-    if a00 > 1e-12:
-        s = [[t[i][j] - ata[0][i + 1] * ata[0][j + 1] / a00 for j in range(2)] for i in range(2)]
-    else:
-        s = t
+        return {'ROTATION', 'SHIFT', 'SCALE'}
+    n = len(ata)
+    eps = 1e-9 * wsum
+    inv = _inverse([[ata[i][j] + (eps if i == j else 0.0) for j in range(n)]
+                    for i in range(n)])
+    if inv is None:
+        return {'ROTATION', 'SHIFT', 'SCALE'}
+    weak = set()
+    for index, name in ((0, 'ROTATION'), (3, 'SCALE')):
+        if index < n and 1.0 / inv[index][index] / wsum < 4.0:  # effective lever under 2 m
+            weak.add(name)
+    s = _inverse([[inv[1][1], inv[1][2]], [inv[2][1], inv[2][2]]])
+    if s is None:
+        return weak | {'SHIFT'}
     tr = s[0][0] + s[1][1]
     det = s[0][0] * s[1][1] - s[0][1] * s[1][0]
     smallest = tr / 2 - math.sqrt(max(0.0, tr * tr / 4 - det))
-    if smallest < 0.05 * wsum / len(ata):
+    if smallest < 0.05 * wsum / 3:
         weak.add('SHIFT')
     return weak
 

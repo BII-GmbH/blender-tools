@@ -635,28 +635,44 @@ class PlanAlignOperator(bpy.types.Operator):
         a = [v - cs for v in src]
         b = [v - ct for v in dst]
 
-        scale = 1.0
-        if pg.fit_scale and n >= 2:
-            sa = sum(v.length_squared for v in a)
-            if sa > 1e-12:
-                scale = math.sqrt(sum(v.length_squared for v in b) / sa)
         # Turn about the vertical axis only, from the horizontal directions.
         dot = sum(u.x * v.x + u.y * v.y for u, v in zip(a, b))
         cross = sum(u.x * v.y - u.y * v.x for u, v in zip(a, b))
         angle = math.atan2(cross, dot) if math.hypot(dot, cross) > 1e-9 else 0.0
+        # Least-squares scale, as for grid crosses. A flat plan spans XY only:
+        # the height of the targets (3D cursor on the terrain) says nothing
+        # about its scale.
+        scale = 1.0
+        scale_fixed = False
+        if pg.fit_scale and n >= 2:
+            flat = pg.orientation == 'FLAT'
+            turn = Matrix.Rotation(angle, 3, 'Z')
+            ra = [turn @ v for v in a]
+            if flat:
+                ra = [Vector((v.x, v.y, 0.0)) for v in ra]
+            sa = sum(v.length_squared for v in ra)
+            if sa / n > 4.0:  # points at least about 2 m from their middle
+                scale = sum(u.dot(v) for u, v in zip(ra, b)) / sa
+                scale_fixed = scale > 0
+            if not scale_fixed:
+                scale = 1.0
 
         delta = (Matrix.Translation(ct) @ Matrix.Rotation(angle, 4, 'Z')
                  @ Matrix.Diagonal((scale, scale, scale, 1.0)) @ Matrix.Translation(-cs))
         obj.matrix_world = delta @ m
         for p, s, t in zip(pg.pairs, src, dst):
-            p.residual = ((delta @ s) - t).length
+            off = (delta @ s) - t
+            p.residual = off.xy.length if pg.orientation == 'FLAT' else off.length
         rms = math.sqrt(sum(p.residual ** 2 for p in pg.pairs) / n)
         text = f"Aligned with {n} points: turned {math.degrees(angle):.2f}°"
-        if pg.fit_scale and n >= 2:
-            text += f", Maßstab now 1:{pg.massstab:.1f}"
+        if scale_fixed:
+            text += f", Maßstab 1:{pg.massstab:.1f} measured"
         if n >= 2:
             text += f", residuals {rms:.3f} m RMS"
         text, warnings = place_attached(context, obj, text)
+        if pg.fit_scale and not scale_fixed:
+            warnings.insert(0, "The points do not fix the Maßstab: add points farther apart. "
+                            "The plan keeps its Maßstab")
         self.report({'WARNING'} if warnings else {'INFO'}, ". ".join([text] + warnings))
         return {'FINISHED'}
 

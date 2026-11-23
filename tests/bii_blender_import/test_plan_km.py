@@ -89,10 +89,11 @@ class RigidFitTest(unittest.TestCase):
             plan_km.cumulative(self.track)[-1], 5.0 + plan_km.cumulative(self.track)[-1] / 1000)])
         # The plan: the track turned by 40° and shifted, as if roughly placed.
         self.angle, self.shift = math.radians(40), (120.0, -80.0)
+        self.scale = 1.0  # plan size against true size
 
     def plan_point(self, km):
         (x, y), _ = self.line.position(km)
-        return move([(x, y)], self.angle, self.shift)[0]
+        return move([(x * self.scale, y * self.scale)], self.angle, self.shift)[0]
 
     def km_obs(self, km, weight=1.0):
         pos, tangent = self.line.position(km)
@@ -147,6 +148,23 @@ class RigidFitTest(unittest.TestCase):
         fit = plan_km.fit_rigid(obs)
         got = fit.apply(*self.plan_point(bridge))
         self.assertLess(math.dist(got, self.line.position(bridge)[0]), 0.5)
+
+    def test_fit_scale(self):
+        # The plan came in at 1:1000, but the print was 1:1050: 5 % too small.
+        self.scale = 1 / 1.05
+        obs = self.km_obs(5.2) + self.km_obs(5.6) + self.km_obs(5.9)
+        locked = plan_km.fit_rigid(obs)
+        self.assertGreater(locked.rms, 5)
+        fit = plan_km.fit_rigid(obs, fit_scale=True)
+        self.assertAlmostEqual(fit.scale, 1.05, places=4)
+        self.assertNotIn('SCALE', fit.weak)
+        self.check(fit)
+
+    def test_fit_scale_needs_two_points_apart(self):
+        # One km point and nothing else: the scale stays locked.
+        fit = plan_km.fit_rigid(self.km_obs(5.4), fit_scale=True)
+        self.assertIn('SCALE', fit.weak)
+        self.assertEqual(fit.scale, 1.0)
 
     def test_wrong_km_shows_in_residuals_and_spacing(self):
         obs = self.km_obs(5.2) + self.km_obs(5.6)
