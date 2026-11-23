@@ -482,6 +482,12 @@ def load_signal_object(path, asset, method):
         raise RuntimeError(f"{asset} not found in {path}")
     if obj.library is not None:
         obj = obj.make_local()  # object local, mesh and node groups stay linked / packed
+    if obj.library is not None:
+        # Blender 5.3 keeps a packed object linked here (its name is read-only): a local copy
+        # instead, which uses the same linked / packed mesh and node groups
+        linked, obj = obj, obj.copy()
+        if linked.users == 0:
+            bpy.data.objects.remove(linked)
     if obj.asset_data:
         obj.asset_clear()
     return obj
