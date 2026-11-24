@@ -315,6 +315,81 @@ def set_follow(obj, leaders, offset=0.0):
     return describe_joint(o)
 
 
+def fit_follow_aim(part, leader, target, samples=9, value_range=None):
+    """Makes a revolute part follow a leader so that it keeps pointing at a target point that
+    moves with the leader: a hydraulic cylinder that points at its piston's eye on the boom, or
+    the piston that points back at the cylinder's base pin.
+
+    part: revolute joint (its axis and pivot set). leader: revolute joint. target:
+    an object whose origin the part should point at (an empty at the other pin). Samples the
+    leader over its limits (or value_range in degrees), works out the angle the part needs
+    at each, fits value = factor * leader + offset and sets that Follow. Returns factor, offset
+    (degrees) and the worst angle error over the samples (degrees): the pointing is not linear,
+    so report the error to the user when it is noticeable.
+    """
+    p, l, t = _obj(part), _obj(leader), _obj(target)
+    if p.bii_rig.joint_type != "REVOLUTE":
+        raise RigError(f"{p.name} is not a revolute joint")
+    lj = l.bii_rig
+    if lj.joint_type != "REVOLUTE":
+        raise RigError(f"{l.name} is not a revolute joint (followers follow joints of their own type)")
+    root = rig_props.rig_root(p)
+    if value_range is not None:
+        lo, hi = math.radians(value_range[0]), math.radians(value_range[1])
+    else:
+        lim = rig_props.limits(lj)
+        if lim is None:
+            raise RigError(f"{l.name} has no limits; pass value_range")
+        lo, hi = lim
+    saved = {j: rig_props.preview_value(j.bii_rig) for j in rig_props.joints(root)}
+    old_drive = p.bii_rig.drive
+    p.bii_rig.drive = "FREE"
+    try:
+        rig_preview.reset(root)
+        bpy.context.view_layer.update()
+        rest = p.matrix_world.copy()
+        rest_rot = rest.to_3x3().normalized()
+        zero_dir = rest_rot.inverted() @ (t.matrix_world.translation - rest.translation)   # in part axes
+        axis_local = rig_props.local_axis(p.bii_rig)
+        xs, ys = [], []
+        prev = 0.0
+        for i in range(samples):
+            v = lo + (hi - lo) * i / max(samples - 1, 1)
+            rig_props.set_preview_value(l, v, followers=False)
+            rig_props.set_preview_value(p, 0.0, followers=False)
+            bpy.context.view_layer.update()
+            m = p.matrix_world
+            rot = m.to_3x3().normalized()
+            want = rot.inverted() @ (t.matrix_world.translation - m.translation)
+            # angle about the part's axis from where it points (at 0) to the target
+            a = zero_dir - axis_local * zero_dir.dot(axis_local)
+            b = want - axis_local * want.dot(axis_local)
+            ang = math.atan2(axis_local.dot(a.cross(b)), a.dot(b))
+            while ang - prev > math.pi:          # keep the samples continuous
+                ang -= 2 * math.pi
+            while ang - prev < -math.pi:
+                ang += 2 * math.pi
+            prev = ang
+            xs.append(v)
+            ys.append(ang)
+        n = len(xs)
+        mx, my = sum(xs) / n, sum(ys) / n
+        sxx = sum((x - mx) ** 2 for x in xs)
+        factor = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx > 1e-12 else 0.0
+        offset = my - factor * mx
+        worst = max(abs(y - (factor * x + offset)) for x, y in zip(xs, ys))
+    finally:
+        p.bii_rig.drive = old_drive
+        rig_preview.reset(root)
+        for j, v in saved.items():
+            rig_props.set_preview_value(j, v, followers=False)
+        rig_props.update_followers(root)
+        bpy.context.view_layer.update()
+    set_follow(p, [(l, factor)], offset=math.degrees(offset))
+    return {"factor": factor, "offset_deg": math.degrees(offset), "worst_error_deg": math.degrees(worst),
+            "samples": n}
+
+
 def set_hold(obj):
     """IK capabilities keep the joint at the value it has when they start (it does not move)."""
     o = _jointed(obj)

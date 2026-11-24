@@ -97,6 +97,7 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 |---|---|
 | `make_rig(obj, export_path=None, forward=None)`, `set_forward(root, "+Y"/"-Y"/"+X"/"-X")`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots and where the model's front points |
 | `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None, axis_world=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited; `axis_world` for an axis given in world space |
+| `fit_follow_aim(part, leader, target, samples=9)` | Fits a Follow so a revolute part (a hydraulic cylinder) keeps pointing at a target that moves with the leader; returns the worst error |
 | `add_point(name, parent, point_world, axes_from=None)` | A fixed empty at a world point, marked as attachment point: the load point of a hook or tool |
 | `clear_joint(obj)`, `describe_joint(obj)`, `describe(root)` | Read and reset |
 | `set_pivot(obj, point_world)` | Moves the origin (pivot) |

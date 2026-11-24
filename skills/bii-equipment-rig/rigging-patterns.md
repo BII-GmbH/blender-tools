@@ -84,8 +84,10 @@ Joints cannot keep a cylinder between two moving pins (no aim constraint in dPro
 - Leave the cylinder and piston as parts of what they move (cylinder on the house, piston on the
   boom); they come apart or overlap at other angles. Simplest; tell the user.
 - Revolute joints at each pin that Follow the luffing joint with a fitted factor (the cylinder's
-  angle changes about linearly with the boom's). Fit the factor from the geometry at a few boom
-  angles, check the worst angle and gap, and report them. It only moves in the generated IK
+  angle changes about linearly with the boom's): pivot each at its pin, add an empty at the other
+  pin (`add_point(..., attachment_point=False)`), then `rig.fit_follow_aim(cylinder, boom,
+  rod_eye_empty)` and `rig.fit_follow_aim(piston, boom, base_pin_empty)`. They return the worst
+  angle error; report it if it is noticeable. It only moves in the generated IK
   capabilities (they set followers of joints in the chain), not in other scripts that move the
   boom alone. Real strokes longer than the modeled cylinder still pull the piston out.
 

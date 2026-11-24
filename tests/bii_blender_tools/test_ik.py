@@ -799,3 +799,33 @@ class ApiAdditionsTest(IkTestCase):
         self.assertFalse([t for t in rig.problems(root) if "beyond its limits" in t])
         rig.set_joint("Reversal", "REVOLUTE", limits=(0, 40))
         self.assertTrue([t for t in rig.problems(root) if "beyond its limits" in t])
+
+
+class FitAimTest(IkTestCase):
+    def test_cylinder_follows_boom(self):
+        """A luffing cylinder between the house and the boom: fit_follow_aim makes it follow the
+        boom so it keeps pointing at the rod eye."""
+        root = bpy.data.objects.new("Exc", None)
+        bpy.context.scene.collection.objects.link(root)
+        house = cube("House", (0, 0, 1), root)
+        boom = cube("Boom3", (0, 1, 2), house)           # hinge pin at (0, 1, 2)
+        eye = bpy.data.objects.new("Rod Eye", None)
+        bpy.context.scene.collection.objects.link(eye)
+        eye.parent = boom
+        eye.matrix_world = Matrix.Translation((0, 3, 2.2))
+        cyl = cube("Cylinder", (0, 0.2, 1.0), house, size=0.3)  # base pin on the house
+        bpy.context.view_layer.update()
+        rig.make_rig(root)
+        rig.set_joint(boom, "REVOLUTE", axis="-X", limits=(0, 70))
+        rig.set_joint(cyl, "REVOLUTE", axis="-X", limits=None)
+        res = rig.fit_follow_aim(cyl, boom, eye)
+        self.assertLess(res["worst_error_deg"], 3.0)
+        # in the preview, the cylinder points at the eye at a few boom angles
+        for v in (10, 35, 60):
+            rig.set_preview(boom, v)
+            bpy.context.view_layer.update()
+            m = cyl.matrix_world
+            want = (eye.matrix_world.translation - m.translation).normalized()
+            rest_dir = (Matrix.Translation((0, 3, 2.2)).translation - Matrix.Translation((0, 0.2, 1.0)).translation).normalized()
+            now = (m.to_3x3().normalized() @ rest_dir).normalized()
+            self.assertLess(math.degrees(now.angle(want)), 3.0)
