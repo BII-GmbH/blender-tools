@@ -8,7 +8,7 @@ Install BII Tools (see [its README](../README.md)); tested with Blender 5.2 and 
 
 View3D > Sidebar (N) > BII Equipment.
 
-1. **Make Rig**: select the top object of the equipment and click Make Rig. It and all its children become the equipment, one dProB part per object. Its origin is the equipment's origin. Blender's +Y is dProB's forward, +Z is up.
+1. **Make Rig**: select the top object of the equipment and click Make Rig. It and all its children become the equipment, one dProB part per object. Its origin is the equipment's origin (on the ground; for a crane under the slewing center). **Forward** says where the model's front points in Blender (+Y by default, or -Y, +X, -X); the export turns the equipment so the front is dProB's forward (+Z), and Blender's +Z is dProB's up (+Y). The root's own rotation is part of the model, so do not turn the root to fix the direction.
 2. **Joint** panel, for each moving part:
    - Joint type: Fixed (moves only with its parent), Revolute (hinge), Prismatic (slider), Ball (free rotation).
    - Axis: X, Y, Z, their negatives, or a custom direction, in the object's own axes (its rotation, without scale).
@@ -57,6 +57,12 @@ Set **Crane Hook** (Export panel) to an attachment point with an IK capability, 
 
 The Crane type's implementations replace those in the file (edit them in dProB under a copy if you need changes); other equipment types and state variables are kept.
 
+How the capability solves:
+
+- Start values: limited joints at least "Start Away from Limits" inside their limits; the top-most free unlimited revolute joint of the chain (the slewing, when the target is at least 0.5 m from its axis) turned so that the target part points at the Destination (Get Current Effective Joint Pose of the joints above it, Signed Angle on Plane). Without that, a target exactly behind the boom gives the solver no gradient to slew at all.
+- Position Only (input, default off): the part keeps its current rotation, turned with that slewing, and only the Destination's position counts. The Crane's Move Arm uses it.
+- Follow joints are set after each pass and not clamped to their limits; give them limits that cover their leaders' range (`problems` warns).
+
 ### Notes
 
 - The preview uses the delta transforms (Object > Transform > Delta Transform) of the moving parts, so their own location, rotation and scale stay the rest pose. A part that already uses delta transforms cannot be previewed; apply or clear them.
@@ -89,8 +95,9 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 
 | Function | Does |
 |---|---|
-| `make_rig(obj, export_path=None)`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots |
-| `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited |
+| `make_rig(obj, export_path=None, forward=None)`, `set_forward(root, "+Y"/"-Y"/"+X"/"-X")`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots and where the model's front points |
+| `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None, axis_world=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited; `axis_world` for an axis given in world space |
+| `add_point(name, parent, point_world, axes_from=None)` | A fixed empty at a world point, marked as attachment point: the load point of a hook or tool |
 | `clear_joint(obj)`, `describe_joint(obj)`, `describe(root)` | Read and reset |
 | `set_pivot(obj, point_world)` | Moves the origin (pivot) |
 | `insert_joint(name, parent, children, pivot_world, axes_from=None)` | Adds an empty joint between a part and its children (level joints, hook spin); nothing moves |
@@ -98,7 +105,7 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 | `set_follow(obj, [(leader, factor)], offset=0)`, `set_hold(obj)`, `set_free(obj)` | Drive: couplings |
 | `set_crane_hook(root, hook)` | Crane type: Move Arm on the hook's IK capability, Lift, Deliver |
 | `set_ik_target(obj, enabled=True, name=None, root_joint="keep", iterations=None, loops=None, orientation_weight=None)`, `ik_targets(root)` | IK capabilities |
-| `solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, apply=True)`, `ik_destination(obj)` | Solve as the capability would, show it; the destination as dProB gets it |
+| `solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, apply=True)`, `ik_destination(obj)` | Solve as the capability would (without a rotation: Position Only), show it; the destination as dProB gets it |
 | `problems(root)`, `export(root, path=None, keep_capabilities=None)`, `verify(root, path=None, samples=3)`, `read_dequip(path)` | Export and check |
 
 The skill `skills/bii-equipment-rig` in this repo tells Claude Code how to rig an equipment with these functions; its `rigging-patterns.md` shows how to build common mechanisms (hinges, telescopes, parts that stay level, hoists, trolleys, excavator arms) from joints.

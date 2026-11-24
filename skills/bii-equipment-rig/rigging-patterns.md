@@ -50,14 +50,20 @@ leader moves.
 ## Hoist, rope and hook (mobile crane, tower crane, gantry)
 
 - Rope length: a prismatic joint pointing down on the part that hangs, its origin at the rope's
-  top (an empty at the boom tip or trolley that slides down, with the hook block as its child). It only points down when everything above keeps it
-  level: below a luffing boom it needs the level joint above (previous pattern); below a trolley
-  on a horizontal jib it is level anyway.
+  top (an empty at the boom tip or trolley that slides down, with the hook block as its child). It
+  only points down when everything above keeps it level: below a luffing boom it needs the level
+  joint above (previous pattern); below a trolley on a horizontal jib it is level anyway.
 - Hook spin: a revolute joint about the rope axis, unlimited, so the IK can turn a load.
-- Load point: a fixed child (an empty) at the exact point a load hangs from (bottom of the hook,
-  not the hook's origin), marked as attachment point. That is the IK target and the crane hook.
+- Load point: `rig.add_point(name, hook, saddle_point, axes_from=root)`, a fixed empty at the exact
+  point a load hangs from (the hook's saddle, not the hook's origin), marked as attachment point.
+  That is the IK target and the crane hook; cargo hangs in its axes, so give it the root's axes.
 - Typical chain: tip/trolley -> level joint (if luffing) -> rope (prismatic down) -> hook spin
-  (revolute) -> hook mesh -> load point (fixed, attachment point).
+  (revolute) -> hook block and hook -> load point (fixed, attachment point).
+- Ropes cannot stretch: a rope mesh stays as long as modeled. Put rope meshes on the hook block
+  (they move down with it and leave a gap at the top) or on the boom head (a gap above the block),
+  hide them, or keep them short; tell the user which.
+- A hook block modeled tilted or lashed to the vehicle for transport: re-pose it hanging (rotate
+  its parts about the block axle), hide the lashing, after asking.
 
 ## Trolley (tower crane, gantry, overhead crane)
 
@@ -70,8 +76,18 @@ A chain of hinges: boom on the house, stick (arm) on the boom, bucket or tool on
 load point is where the tool works (bucket teeth or the bucket's pivot, as the user wants), as an
 attachment point on the tool. Whether the tool must keep its angle: ask. If yes, a Follow on the
 tool joint (sum of the boom and stick joints, with signs) keeps it, else the IK may turn the tool.
-Hydraulic cylinders cannot be driven by joints; leave them as parts of what they move or as
-helpers, and tell the user they will not extend in dProB.
+
+## Hydraulic cylinders
+
+Joints cannot keep a cylinder between two moving pins (no aim constraint in dProB). Options:
+
+- Leave the cylinder and piston as parts of what they move (cylinder on the house, piston on the
+  boom); they come apart or overlap at other angles. Simplest; tell the user.
+- Revolute joints at each pin that Follow the luffing joint with a fitted factor (the cylinder's
+  angle changes about linearly with the boom's). Fit the factor from the geometry at a few boom
+  angles, check the worst angle and gap, and report them. It only moves in the generated IK
+  capabilities (they set followers of joints in the chain), not in other scripts that move the
+  boom alone. Real strokes longer than the modeled cylinder still pull the piston out.
 
 ## Vehicle base
 
@@ -84,9 +100,11 @@ Wheels and tracks are not driven by the rig.
 - Target: the attachment point where the work happens. Root joint: the lowest joint the
   capability may move; leave it empty to move everything above the target.
 - Joints the capability must not touch: Hold.
-- Test many targets (near, far, high, low, all around). Reaching close to the machine often needs
-  a joint to leave its limit first (a boom lying flat must rise); "Start Away from Limits" (seed
-  margin) handles that, raise it if a reachable close target stays off.
+- Test many targets (near, far, high, low, all around, exactly behind). Reaching close to the
+  machine often needs a joint to leave its limit first (a boom lying flat must rise); "Start Away
+  from Limits" (seed margin) handles that, raise it if a reachable close target stays off. A
+  target behind the boom needs the slewing to turn half round; the capability turns the top-most
+  unlimited joint towards the target first, so give the slewing no limits if it has none.
 
 ## Crane (anything that carries cargo)
 
