@@ -52,6 +52,7 @@ def reset(root):
         if tuple(j.preview_ball) != (0.0, 0.0, 0.0):
             j["preview_ball"] = (0.0, 0.0, 0.0)
         rig_props.clear_preview(o)
+    rig_props.update_followers(root)
 
 
 class BII_RIG_OT_sweep(bpy.types.Operator):
@@ -110,7 +111,8 @@ class BII_RIG_OT_sweep(bpy.types.Operator):
 class BII_RIG_OT_reset_preview(bpy.types.Operator):
     bl_idname = "bii_rig.reset_preview"
     bl_label = "Rest Pose"
-    bl_description = "Sets every joint of the rig to 0 (its rest pose)"
+    bl_description = ("Sets every joint of the rig to 0 (its rest pose). Follow joints then take their "
+                      "leaders' values, a constant its offset")
     bl_options = {"REGISTER", "UNDO"}
 
     @classmethod

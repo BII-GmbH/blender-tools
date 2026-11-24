@@ -193,13 +193,21 @@ def _unit_scale():
     return bpy.context.scene.unit_settings.scale_length or 1.0
 
 
+def _rest_world_full(o):
+    """World matrix of o with every joint of its rig at rest (also when its parents are posed)."""
+    root = rig_props.rig_root(o)
+    if root is None:
+        return rig_export._np(o.matrix_world)
+    return ik_chain.rest_worlds(root)[o]
+
+
 def describe_joint(obj):
     """Joint of an object as a dict (degrees, meters; the axis also in world space)."""
     o = _obj(obj)
     j = o.bii_rig
     d = {"object": o.name, "joint": j.joint_type, "visible": j.visible,
          "attachment_point": j.attachment_point, "element_id": j.element_id,
-         "pivot_world": tuple(round(v, 6) for v in rig_props.rest_world(o).translation)}
+         "pivot_world": tuple(round(float(v), 6) for v in _rest_world_full(o)[:3, 3])}
     if j.joint_type in ("REVOLUTE", "PRISMATIC"):
         d["axis"] = j.axis.replace("NEG_", "-") if j.axis != "CUSTOM" else tuple(j.custom_axis)
         try:
@@ -653,7 +661,8 @@ def sweep_pose(root, phase_deg):
 
 
 def reset_preview(root):
-    """Every joint back to 0 (the rest pose)."""
+    """Every joint back to 0 (the rest pose). Follow joints then take their leaders' values,
+    a constant its offset: the rest preview is the modeled pose only without constants."""
     rig_preview.reset(_root(root))
     bpy.context.view_layer.update()
 

@@ -15,6 +15,11 @@ save under a new name (`save_as_mainfile`) unless the user wants the file change
 from bl_ext.user_default.bii_blender_tools.equipment import rig_api as rig
 ```
 
+Keep each MCP call short (well under a minute): a call that runs into the MCP's timeout loses its
+result, and the Blender stays busy until it is done. Split long loops (IK tests over many
+targets) into several calls. Before changing anything, check `bpy.data.filepath` is the file you
+work on.
+
 `equipment/README.md` of the BII Tools extension has the details. Angles are degrees, lengths
 meters, objects can be names. Errors raise `RigError`/`ValueError`: show the message to the user.
 
@@ -58,8 +63,9 @@ out, and ask the user where names and shape do not tell:
 - Whether each moving part is its own object, parented to what it moves with. If parts are joined
   in one mesh or parented wrongly, tell the user and ask before separating or reparenting.
 - Parts modeled in a transport or stowed pose (a hook block tilted and lashed to the bumper,
-  folded outriggers): ask whether to re-pose them into the working pose. Joints start at the pose
-  as modeled.
+  folded outriggers): ask whether to re-pose them into the working pose. Re-pose the geometry
+  (rotate the parts) rather than holding them with a constant Follow: dProB starts every joint
+  at 0, so it shows the pose as modeled until a capability moves the joint.
 - Where the load or tool point is (hook bottom, bucket teeth, fork tip), and whether something
   must stay level or keep its direction while other parts move.
 - Scale: moving parts with children need uniform scale (warned at export). Ask before applying.
