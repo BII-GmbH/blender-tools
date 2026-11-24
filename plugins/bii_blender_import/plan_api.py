@@ -56,6 +56,10 @@ def to_sheet(obj, u, v, unit='SHEET'):
         w, h = pg.image.size
     elif unit == 'SOURCE':
         w, h = _source_pixels(pg)
+        if pg.rotation % 360:
+            u, v = plan_raster.turn_point(u, v, w, h, pg.rotation)
+            if pg.rotation % 180:
+                w, h = h, w
     else:
         raise ValueError(f"unknown unit {unit!r}; one of {UNITS}")
     return u / w * pg.width, pg.height - v / h * pg.height
@@ -71,7 +75,10 @@ def from_sheet(obj, x, y, unit='SHEET'):
     if unit == 'IMAGE':
         w, h = pg.image.size
     elif unit == 'SOURCE':
-        w, h = _source_pixels(pg)
+        w0, h0 = _source_pixels(pg)
+        w, h = (h0, w0) if pg.rotation % 180 else (w0, h0)
+        return plan_raster.unturn_point(x / pg.width * w, (pg.height - y) / pg.height * h,
+                                        w0, h0, pg.rotation)
     else:
         raise ValueError(f"unknown unit {unit!r}; one of {UNITS}")
     return x / pg.width * w, (pg.height - y) / pg.height * h
@@ -316,6 +323,225 @@ def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0):
         im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.LANCZOS)
     im.save(path)
     return path
+
+
+# ---------------------------------------------------------------- grid crosses
+
+def _full_gray(obj):
+    """(gray pixels, dpi) of the plan's original at full resolution (PDF pages at 400 dpi)."""
+    pg = obj.bii_plan
+    path = import_plan.absolute_path(pg.source)
+    if not os.path.isfile(path):
+        raise ValueError(f"The original file is missing: {path}")
+    if os.path.splitext(path)[1].lower() in plan_raster.PDF_EXTENSIONS:
+        sheet = plan_raster.load_pdf(path, pg.page - 1, 400.0)
+        gray = np.asarray(sheet.image.convert("L"))
+    else:
+        gray = plan_raster.gray_pixels(path)
+        if pg.rotation % 360:
+            gray = np.ascontiguousarray(np.rot90(gray, k=-(pg.rotation // 90)))
+    dpi = gray.shape[1] / (pg.width / INCH)
+    return gray, dpi
+
+
+def grid(obj):
+    """The grid found by find_grid() (dict, sheet meters), or None."""
+    import json
+    text = obj.get("bii_grid")
+    return json.loads(text) if text else None
+
+
+def _grid_to_px(obj, gray, stored):
+    """The stored grid (sheet meters) in pixels of gray."""
+    pg = obj.bii_plan
+    h, w = gray.shape
+
+    def px(x, y):
+        return (x / pg.width * w, (pg.height - y) / pg.height * h)
+    return {"origin": px(*stored["origin"]),
+            "a": (stored["a"][0] / pg.width * w, -stored["a"][1] / pg.height * h),
+            "b": (stored["b"][0] / pg.width * w, -stored["b"][1] / pg.height * h),
+            "crosses": [dict(c, x=px(c["x"], c["y"])[0], y=px(c["x"], c["y"])[1]) for c in stored["crosses"]],
+            "spacing_m": stored["spacing_m"]}
+
+
+def find_grid(obj, add_points=True):
+    """Find the plan's coordinate grid (Gitterkreuze) on the original file at full resolution.
+
+    Stores it on the plan (grid()) and, with add_points, makes every cross found a georeference
+    point named "G i,j" without values (i, j: its place in the grid). Then either enter Rechtswert
+    and Hochwert of 2 or 3 crosses and call fill_from_grid(), or read the numbers printed on the
+    plan (grid_labels()) and call place_from_grid(). Returns {"crosses", "spacing_m", "angle",
+    "rms_px"}, or None when no grid was found."""
+    import json
+    from . import plan_grid
+    pg = obj.bii_plan
+    gray, dpi = _full_gray(obj)
+    found = plan_grid.find_grid(gray, dpi, massstab=pg.massstab or None)
+    if not found:
+        if "bii_grid" in obj:
+            del obj["bii_grid"]
+        return None
+    h, w = gray.shape
+
+    def sheet(x, y):
+        return (x / w * pg.width, pg.height - y / h * pg.height)
+    stored = {"origin": sheet(*found["origin"]),
+              "a": (found["a"][0] / w * pg.width, -found["a"][1] / h * pg.height),
+              "b": (found["b"][0] / w * pg.width, -found["b"][1] / h * pg.height),
+              "spacing_m": found["spacing_m"], "angle": found["angle"], "rms_px": found["rms_px"],
+              "dpi": dpi,
+              "crosses": [{"i": c["i"], "j": c["j"], "x": sheet(c["x"], c["y"])[0],
+                           "y": sheet(c["x"], c["y"])[1], "score": c["score"]} for c in found["crosses"]]}
+    obj["bii_grid"] = json.dumps(stored)
+    if found["spacing_m"]:
+        pg.grid_spacing = int(found["spacing_m"])
+    if add_points:
+        pg.points.clear()
+        for c in stored["crosses"]:
+            p = pg.points.add()
+            p.name = f"G {c['i']},{c['j']}"
+            p.x, p.y, p.use = c["x"], c["y"], True
+        pg.point_index = 0
+    if bpy.context.window_manager:
+        import_plan._redraw(None, bpy.context)
+    return {"crosses": len(stored["crosses"]), "spacing_m": found["spacing_m"],
+            "angle": round(found["angle"], 2), "rms_px": round(found["rms_px"], 2)}
+
+
+GRID_LABEL_QUESTION = (
+    "Numbered boxes from a scanned plan, separated by black lines. Each box shows the same piece "
+    "twice: as printed (top) and turned 180 degrees (bottom). For each box: if one of the two shows "
+    "an upright coordinate number (7 digits, like 3589300 or 5546100), give that number; else NONE. "
+    "Reply only with lines 'n: number' or 'n: NONE'.")
+
+
+def grid_labels(obj, folder, per_image=4):
+    """Images to read the grid's coordinate numbers from (after find_grid()).
+
+    Writes PNGs into folder. Each holds up to per_image numbered boxes: a place along a grid line
+    where a number may be printed, shown as printed (top) and turned by 180 degrees (bottom).
+    Returns [{"image": path, "boxes": [label id, ...]}]: box n of an image is boxes[n - 1].
+    Ask GRID_LABEL_QUESTION about each image, then place_from_grid(obj, [(label id, number)])."""
+    from PIL import Image, ImageDraw
+    from . import plan_grid
+    stored = grid(obj)
+    if not stored:
+        raise ValueError(f"{obj.name}: no grid yet, run find_grid() first")
+    gray, dpi = _full_gray(obj)
+    cands = plan_grid.label_candidates(gray, _grid_to_px(obj, gray, stored), dpi)
+    cands.sort(key=lambda c: not c["near_cross"])
+    obj["bii_grid_labels"] = [[c["family"], c["index"]] for c in cands]
+    os.makedirs(folder, exist_ok=True)
+    out = []
+    for k0 in range(0, len(cands), per_image):
+        group = cands[k0:k0 + per_image]
+        img, tops = plan_grid.contact_sheet([c["strip"] for c in group])
+        im = Image.fromarray(img).convert("RGB")
+        draw = ImageDraw.Draw(im)
+        for n, y in enumerate(tops, 1):
+            draw.text((8, y + 8), str(n), fill=(255, 0, 0))
+        path = os.path.join(folder, f"{bpy.path.clean_name(obj.name)}_labels_{k0 // per_image + 1}.png")
+        im.save(path)
+        out.append({"image": path, "boxes": list(range(k0, k0 + len(group)))})
+    return out
+
+
+def _expected(obj):
+    """Rough (easting, northing) of the scene origin in the plan's system, or None."""
+    from . import plan_geo
+    scene = bpy.context.scene
+    if "lat" not in scene or "lon" not in scene:
+        return None
+    pg = obj.bii_plan
+    try:
+        zone = pg.utm_zone if pg.crs == 'ETRS89' else plan_geo.default_zone(pg.crs, scene["lon"])
+        return plan_geo.wgs84_to_grid(pg.crs, scene["lat"], scene["lon"], zone)
+    except Exception:  # noqa: BLE001 - only a hint
+        return None
+
+
+def place_from_grid(obj, readings, crs=None):
+    """Place the plan from its grid (find_grid()) and coordinate numbers read on it.
+
+    readings: [(label id, number)] with the label ids of grid_labels(), or
+    [(family, index, number)] for a grid line directly. Every number must fit the grid; misreads
+    are left out and reported. Needs numbers on both grid directions and two on one of them (else
+    the plan could be turned by 180 degrees). Returns (Maßstab, RMS m, largest residual m,
+    warnings) like georeference(); raises ValueError with the reason when it cannot decide."""
+    from . import plan_grid
+    stored = grid(obj)
+    if not stored:
+        raise ValueError(f"{obj.name}: no grid yet, run find_grid() first")
+    if crs:
+        obj.bii_plan.crs = crs
+    labels = obj.get("bii_grid_labels") or []
+    rows = []
+    for r in readings:
+        if len(r) == 2:
+            fam, idx = labels[int(r[0])]
+            rows.append((fam, int(idx), float(r[1])))
+        else:
+            rows.append((r[0], int(r[1]), float(r[2])))
+    sol = plan_grid.solve(stored, rows, stored["spacing_m"] or obj.bii_plan.grid_spacing or 100,
+                          expected=_expected(obj), y_down=False)
+    if not sol["ok"]:
+        raise ValueError(f"{obj.name}: {sol['message']}")
+    scale, rms, worst, warnings = georeference(obj, sol["crosses"], unit='SHEET')
+    for p, c in zip(obj.bii_plan.points, stored["crosses"]):
+        p.name = f"G {c['i']},{c['j']}"
+    warnings = list(warnings)
+    if sol["outliers"]:
+        warnings.append(f"Left out as misread: {sol['outliers']}")
+    return scale, rms, worst, warnings
+
+
+def fill_from_grid(obj):
+    """Fill every grid point of find_grid() from the values entered at 2 or more of them, so that
+    Place in Scene uses all crosses. Returns the number of points filled; raises ValueError when
+    the values do not fit the grid or leave it open."""
+    from . import plan_grid
+    stored = grid(obj)
+    if not stored:
+        raise ValueError("No grid yet: Find Grid first")
+    pg = obj.bii_plan
+    spacing = stored["spacing_m"] or pg.grid_spacing or 100
+    index = {}
+    for c in stored["crosses"]:
+        index[f"G {c['i']},{c['j']}"] = (c["i"], c["j"])
+    known = [(index[p.name], p.easting, p.northing) for p in pg.points
+             if p.name in index and p.easting_state == 'READ' and p.northing_state == 'READ']
+    if len(known) < 2:
+        raise ValueError("Enter Rechtswert and Hochwert of at least 2 grid crosses")
+    good = []
+    for e_fam in ("i", "j"):
+        rows = []
+        for (i, j), e, n in known:
+            if e_fam == "i":
+                rows += [("i", i, e), ("j", j, n)]
+            else:
+                rows += [("j", j, e), ("i", i, n)]
+        sol = plan_grid.solve(stored, rows, spacing, y_down=False)
+        if sol["ok"] and not sol["outliers"]:
+            good.append(sol)
+    if len(good) != 1:
+        raise ValueError("The values fit the grid in two ways: enter one more cross, not in line "
+                         "with the others" if good else
+                         "The values do not fit the grid: check for a typo")
+    values = {}
+    for (x, y, e, n), c in zip(good[0]["crosses"], stored["crosses"]):
+        values[f"G {c['i']},{c['j']}"] = (e, n)
+    filled = 0
+    for p in pg.points:
+        if p.name not in values:
+            continue
+        e, n = values[p.name]
+        if p.easting_state != 'READ':
+            import_plan.set_point_value(p, "easting", int(round(e)), 'READ')
+            filled += 1
+        if p.northing_state != 'READ':
+            import_plan.set_point_value(p, "northing", int(round(n)), 'READ')
+    return filled
 
 
 # ---------------------------------------------------------------- Auto Crop

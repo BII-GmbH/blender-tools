@@ -196,6 +196,42 @@ def downscale(sheet, long_side):
                  sheet.warning)
 
 
+def rotate(sheet, degrees):
+    """The sheet turned clockwise by degrees (0, 90, 180 or 270), e.g. a scan lying on its side."""
+    from PIL import Image
+    degrees = int(degrees) % 360
+    if degrees == 0:
+        return sheet
+    method = {90: Image.ROTATE_270, 180: Image.ROTATE_180, 270: Image.ROTATE_90}[degrees]
+    image = sheet.image.transpose(method)
+    dx, dy = (sheet.dpi_y, sheet.dpi_x) if degrees in (90, 270) else (sheet.dpi_x, sheet.dpi_y)
+    return Sheet(image, dx, dy, sheet.note, sheet.warning)
+
+
+def turn_point(u, v, w, h, degrees):
+    """(u, v) on an image of w x h pixels, after turning the image clockwise by degrees."""
+    degrees = int(degrees) % 360
+    if degrees == 90:
+        return h - v, u
+    if degrees == 180:
+        return w - u, h - v
+    if degrees == 270:
+        return v, w - u
+    return u, v
+
+
+def unturn_point(u, v, w, h, degrees):
+    """Inverse of turn_point: (u, v) on the turned image back to the original of w x h pixels."""
+    degrees = int(degrees) % 360
+    if degrees == 90:
+        return v, h - u
+    if degrees == 180:
+        return w - u, h - v
+    if degrees == 270:
+        return w - v, u
+    return u, v
+
+
 def with_sheet_size(sheet, width_m, height_m):
     """The sheet with its resolution set so it measures width_m x height_m.
 

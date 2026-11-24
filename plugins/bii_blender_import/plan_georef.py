@@ -1101,6 +1101,59 @@ class VIEW3D_PT_bii_plan(bpy.types.Panel):
         _draw_view_hints(layout, context)
 
 
+class PlanFindGridOperator(bpy.types.Operator):
+    """Find the grid crosses on the original file and add each as a point without values.
+Then enter Rechtswert and Hochwert of 2 or 3 crosses and click Fill from Grid"""
+    bl_idname = "bii_plan.find_grid"
+    bl_label = "Find Grid"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return obj is not None and obj.bii_plan.is_plan
+
+    def execute(self, context):
+        from . import plan_api
+        context.window.cursor_set('WAIT')
+        try:
+            found = plan_api.find_grid(context.object)
+        except (ValueError, OSError) as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        finally:
+            context.window.cursor_set('DEFAULT')
+        if not found:
+            self.report({'WARNING'}, "No grid crosses found: click them by hand (+)")
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"{found['crosses']} grid crosses, {found['spacing_m'] or '?'} m apart. "
+                    "Enter Rechtswert and Hochwert of 2 or 3 of them, then Fill from Grid")
+        return {'FINISHED'}
+
+
+class PlanFillFromGridOperator(bpy.types.Operator):
+    """Give every grid cross its Rechtswert and Hochwert from the values entered at 2 or more of
+them (crosses not all in one line)"""
+    bl_idname = "bii_plan.fill_from_grid"
+    bl_label = "Fill from Grid"
+    bl_options = {'REGISTER', 'UNDO'}
+
+    @classmethod
+    def poll(cls, context):
+        obj = context.object
+        return obj is not None and obj.bii_plan.is_plan and "bii_grid" in obj
+
+    def execute(self, context):
+        from . import plan_api
+        try:
+            n = plan_api.fill_from_grid(context.object)
+        except ValueError as ex:
+            self.report({'ERROR'}, str(ex))
+            return {'CANCELLED'}
+        self.report({'INFO'}, f"Filled {n} crosses. Check the residuals, then Place in Scene")
+        return {'FINISHED'}
+
+
 class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
     bl_space_type = 'VIEW_3D'
     bl_region_type = 'UI'
@@ -1165,6 +1218,11 @@ class VIEW3D_PT_bii_plan_georef(bpy.types.Panel):
                 wrapped_label(layout, context, "? = guess: only fills what the values read "
                               "from the plan leave open. Check it against the plan, then "
                               "click ? to confirm it, or type the right value", 'INFO')
+        row = layout.row(align=True)
+        row.operator(PlanFindGridOperator.bl_idname, icon='VIEWZOOM')
+        sub = row.row(align=True)
+        sub.enabled = "bii_grid" in context.object
+        sub.operator(PlanFillFromGridOperator.bl_idname, icon='GRID')
         row = layout.row(align=True)
         row.prop(pg, "snap", toggle=True)
         row.prop(pg, "show_grid", toggle=True)
@@ -1276,7 +1334,7 @@ class VIEW3D_PT_bii_plan_align(bpy.types.Panel):
         layout.operator(PlanAlignOperator.bl_idname, icon='SNAP_ON')
 
 
-classes = (PlanPickOperator, PlanOriginFromUmgebungOperator, PlanGeoreferenceOperator, PlanAlignOperator, PlanPairTargetOperator,
+classes = (PlanFindGridOperator, PlanFillFromGridOperator, PlanPickOperator, PlanOriginFromUmgebungOperator, PlanGeoreferenceOperator, PlanAlignOperator, PlanPairTargetOperator,
            PlanPointFromSceneOperator, PlanRefreshGuessesOperator, PlanRemoveOperator,
            BII_UL_plan_points, BII_UL_plan_pairs, VIEW3D_PT_bii_plan,
            VIEW3D_PT_bii_plan_georef, VIEW3D_PT_bii_plan_crs_help, VIEW3D_PT_bii_plan_align)
