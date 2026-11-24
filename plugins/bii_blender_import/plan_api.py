@@ -131,6 +131,30 @@ def _run(obj, op, **kwargs):
     return op(**kwargs)
 
 
+def placement(obj):
+    """How the plan was placed last (dict: method, details, time), or None. Written by the
+    placement calls of this module."""
+    import json
+    text = obj.get("bii_placement")
+    return json.loads(text) if text else None
+
+
+def _record(obj, method, **details):
+    import json
+    import time
+    obj["bii_placement"] = json.dumps({"method": method, "time": time.strftime("%Y-%m-%d %H:%M"),
+                                       **details}, default=str)
+
+
+def _guard(obj, force):
+    """A plan placed by its grid is the most accurate there is: other placement calls leave it
+    alone unless force=True."""
+    rec = placement(obj)
+    if rec and rec.get("method") == "grid" and not force:
+        raise ValueError(f"{obj.name} is placed by its grid crosses; it is not moved by other "
+                         "methods (pass force=True if you really mean to)")
+
+
 def georeference(obj, crosses, unit='SHEET', crs=None, utm_zone=None, replace=True):
     """Place the plan by grid crosses: crosses = [(u, v, easting, northing)], the position of
     each cross on the plan in unit and the coordinates printed at it (Rechtswert, Hochwert).
@@ -155,14 +179,18 @@ def georeference(obj, crosses, unit='SHEET', crs=None, utm_zone=None, replace=Tr
         raise ValueError(f"{obj.name}: Place in Scene failed (see the report)")
     bpy.context.view_layer.update()
     scale, rms, worst, warnings = plan_georef.fit_summary(pg)
+    _record(obj, "grid", crosses=len(crosses), scale=round(scale, 2), rms=round(rms, 3),
+            worst=round(worst.residual, 3))
     return scale, rms, worst.residual, warnings
 
 
-def align_to_scene(obj, pairs, unit='SHEET', fit_scale=False, replace=True):
+def align_to_scene(obj, pairs, unit='SHEET', fit_scale=False, replace=True, force=False):
     """Place the plan so points on it meet scene points: pairs = [(u, v, (x, y, z))], a point on the
     plan in unit and where it belongs in the scene (e.g. the same corner on a plan already placed:
     plan_to_world(other, ...)). One pair only moves the plan, two or more also turn it; fit_scale
-    measures the Maßstab too. Returns the residuals in meters, one per pair."""
+    measures the Maßstab too. Returns the residuals in meters, one per pair. A plan placed by its
+    grid is not moved unless force=True."""
+    _guard(obj, force)
     pg = obj.bii_plan
     if replace:
         pg.pairs.clear()
@@ -176,14 +204,16 @@ def align_to_scene(obj, pairs, unit='SHEET', fit_scale=False, replace=True):
     if _run(obj, bpy.ops.bii_plan.align) != {'FINISHED'}:
         raise ValueError(f"{obj.name}: Align failed (see the report)")
     bpy.context.view_layer.update()
+    _record(obj, "align_to_scene", pairs=len(pairs))
     return [p.residual for p in pg.pairs]
 
 
-def attach_to_neighbor(obj, neighbor, own, other, unit='SHEET'):
+def attach_to_neighbor(obj, neighbor, own, other, unit='SHEET', force=False):
     """Join a sheet to its neighbor (Anschlussblatt) at the match line: own = two points on this
     sheet, other = the same two points on the neighbor, each (u, v) in unit. The first is the point
     where the track crosses the match line. Sheets attached to obj move along. Returns warnings."""
     from . import plan_place
+    _guard(obj, force)
     place = obj.bii_plan_place
     pts_own = [to_sheet(obj, u, v, unit) for u, v in own]
     pts_other = [to_sheet(neighbor, u, v, unit) for u, v in other]
@@ -194,14 +224,17 @@ def attach_to_neighbor(obj, neighbor, own, other, unit='SHEET'):
     warnings = plan_place.attach(obj)
     bpy.context.view_layer.update()
     warnings += plan_place.place_chain(bpy.context.scene, obj)[2]
+    _record(obj, "neighbor", neighbor=neighbor.name)
     return warnings
 
 
-def align_by_km(obj, km_points, strecke=None, unit='SHEET', replace=True):
+def align_by_km(obj, km_points, strecke=None, unit='SHEET', replace=True, force=False):
     """Place the plan by Kilometrierung: km_points = [(u, v, "5,3")], a point on the plan track and
     the km printed there ("" for a point that only lies on the track). Only for plans without a
     coordinate grid: the OSM Kilometrierung can be 20 m and more off along the track. Returns the
-    report lines."""
+    report lines. A plan placed by its grid is not moved unless force=True. Each point must be the
+    km mark on the track, not the label text beside it."""
+    _guard(obj, force)
     place = obj.bii_plan_place
     if strecke is not None:
         place.strecke = strecke
@@ -488,6 +521,8 @@ def place_from_grid(obj, readings, crs=None):
     if not sol["ok"]:
         raise ValueError(f"{obj.name}: {sol['message']}")
     scale, rms, worst, warnings = georeference(obj, sol["crosses"], unit='SHEET')
+    _record(obj, "grid", crosses=len(sol["crosses"]), scale=round(scale, 2), rms=round(rms, 3),
+            numbers=[list(r) for r in sol["used"]], misread=[list(r) for r in sol["outliers"]])
     for p, c in zip(obj.bii_plan.points, stored["crosses"]):
         p.name = f"G {c['i']},{c['j']}"
     warnings = list(warnings)
@@ -826,6 +861,122 @@ def overlap_centers(obj, reference, count=3):
         return candidates
     step = (len(candidates) - 1) / (count - 1) if count > 1 else 0
     return [candidates[round(i * step)] for i in range(count)] if count > 1 else [candidates[len(candidates) // 2]]
+
+
+def _overlap_area(quad_a, quad_b, step=None):
+    """Approximate area (m²) where two convex quads overlap, by sampling."""
+    x0, y0, x1, y1 = _bounds(quad_a)
+    bx0, by0, bx1, by1 = _bounds(quad_b)
+    x0, y0, x1, y1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+    if x1 <= x0 or y1 <= y0:
+        return 0.0
+    step = step or max((x1 - x0), (y1 - y0)) / 60
+    n = 0
+    for x in np.arange(x0 + step / 2, x1, step):
+        for y in np.arange(y0 + step / 2, y1, step):
+            if _inside(quad_a, (x, y)) and _inside(quad_b, (x, y)):
+                n += 1
+    return n * step * step
+
+
+def validate(obj, scene=None, compare_plans=True):
+    """Checks of a placed flat plan, one call. Returns {"ok", "problems": [...], "notes": [...],
+    "placement", "checks"}: problems are findings that need a look (a wrong placement is likely),
+    notes say what could not be decided. Checks:
+    - Maßstab within 0.5 % of the printed one, residuals (grid placement);
+    - every coordinate number used lands on its own grid line (raw, not snapped to the nearest);
+    - Kilometrierung points: their residuals;
+    - overlap with the other plans (a sheet whose neighbors all overlap it but which overlaps
+      none is suspicious) and the placement check against plans and track axes;
+    - the plan lies above the terrain."""
+    from . import plan_georef
+    scene = scene or bpy.context.scene
+    pg = obj.bii_plan
+    problems, notes, checks = [], [], {}
+    rec = placement(obj)
+    if pg.orientation != 'FLAT':
+        return {"ok": True, "problems": [], "notes": ["upright plan: not checked"], "placement": rec,
+                "checks": {}}
+    if rec is None and not len(pg.points) and not len(obj.bii_plan_place.km_points):
+        problems.append("no placement recorded and no points: the plan may not be placed")
+    # grid placement
+    summary = plan_georef.fit_summary(pg) if len(pg.points) else None
+    if summary:
+        scale, rms, worst, warnings = summary
+        checks["massstab"] = round(scale, 2)
+        checks["rms_m"] = round(rms, 3)
+        if pg.massstab and abs(scale / pg.massstab - 1) > 0.005:
+            problems.append(f"measured Maßstab 1:{scale:.1f}, printed 1:{pg.massstab:.0f}: a cross or "
+                            "the coordinate system is wrong")
+        if rms > 0.5 or worst.residual > 1.0:
+            problems.append(f"residuals {rms:.2f} m RMS, largest {worst.residual:.2f} m ({worst.name})")
+        problems += [f"georeference: {w}" for w in warnings]
+    stored = grid(obj)
+    if rec and rec.get("numbers") and stored:
+        # each number read must lie on its own line at the plan's current place
+        fit = plan_georef.sheet_fit(pg)
+        bad = []
+        for fam, idx, value in rec["numbers"]:
+            o, a, b = (np.array(stored[k]) for k in ("origin", "a", "b"))
+            p = o + idx * (a if fam == "i" else b) + 0.5 * (b if fam == "i" else a)
+            if fit:
+                from . import plan_geo
+                e, n = plan_geo.apply_similarity(fit, p[0], p[1])
+                got = e if abs(e - value) < abs(n - value) else n
+                if abs(got - value) > 1.0:
+                    bad.append((fam, idx, value, round(got, 1)))
+        checks["numbers_on_their_lines"] = len(rec["numbers"]) - len(bad)
+        if bad:
+            problems.append(f"numbers not on their grid lines: {bad}")
+    if not summary and len(obj.bii_plan_place.km_points):
+        res = [p.residual for p in obj.bii_plan_place.km_points if p.residual >= 0]
+        if res:
+            checks["km_residual_max_m"] = round(max(res), 2)
+            if max(res) > 5:
+                problems.append(f"Kilometrierung residuals up to {max(res):.1f} m: is every point the "
+                                "km mark on the track (not the label text)?")
+        notes.append("placed by Kilometrierung: OpenStreetMap km can be 20 m and more off along the track")
+    # overlaps with the other flat plans
+    quad = footprint(obj)
+    overlaps = {}
+    for other in plans(scene):
+        if other is obj or other.bii_plan.orientation != 'FLAT':
+            continue
+        area = _overlap_area(quad, footprint(other))
+        if area > 1.0:
+            overlaps[other.name] = round(area)
+    checks["overlaps_m2"] = overlaps
+    prefix = obj.name[:4]
+    series = [o for o in plans(scene) if o is not obj and o.name[:4] == prefix]
+    if series and not overlaps:
+        near = min(((Vector(_bounds(footprint(o))[:2]) - Vector(_bounds(quad)[:2])).length, o.name)
+                   for o in series)
+        if near[0] < 3000:
+            problems.append(f"overlaps no other plan, while sheets of its series lie {near[0]:.0f} m away "
+                            f"({near[1]}): placed far from its neighbors?")
+    # compare drawings
+    if compare_plans:
+        for r in check_placement(obj, scene=scene):
+            name = r.get("reference")
+            if r.get("reliable") and r.get("distance", 0) > (1.0 if name != "TRACKS" else 5.0):
+                problems.append(f"{describe(r)}")
+            elif not r.get("reliable"):
+                notes.append(f"{name}: no clear match (drawings differ); use overlay() to look")
+            checks.setdefault("compare", []).append({k: r.get(k) for k in ("reference", "reliable", "distance")})
+    # terrain
+    try:
+        from . import signal_panel
+        zs = []
+        for x, y in quad:
+            z = signal_panel.terrain_height(bpy.context, x, y)
+            if z is not None:
+                zs.append(z)
+        if zs and obj.matrix_world.translation.z < max(zs):
+            problems.append(f"lies at z {obj.matrix_world.translation.z:.1f} m, below the terrain "
+                            f"(up to {max(zs):.1f} m at its corners)")
+    except Exception:  # noqa: BLE001 - no terrain
+        pass
+    return {"ok": not problems, "problems": problems, "notes": notes, "placement": rec, "checks": checks}
 
 
 def check_placement(obj, cell=1.0, max_shift=15.0, scene=None):

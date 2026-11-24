@@ -117,6 +117,10 @@ bpy.ops.import_image.bii_plan(filepath=r"...\plan.pdf", massstab=1000, orientati
 plan = bpy.context.view_layer.objects.active
 ```
 
+A scan lying on its side or upside down: import it with `rotation='90'` (clockwise), `'180'` or
+`'270'` so the text reads upright. Never turn the file yourself (copies lose their resolution and
+the `'SOURCE'` pixels): with `rotation`, `'SOURCE'` stays the pixels of the original file.
+
 Several sheets of one plan: `bpy.ops.import_image.bii_plan_sheets(directory=..., files=[{"name": ...}, ...], massstab=1000)`.
 Read the Maßstab from the title block if the user did not give it. Ansichten and
 Schnitte are `orientation='UPRIGHT'`; everything below is for flat plans.
@@ -142,13 +146,39 @@ with Neighbor Weight).
 
 ### Georeference
 
-Find at least 4 grid crosses near the corners (look for: "pixel position of the cross center and
-the coordinate labels printed at it"). Then:
+Let the plugin find the grid; never look for crosses yourself:
+
+```python
+found = plan_api.find_grid(plan)          # None: no grid; else crosses, spacing_m, angle
+images = plan_api.grid_labels(plan, folder)
+```
+
+`find_grid` works on the original file at full resolution and finds every cross, also crosses that
+touch other lines. Do not decide "this plan has no grid" from your own look at a downscaled
+image: run `find_grid`. `grid_labels` writes images with numbered boxes, each a place along a grid
+line where a coordinate number may be printed, shown as printed and turned by 180°. Ask about each
+image with exactly `plan_api.GRID_LABEL_QUESTION`, collect the answers as `(box id, number)`
+(`images[k]["boxes"][n - 1]` is the id of box n), then:
+
+```python
+scale, rms, worst, warnings = plan_api.place_from_grid(plan, [(box_id, 3589300), ...], crs='DB_REF')
+```
+
+It checks every number against the grid, leaves misreads out (they appear in `warnings`) and
+refuses when the numbers allow more than one placement: then read more boxes. Never fill in
+numbers you estimated from the plan's current position: a placement that starts from a wrong
+position confirms itself. Only when the plan prints no number at all, say so in the report and
+place it another way.
+
+Points you measured yourself still work:
 
 ```python
 scale, rms, worst, warnings = plan_api.georeference(
     plan, [(u, v, easting, northing), ...], unit='SOURCE', crs='DB_REF')   # crs as printed on the plan
 ```
+
+Small residuals do not prove a placement: a wrong assignment of numbers to lines fits just as well.
+The proof is a number printed on the plan that lands on its own grid line, and the checks of step 7.
 
 `crs` from the plan's title block or legend: `'DB_REF'` (DB plans: DB_REF, DB-Referenzsystem,
 Gauß-Krüger values with a 7-digit Rechtswert), `'DHDN'` (older Landesvermessung Gauß-Krüger), or
@@ -169,7 +199,10 @@ residuals = plan_api.align_to_scene(plan, pairs, unit='IMAGE')   # 3+ pairs far 
 ```python
 lines = plan_api.align_by_km(plan, [(u, v, "53,9"), (u, v, "54,2"), (u, v, "")], strecke="5102", unit='SOURCE')
 ```
-Points on the plan's track at printed km; `""` = a point that only lies on the track.
+Each point is the **km mark on the track**: the small circle (or tick) on the track line that the
+km label belongs to, never the center of the label text. The text stands beside the track, often
+10 to 20 m away, and a point there turns the whole sheet. Find the mark next to each label; if you
+cannot find it, do not use that label. `""` = a point that only lies on the track.
 
 ### Neighbor sheet
 
@@ -217,6 +250,16 @@ how many meters and in which direction (right/left/up/down)?"
 
 Also check: Georeference RMS ≤ 0.5 m and largest residual ≤ 1 m (more: a misread cross; fix it,
 don't drop it silently). Neighbor sheets: their match line shows no step.
+
+## Many plans at once
+
+- First make a list of all sheets: orientation (turned?), grid yes/no (`find_grid`), Strecke and km
+  range from the title block. Place the sheets with a grid first, then the others.
+- Write down for each sheet how it was placed and what the checks gave (a JSON file next to the
+  blend), so nothing is lost when your context runs out.
+- Never move a sheet that is already placed by its grid. Place each sheet on its own; a batch that
+  places several sheets at once must leave the others alone.
+- Check each sheet before the next one, and check all sheets again after any change.
 
 ## 8. Report
 

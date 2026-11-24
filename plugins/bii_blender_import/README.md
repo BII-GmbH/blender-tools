@@ -115,6 +115,12 @@ For Lagepläne with grid crosses (Gitterkreuze) and their coordinates on the she
 4. Show Grid draws the grid that follows from the points. If it runs through all crosses and matches the labels on the frame, the points are right. Residuals over 0.5 m show in red.
 5. Place in Scene moves and turns the plan to the scene coordinates of the Umgebung extension (`scene["lat"]` / `scene["lon"]`). Without them, the plan sets them to its center, and Umgebung can build around it ("use scene origin"). If the scene has Umgebung objects but no stored origin (Umgebung before 1.29.1 stored it only when loading tracks), the panel offers Origin from Umgebung Panel: it takes the center of the area in the Umgebung panel, which is right only if that area has not changed since Umgebung built the scene.
 
+#### Find Grid
+
+Find Grid (in the Georeference panel, or the Find Grid option of the import) looks for the grid crosses on the original file at full resolution: crosses at any angle, also those touching other lines. It adds every cross it finds as a point named "G i,j" (i, j: its place in the grid) without values and sets Grid Spacing. Enter Rechtswert and Hochwert of two or three of them (not all in one line), then Fill from Grid: it gives every other cross its values from the grid, and refuses values that do not fit (a typo) or that leave the direction open. Then Place in Scene. A plan whose grid cannot be found keeps the + way above.
+
+For scripts: `plan_api.find_grid(plan)`, then `plan_api.grid_labels(plan, folder)` writes images of the places along the grid lines where coordinate numbers are printed (each shown as printed and turned by 180°), and `plan_api.place_from_grid(plan, [(box id, number), ...])` places the plan from the numbers read there. Each number must fit the grid; misreads are left out and reported, and the call refuses when the numbers allow two placements (turned by 180°) or would mirror the plan.
+
 #### Which coordinate system?
 
 Look on the plan for "Lagesystem", "Lagebezug" or "Koordinatensystem". The sidebar has the same help under Georeference > Which Coordinate System?
@@ -168,6 +174,9 @@ plan_api.plans(bpy.context.scene)                   # the plan objects
 plan_api.plan_to_world(plan, 1820, 450, 'PDF')      # world Vector of a point on the plan
 plan_api.world_to_plan(plan, (x, y, z), 'IMAGE')    # and back
 plan_api.georeference(plan, [(u, v, easting, northing), ...], 'IMAGE', crs='DB_REF')  # grid crosses
+plan_api.find_grid(plan)                            # grid crosses found on the original file
+plan_api.place_from_grid(plan, [(box_id, 3589300), ...])  # numbers read on grid_labels() images
+plan_api.validate(plan)                             # ok, problems, notes: all checks in one call
 plan_api.align_to_scene(plan, [(u, v, (x, y, z)), ...], 'PDF')  # points onto scene points
 plan_api.attach_to_neighbor(plan, other, [(u1, v1), (u2, v2)], [(u1, v1), (u2, v2)], 'IMAGE')
 plan_api.align_by_km(plan, [(u, v, "5,3"), (u, v, "5,4")], strecke="5240")
@@ -177,6 +186,10 @@ for r in plan_api.check_placement(plan):            # dicts: shift, distance, sc
     print(plan_api.describe(r))
 plan_api.overlay(plan, other, center_xy, "check.png")  # red: plan, blue: other plan or "TRACKS"
 ```
+
+A plan placed by its grid is not moved by `align_to_scene`, `attach_to_neighbor` or `align_by_km` unless they get `force=True`. `plan_api.placement(plan)` says how a plan was placed last (method, numbers, residuals). `validate()` checks the Maßstab and residuals, that every coordinate number used lies on its own grid line, the Kilometrierung residuals, the overlaps with the other plans (a sheet that overlaps no plan while its neighbors lie close is suspicious), the drawings against plans and track axes, and that the plan lies above the terrain.
+
+Import with Turn (0°, 90° clockwise, 180°, 90° counterclockwise) for scans lying on their side or upside down; `'SOURCE'` pixels stay those of the original file.
 
 Units of a point on a plan: `'SHEET'` (meters on the paper, y up, the mesh's own coordinates), `'PDF'` (points of the PDF page, y down), `'IMAGE'` (pixels of the plan's image in Blender, y down), `'SOURCE'` (pixels of the original TIFF or PNG, y down). `overlay()` writes a PNG with the plan's ink red, the other plan's or the track axes' ink blue and both together dark purple, with a 10 m grid: where the plan sits right, red lies on blue.
 
