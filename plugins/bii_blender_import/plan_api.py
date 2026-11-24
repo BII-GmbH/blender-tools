@@ -340,9 +340,12 @@ def color_clusters(obj, color="red", join=0.002, min_size=0.0005):
     return out
 
 
-def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0):
+def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0, up=None):
     """Write the part of the plan's image between two corners (in unit, plus pad image pixels) as
-    PNG, e.g. one symbol for a closer look; scale > 1 enlarges it. Returns path."""
+    PNG, e.g. one symbol for a closer look; scale > 1 enlarges it. Returns path.
+    up: a direction (du, dv) in the plan's image (y down), e.g. from a symbol's foot to its head:
+    the crop is turned so that this direction points up, and numbers printed along the symbol read
+    upright (a 6 and a 9 are told apart only that way)."""
     from PIL import Image
     a = from_sheet(obj, *to_sheet(obj, u0, v0, unit), 'IMAGE')
     b = from_sheet(obj, *to_sheet(obj, u1, v1, unit), 'IMAGE')
@@ -354,6 +357,10 @@ def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0):
     im = Image.fromarray(rgb[y0:y1, x0:x1])
     if scale != 1.0:
         im = im.resize((max(1, int(im.width * scale)), max(1, int(im.height * scale))), Image.LANCZOS)
+    if up is not None and (up[0] or up[1]):
+        # angle of up, clockwise from "up" on the screen; turning the image back by it puts it up
+        angle = math.degrees(math.atan2(up[0], -up[1]))
+        im = im.rotate(angle, expand=True, resample=Image.BICUBIC, fillcolor=(255, 255, 255))
     im.save(path)
     return path
 

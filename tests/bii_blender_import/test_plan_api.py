@@ -73,6 +73,17 @@ class PlanApiTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan_api.to_sheet(self.plan, 0, 0, 'MM')
 
+    def test_crop_image_turned(self):
+        path = os.path.join(self._dir.name, "crop.png")
+        plan_api.crop_image(self.plan, 100, 100, 300, 150, path)
+        w, h = Image.open(path).size
+        self.assertGreater(w, h)
+        # up = to the right on the plan: turned by 90 degrees, so the crop stands upright
+        plan_api.crop_image(self.plan, 100, 100, 300, 150, path, up=(1, 0))
+        self.assertEqual(Image.open(path).size, (h, w))
+        plan_api.crop_image(self.plan, 100, 100, 300, 150, path, up=(0, 1))   # upside down
+        self.assertEqual(Image.open(path).size, (w, h))
+
     def test_world(self):
         self.plan.location = (100.0, 50.0, 3.0)
         self.plan.rotation_euler.z = math.radians(30)

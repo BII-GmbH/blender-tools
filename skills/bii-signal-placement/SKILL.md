@@ -50,9 +50,18 @@ for i, g in enumerate(groups):
 
 Make a table with one row per group: what it is (signal, sign, label/km text, note, other equipment
 such as GSA/GSE track circuit marks), its plan label (e.g. 06N601) and km. A group can hold several
-symbols and their labels; split it then. **Every group gets a row.** Before placing, check the table
-against the plan once more ("list every red symbol in this crop") so nothing is missed:
-Vorsignalbaken (Ne3, plates with 1 to 5 diagonal stripes) and Lf 6/Lf 7 plates were missed before.
+symbols and their labels; split it then. **Every group gets a row**, also when you read the symbols
+from the PDF's vector drawing instead: counting masts or stems is not an inventory, because signs
+without a stem of their own are missed that way. Before placing, check the table against the plan
+once more ("list every red symbol in this crop") so nothing is missed.
+
+Signs that were missed or mistaken before:
+- **Vorsignalbake (Ne 3, `ne3`)**: a narrow plate, about 8 × 2 mm on paper, with 1 to 5 diagonal
+  stripes, held by a short support bar at one end; the km is printed beside it. Usually 2 or 3 of
+  them stand in a row about 75 m apart before a Vorsignal, the nearest one with 1 stripe. They are
+  not cable or duct marks.
+- **Schachbretttafel (Ne 4, `ne4`)**: a small square with a checkerboard (2 × 2 or more fields).
+- **Lf 6 / Lf 7 plates**: a triangle (Lf 6) or an upright rectangle (Lf 7) with a printed number.
 
 ## 3. Classify each signal
 
@@ -64,7 +73,10 @@ Compare the symbol crop with the key image of its group, attribute by attribute,
   two bars across the head, which is longer by them (Sh1; on a half filled or empty head two empty
   fields below the fill);
 - a stem with a foot bar, or no stem (Signalbrücke: `mast=False`); for Lf 6/Lf 7 and Zs3/Zs3v plates
-  the printed number (Kennziffer = km/h / 10).
+  the printed number (Kennziffer = km/h / 10). Symbols are drawn turned, so read numbers on a crop
+  turned upright: `plan_api.crop_image(plan, *box, path, pad=40, scale=3, up=(hu - fu, hv - fv))`
+  with foot (fu, fv) and head (hu, hv) in IMAGE pixels. On a crop that is not upright a 6 and a 9
+  look the same.
 
 Write down `bauform` and `config` with the values from the key, e.g.
 `("ks_mehr", {"bedienung": "stellwerk_zug", "zs3": "licht", "zs3v": "licht", "kopf": "ohne", "mast": False})`.
@@ -74,8 +86,10 @@ crop larger (`scale=3`) and ask again; when still unclear, list it as uncertain 
 ## 4. Foot point and head point
 
 The signal belongs at the **foot of its symbol**: the end of the stem, the short bar across it (the
-red dot in the key), never the middle of the symbol. Without a stem: the lower end of the symbol,
-or for a signal on a bridge the point on the bridge line. Measure the pixel position of
+red dot in the key), never the middle of the symbol or of its head. Without a mast of its own
+(`mast=False`, e.g. on a Signalbrücke) the symbol still has a leader line from the head towards
+the track or the bridge: the foot is the end of that leader. Only when there is no line at all: the
+lower end of the symbol. Measure the pixel position of
 the foot bar's center in the crop, then add the crop's offset (`box[0] - pad`, `box[1] - pad`, divided by
 `scale` first) to get IMAGE pixels of the plan.
 
