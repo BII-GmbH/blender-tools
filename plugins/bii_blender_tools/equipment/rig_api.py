@@ -202,10 +202,12 @@ def describe(root):
     """The rig as a dict: its parts as a tree with their joints, and its problems."""
     r = _root(root)
 
+    all_kids = rig_props.children_map()
+
     def node(o):
         d = describe_joint(o)
         d["type"] = o.type
-        kids = [c for c in sorted(o.children, key=lambda c: c.name) if rig_props.is_rig_object(c)]
+        kids = [c for c in all_kids.get(o, ()) if rig_props.is_rig_object(c)]
         if kids:
             d["children"] = [node(c) for c in kids]
         return d
@@ -370,7 +372,8 @@ def solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, a
     preview values (the equipment's state), and shows the result (apply=True).
 
     The target: matrix_world (4x4), or position_world (x, y, z) and rotation_world (Euler XYZ
-    degrees or a 3x3 matrix); what is not given stays as the part is now.
+    degrees or a 3x3 matrix). Without a rotation it solves for the position only, as the
+    capability's Position Only input: the part keeps its rotation, turned with the slewing.
     Returns the joint values (degrees / meters), the remaining errors, and the destination as
     dProB gets it (the capability's Destination input: position in meters, rotation x, y, z, w).
     """
@@ -388,7 +391,8 @@ def solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, a
                    else Euler([math.radians(v) for v in rotation_world]).to_matrix())
         target = Matrix.LocRotScale(loc, rot, None)
     dest = setup.destination(rig_export._np(target))
-    values, pos_err, rot_err = setup.solve(dest)
+    # no rotation given: as the capability's Position Only (the part keeps its rotation)
+    values, pos_err, rot_err = setup.solve(dest, position_only=matrix_world is None and rotation_world is None)
     preview_values = setup.preview_values(values)
     if apply:
         for ob, v in preview_values.items():

@@ -45,10 +45,11 @@ def rest_worlds(root):
         else:
             w = parent_world @ _np(o.matrix_parent_inverse) @ _np(rig_props.rest_basis(o))
         out[o] = w
-        for c in o.children:
+        for c in kids.get(o, ()):
             if rig_props.is_rig_object(c):
                 visit(c, w)
 
+    kids = rig_props.children_map()
     above = _np(root.parent.matrix_world) if root.parent is not None else np.eye(4)
     visit(root, above)
     return out
@@ -212,7 +213,46 @@ class Setup:
                     o.name, "FOLLOW", [(t.leader.name, t.factor) for t in j.drive_terms],
                     s.to_dprob(o, off)))
         self.objects = {o.name: o for o in all_joints}
+        self.aim = self._find_aim_joint(s)
         self.capture_state()
+
+    AIM_MIN_RADIUS = 0.5      # meters: an unlimited joint this close to the target only spins it
+
+    def _find_aim_joint(self, s):
+        """The top-most free unlimited revolute joint of the chain that swings the target round
+        (a slewing ring): the IK starts with it turned towards the target. Without that, a
+        target exactly behind it gives the solver no gradient to turn it at all."""
+        coupled = {c.key for c in self.couplings}
+        target = s.rest_pose(self.target)[:3, 3]
+        for o in self.chain_objs:
+            j = self.joints[o]
+            if j.kind != "REVOLUTE" or j.limits is not None or j.key in coupled:
+                continue
+            frame = s.rest_pose(o)
+            axis = frame[:3, :3] @ j.axis
+            d = target - frame[:3, 3]
+            if np.linalg.norm(d - axis * (d @ axis)) >= self.AIM_MIN_RADIUS:
+                return o
+        return None
+
+    def aim_seed(self, destination, start_values=None):
+        """{joint name: start value} turning the aim joint towards the destination, as the
+        generated graph computes it, or {}."""
+        if self.aim is None:
+            return {}
+        values = start_values or self.start_values
+        path = [o for o in self.above + self.chain_objs]
+        path = path[:path.index(self.aim) + 1]
+        _, ends = ik_solver.forward([self.joints[o] for o in path], [values[o.name] for o in path])
+        frame = ends[-1]
+        j = self.joints[self.aim]
+        current = self._pose_at(values)[:3, 3]
+        angle = ik_solver.aim_angle(frame[:3, 3], frame[:3, :3] @ j.axis, current, destination[:3, 3])
+        return {j.key: values[j.key] + angle}
+
+    def _pose_at(self, values):
+        _, ends = ik_solver.forward(self.chain, [values[j.key] for j in self.chain], self.base(values))
+        return ends[-1] if self.end_offset is None else ends[-1] @ self.end_offset
 
     def capture_state(self):
         """The joints' current preview values are the equipment's state when the IK starts."""
@@ -240,18 +280,32 @@ class Setup:
         _, ends = ik_solver.forward(self.chain, [values[j.key] for j in self.chain], self.base())
         return ends[-1] if self.end_offset is None else ends[-1] @ self.end_offset
 
-    def joint_destination(self, destination):
-        """Target frame of the end joint for a Destination, as the generated graph computes it:
-        rotation Destination * inverse(local pose); position the Destination's, with the part's
-        offset from its joint turned like the part is now (exact for a hook hanging below its
-        joint, also when the IK cannot or need not reach the Destination's rotation)."""
-        if self.end_offset is None:
-            return destination
-        inv = np.linalg.inv(self.end_offset)
+    def turned_rotation(self, destination, start_values=None):
+        """The target part's current rotation, turned with the aim joint towards the destination
+        (the rotation it will about have)."""
+        values = start_values or self.start_values
+        rot = self._pose_at(values)[:3, :3]
+        if self.aim is None:
+            return rot
+        angle = self.aim_seed(destination, values)[self.aim.name] - values[self.aim.name]
+        path = (self.above + self.chain_objs)[:(self.above + self.chain_objs).index(self.aim) + 1]
+        _, ends = ik_solver.forward([self.joints[o] for o in path], [values[o.name] for o in path])
+        axis = ends[-1][:3, :3] @ self.joints[self.aim].axis
+        return ik_solver.axis_angle(axis / np.linalg.norm(axis), angle) @ rot
+
+    def joint_destination(self, destination, position_only=False, start_values=None):
+        """Target frame of the end joint for a Destination, as the generated graph computes it.
+        Rotation: the Destination's (or with position_only the part's current rotation turned
+        with the aim joint), times inverse(local pose). Position: the Destination's, with the
+        part's offset from its joint turned like the part will be (exact for a hook hanging below
+        its joint, also when the IK cannot or need not reach the Destination's rotation)."""
         turned = np.eye(4)
         turned[:3, 3] = destination[:3, 3]
-        turned[:3, :3] = self.current_pose()[:3, :3]
-        target = destination @ inv
+        turned[:3, :3] = self.turned_rotation(destination, start_values)
+        if self.end_offset is None:
+            return turned if position_only else destination
+        inv = np.linalg.inv(self.end_offset)
+        target = (turned if position_only else destination) @ inv
         target[:3, 3] = (turned @ inv)[:3, 3]
         return target
 
@@ -259,14 +313,15 @@ class Setup:
         """Blender world matrix (rigid) of the target part at the current preview values."""
         return self.space.world(self.current_pose())
 
-    def solve(self, destination, start_values=None):
+    def solve(self, destination, start_values=None, position_only=False):
         """dProB values {joint name: value} for a dProB destination of the target part, as the
-        generated capability computes them; also the residual error."""
+        generated capability computes them (its Position Only input = position_only); also the
+        residual errors."""
         start = dict(start_values or self.start_values)
-        dest = self.joint_destination(destination)
+        dest = self.joint_destination(destination, position_only, start)
         values = ik_solver.solve_coupled(
             self.chain, dest, start, self.couplings, self.loops, self.iterations, self.weight,
-            self.base(start), self.seed_margin)
+            self.base(start), self.seed_margin, self.aim_seed(destination, start))
         pos_err, rot_err = ik_solver.residual(self.chain, dest, values, self.base(start))
         return values, pos_err, rot_err
 
@@ -313,6 +368,11 @@ class Setup:
             "orientation_weight": self.weight,
             "seed_margin": self.seed_margin,
             "seeds": [eid[by_name[k]] for k in self.seed_ranges()],
+            "end_path": [eid[o] for o in self.above + self.chain_objs],
+            "aim": None if self.aim is None else {
+                "joint": eid[self.aim],
+                "path": [eid[o] for o in (self.above + self.chain_objs)[:(self.above + self.chain_objs).index(self.aim) + 1]],
+            },
             "joints": {eid[o]: (o.name, o.bii_rig.joint_type) for o in self.joints},
             "chain": [eid[o] for o in self.chain_objs],
             "couplings": [(eid[by_name[c.key]], c.mode, [(eid[by_name[n]], f) for n, f in c.terms], c.offset)

@@ -278,16 +278,35 @@ def seed_values(chain, start_values, margin, skip=()):
     return seeds
 
 
+def aim_angle(axis_point, axis, point, target):
+    """Angle about the axis (through axis_point) that turns point towards target: the signed
+    angle between their offsets from the axis, projected on the plane normal to the axis (as
+    dProB's Signed Angle on Plane macro computes it)."""
+    n = np.asarray(axis, dtype=float)
+    n = n / np.linalg.norm(n)
+    a = np.asarray(point, dtype=float) - axis_point
+    b = np.asarray(target, dtype=float) - axis_point
+    a = a - n * (a @ n)
+    b = b - n * (b @ n)
+    la, lb = np.linalg.norm(a), np.linalg.norm(b)
+    if la < 1e-9 or lb < 1e-9:
+        return 0.0
+    a, b = a / la, b / lb
+    return math.atan2(float(np.cross(a, b) @ n), float(a @ b))
+
+
 def solve_coupled(chain, target, start_values, couplings=(), loops=10, iterations=100,
-                  orientation_weight=DEFAULT_ORIENTATION_WEIGHT, base=None, seed_margin=0.0):
+                  orientation_weight=DEFAULT_ORIENTATION_WEIGHT, base=None, seed_margin=0.0,
+                  extra_seeds=None):
     """What a generated IK capability computes: values (dict key -> value) for the chain and the
     followers. Without couplings one IK pass; with couplings `loops` passes, the followers set
     after each, the next pass starting from the result. The first pass starts from
-    seed_values(seed_margin).
+    seed_values(seed_margin) and extra_seeds (for example the aimed slewing).
 
     start_values: dict key -> value of every joint involved (the equipment's state).
     """
     values = seed_values(chain, start_values, seed_margin, {c.key for c in couplings})
+    values.update(extra_seeds or {})
     passes = loops if couplings else 1
     for _ in range(passes):
         initial = [values.get(j.key, start_values[j.key]) for j in chain]

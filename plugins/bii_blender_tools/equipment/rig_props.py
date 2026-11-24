@@ -65,21 +65,35 @@ def rig_root(obj):
     return None
 
 
-def rig_objects(root):
+def children_map():
+    """{object: [children sorted by name]} of all objects, in one pass.
+
+    Object.children scans every object of the file, so calling it for each part of a rig is
+    quadratic: with a few hundred parts, every preview change took seconds."""
+    kids = {}
+    for o in bpy.data.objects:
+        if o.parent is not None:
+            kids.setdefault(o.parent, []).append(o)
+    for v in kids.values():
+        v.sort(key=lambda c: c.name)
+    return kids
+
+
+def rig_objects(root, kids=None):
     """Root and its descendants that become elements, parents before children.
 
     A descendant of an object of another type (camera, light, armature) is left out with it.
+    kids: a children_map() to reuse.
     """
+    kids = children_map() if kids is None else kids
     out = []
-
-    def visit(o):
+    stack = [root]
+    while stack:
+        o = stack.pop()
         if not is_rig_object(o):
-            return
+            continue
         out.append(o)
-        for c in sorted(o.children, key=lambda c: c.name):
-            visit(c)
-
-    visit(root)
+        stack.extend(reversed(kids.get(o, ())))
     return out
 
 
@@ -88,8 +102,8 @@ def rig_roots(scene=None):
     return [o for o in objs if o.bii_rig.is_root]
 
 
-def joints(root):
-    return [o for o in rig_objects(root) if o.bii_rig.joint_type != "FIXED"]
+def joints(root, kids=None):
+    return [o for o in rig_objects(root, kids) if o.bii_rig.joint_type != "FIXED"]
 
 
 def ensure_ids(root):

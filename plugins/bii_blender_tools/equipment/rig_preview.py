@@ -43,11 +43,14 @@ def set_all(root, values):
 
 def reset(root):
     """Puts every joint of the rig back to its rest pose."""
+    # the raw values: setting the properties would update the followers once per part
     for o in rig_props.rig_objects(root):
         j = o.bii_rig
-        j.preview_angle = 0.0
-        j.preview_length = 0.0
-        j.preview_ball = (0.0, 0.0, 0.0)
+        for key in ("_preview_angle", "_preview_length"):
+            if j.get(key):
+                j[key] = 0.0
+        if tuple(j.preview_ball) != (0.0, 0.0, 0.0):
+            j["preview_ball"] = (0.0, 0.0, 0.0)
         rig_props.clear_preview(o)
 
 

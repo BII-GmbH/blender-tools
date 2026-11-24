@@ -43,10 +43,11 @@ def problems(root):
     out = []
     if root is None or not root.bii_rig.is_root:
         return [("ERROR", "no rig root")]
-    objs = rig_props.rig_objects(root)
+    kids = rig_props.children_map()
+    objs = rig_props.rig_objects(root, kids)
     for o in objs:
         j = o.bii_rig
-        for c in o.children:
+        for c in kids.get(o, ()):
             if not rig_props.is_rig_object(c):
                 out.append(("WARNING", f"{c.name} ({c.type.lower()}) under {o.name} is left out, with its children"))
         if j.joint_type == "FIXED":
@@ -65,7 +66,7 @@ def problems(root):
         if not j.preview_owned and not rig_props._deltas_clean(o):
             out.append(("WARNING", f"{o.name} has delta transforms; they are exported as part of its rest pose"))
         s = o.scale
-        if max(abs(s.x), abs(s.y), abs(s.z)) - min(abs(s.x), abs(s.y), abs(s.z)) > 1e-6 and o.children:
+        if max(abs(s.x), abs(s.y), abs(s.z)) - min(abs(s.x), abs(s.y), abs(s.z)) > 1e-6 and kids.get(o):
             out.append(("WARNING", f"{o.name} has non-uniform scale and children: apply its scale, "
                                    "else the children's joints may differ in dProB"))
     if not objs:

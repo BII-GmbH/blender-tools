@@ -233,7 +233,7 @@ class CapabilityTest(IkTestCase):
         sig, impl = caps[0]["Signature"], caps[0]["Implementation"]
         self.assertEqual([i["Name"].get("Text") or i["Name"].get("LocalizationKey") for i in sig["Inputs"]],
                          ["BII.ScriptableTemplates.Capabilities.SelfInput", "Destination", "Duration",
-                          "Iterations", "Orientation Weight", "Start Away from Limits", "Passes"])
+                          "Iterations", "Orientation Weight", "Start Away from Limits", "Position Only", "Passes"])
         defaults = {i["Name"].get("Text"): i["DefaultValue"] for i in sig["Inputs"]}
         self.assertAlmostEqual(defaults["Orientation Weight"]["Value"], 0.001, places=6)
         g = impl["GraphData"]
@@ -552,7 +552,10 @@ class CraneTypeTest(IkTestCase):
         for c in g["DataConnections"]:
             if c["ToNode"]["Guid"] == call["Id"]["Guid"]:
                 self.assertIn(c["InputSlotId"]["Guid"], cap_inputs)
-        self.assertEqual(len(g["FixedInputs"]), 4)       # the IK settings as in Blender
+        self.assertEqual(len(g["FixedInputs"]), 5)       # the IK settings, Position Only
+        fixed = {f["InputSlotId"]["Guid"]: f["Value"]["Value"] for f in g["FixedInputs"]}
+        names = {i["Id"]["Guid"]: i["Name"].get("Text") for i in cap["Signature"]["Inputs"]}
+        self.assertIs({names[k]: v for k, v in fixed.items()}["Position Only"], True)
         names = [v["Name"] for v in model["StateVariables"]]
         self.assertEqual(sorted(names), ["Current Cargo", "Current Cargo Hook Offset"])
         # again: nothing doubles
@@ -677,3 +680,57 @@ class InsertJointTest(IkTestCase):
         self.assertLess(abs(hook.matrix_world.to_3x3().normalized().to_euler().x), 1e-4)
         with self.assertRaises(RigError):
             rig.insert_joint("Other", root, [hook], (0, 0, 0))
+
+
+class LargeRigTest(IkTestCase):
+    def test_many_parts_stay_fast(self):
+        """Hundreds of parts: rig operations must not scan all objects per part. Regression: a
+        679-object crane took over 13 minutes to set up (Object.children in a recursion)."""
+        import time
+        root = truck_crane()
+        boom = bpy.data.objects["Boom"]
+        for i in range(800):                      # detail parts, many of them under the boom
+            e = bpy.data.objects.new(f"Detail{i:03d}", None)
+            bpy.context.scene.collection.objects.link(e)
+            e.parent = boom if i % 2 else root
+        bpy.context.view_layer.update()
+        t = time.perf_counter()
+        name = rig.insert_joint("Level2", "Tele", ["Reversal"], (0, -6, 3), axes_from=root)
+        rig.set_joint(name, "REVOLUTE", axis="X", limits=(-10, 10))
+        for v in range(0, 60, 5):
+            rig.set_preview("Boom", v)
+        rig.reset_preview(root)
+        rig.describe(root)
+        rig.problems(root)
+        ik_chain.Setup("HookPoint")
+        self.assertLess(time.perf_counter() - t, 10.0)
+
+
+class AimTest(IkTestCase):
+    def test_target_behind_the_slewing(self):
+        """A target exactly behind the boom: the slewing gets no gradient from the solver, so the
+        IK starts with it turned towards the target (graph and preview alike). Regression: the
+        boom only luffed up and the hook stayed far off."""
+        root = truck_crane()
+        rig.set_ik_target("HookPoint", orientation_weight=0.001)
+        setup = ik_chain.Setup("HookPoint")
+        self.assertEqual(setup.aim.name, "Cab")
+        cur = setup.current_pose()
+        behind = cur.copy()
+        behind[:3, 3] = (cur[0, 3], cur[1, 3] + 1.0, -0.8 * cur[2, 3])  # behind the slewing axis, a bit closer
+        values, pos_err, _ = setup.solve(behind, position_only=True)
+        self.assertLess(pos_err, 0.001)
+        self.assertAlmostEqual(abs(math.degrees(values["Cab"])), 180, delta=1)
+        rig.export(root, self.path)
+        model = dequip_format.read(self.path).model
+        cap = model["CustomCapabilities"][0]
+        ids = {e["Name"]: e["Id"] for e in dequip_format.walk(model["HierarchyRoots"])}
+        state = {k: 0.0 for k in ik_solver.rig_from_model(model["HierarchyRoots"])[0]}
+        moves = ik_capability.simulate(cap, model, behind, state, inputs={"Position Only": True})
+        # exactly behind, +180 and -180 degrees are the same turn
+        wrap = lambda a: (a + math.pi) % (2 * math.pi) - math.pi
+        self.assertAlmostEqual(abs(wrap(moves[ids["Cab"]] - float(values["Cab"]))), 0, places=4)
+        for name in ("Boom", "Tele", "Hook"):
+            self.assertAlmostEqual(moves[ids[name]], float(values[name]), places=4, msg=name)
+        macros = [n.get("MacroId") for n in cap["Implementation"]["GraphData"]["Nodes"]]
+        self.assertIn(ik_capability.SIGNED_ANGLE_MACRO, macros)

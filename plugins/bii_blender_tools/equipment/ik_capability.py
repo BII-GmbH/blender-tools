@@ -61,6 +61,14 @@ LERP_TO = "15cd53df-2be8-5fd3-b7ef-e72d5cabea77"
 LERP_T = "e48a7f06-9b91-554e-b2d1-9b3b5c8107c1"
 MACRO_RESULT = "95b7396c-8fca-55f4-8347-f0ec331ef218"
 FOR_EACH_DICT_MACRO = "0a54f069-b33e-481a-9d03-cbb12d1fdf10"
+EFFECTIVE_POSE_MACRO = "08c4429e-dad4-4e98-ae24-75c234ffbc3d"     # Get Current Effective Joint Pose
+EFFECTIVE_POSE_JOINT = "fbb47952-bf57-485c-a325-f39d74d72214"
+EFFECTIVE_POSE_RESULT = "16ac8965-3220-4834-9aca-1051452f0217"
+SIGNED_ANGLE_MACRO = "6c4ce629-93d1-4e7d-bdbd-f7c919ff7fe0"       # Signed Angle on Plane
+SIGNED_ANGLE_A = "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+SIGNED_ANGLE_B = "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+SIGNED_ANGLE_AXIS = "64dc8b12-48b0-5e4f-a41d-c9b4f2e08352"
+SIGNED_ANGLE_RESULT = "6bd1ba06-afbc-52d7-86f1-b62c08f2be6f"
 FOR_EACH_DICT = "bf161b15-63dc-5ca9-918a-fc601c76b43c"
 FOR_EACH_KEY = "43ec82d8-c84d-510f-8e59-5e8b7f57a5de"
 FOR_EACH_VALUE = "3af21c62-deb4-4956-98f7-580eb3bb1a9e"
@@ -308,6 +316,9 @@ def build_graph(spec):
       joints: {element id: (name, kind)} of every joint involved
       chain: [element id] of the IK chain (root first)
       seeds: [element id] of the chain joints that start away from their limits
+      aim: None or {"joint": element id, "path": [element ids from the top to it]}: an unlimited
+        joint (slewing) that starts turned so the target part points at the Destination
+      end_path: [element id] of the joints from the top down to the end joint
       couplings: [(element id, "HOLD"|"FOLLOW", [(leader element id, factor)], offset SI)]
       moved: [element id] of the joints to move (chain without Hold, and Follow joints)
     """
@@ -322,7 +333,8 @@ def build_graph(spec):
     # ---- signature
     ins = {"Destination": g.id("input Destination"), "Duration": g.id("input Duration"),
            "Iterations": g.id("input Iterations"), "Orientation Weight": g.id("input Orientation Weight"),
-           "Start Away from Limits": g.id("input Start Away from Limits"), "Passes": g.id("input Passes")}
+           "Start Away from Limits": g.id("input Start Away from Limits"), "Passes": g.id("input Passes"),
+           "Position Only": g.id("input Position Only")}
     inputs = [
         _input_port(port("Self"), SELF_NAME_KEY, atomic("Subject"), SELF_DESCRIPTION_KEY, localized=True),
         _input_port(ins["Destination"], "Destination", atomic("LocalPose"),
@@ -338,6 +350,9 @@ def build_graph(spec):
         inputs.append(_input_port(ins["Start Away from Limits"], "Start Away from Limits", atomic("Double"),
                                   "The IK starts with the limited joints at least this share of their range "
                                   "inside their limits", default={"Value": float(spec["seed_margin"]), "$case": "Double"}))
+    inputs.append(_input_port(ins["Position Only"], "Position Only", atomic("Boolean"),
+                              "Ignore the Destination's rotation: the part keeps its rotation, turned "
+                              "with the slewing towards the Destination", default={"Value": False, "$case": "Bool"}))
     if coupled:
         inputs.append(_input_port(ins["Passes"], "Passes", atomic("Int"),
                                   "IK passes; the following and held joints are set after each",
@@ -370,9 +385,116 @@ def build_graph(spec):
         g.then(src or exec_chain[-1], node, slot)
         exec_chain.append(node)
 
+    # ---- start value of the aim joint (slewing): turned so the target part points at the target
+    def frame_of(path, name):
+        """Current pose of the last joint of path in the equipment (product of the joints'
+        current effective poses, top first)."""
+        pose = None
+        for eid in path:
+            ep = g.macro(EFFECTIVE_POSE_MACRO, "Get Current Effective Joint Pose", [EFFECTIVE_POSE_JOINT],
+                         EFFECTIVE_POSE_RESULT, atomic("LocalPose"))
+            g.nodes[ep].json["ResolvedInputTypes"] = []
+            g.nodes[ep].json["ResolvedOutputTypes"] = []
+            g.nodes[ep].style = "node"
+            g.link(*g.joint(eid, joints[eid][0]), ep, EFFECTIVE_POSE_JOINT)
+            if pose is None:
+                pose = (ep, EFFECTIVE_POSE_RESULT)
+            else:
+                lpt = atomic("LocalPose")
+                m = g.binary("MulNode", "Multiply", lpt, lpt, lpt)
+                g.link(*pose, m, port("A"))
+                g.link(ep, EFFECTIVE_POSE_RESULT, m, port("B"))
+                pose = (m, port("Result"))
+        return pose
+
+    def unpack_local(src, name):
+        n = g.add(g.unique(name), {"TPos": atomic("LocalPosition"), "TRot": atomic("LocalRotation"),
+                                   "TDir": atomic("LocalDirection"), "TPose": atomic("LocalPose"),
+                                   "$case": "UnpackPoseNode"}, "Unpack Pose", ins=[port("Pose")],
+                  outs=[port("Position"), port("Rotation"), port("Forward")], style="collapsed")
+        g.link(*src, n, port("Pose"))
+        return n
+
+    memo = {}
+
+    def local_pose_of_target():
+        lp = g.add(g.unique("local pose"), {"$case": "AttachmentPointGetLocalPoseNode"}, "Get Local Pose",
+                   ins=[port("Attachment Point")], outs=[port("Pose"), port("Joint")])
+        g.link(*g.attachment_point(*spec["target"]), lp, port("Attachment Point"))
+        return lp, port("Pose")
+
+    def current_part():
+        """Unpacked current pose of the target part in the equipment: the joints' current
+        effective poses from the top down to the end joint (times the attachment point's local
+        pose)."""
+        if "part" not in memo:
+            end = frame_of(spec["end_path"], spec["end"][1])
+            if spec["attachment_point"]:
+                lpt = atomic("LocalPose")
+                m = g.binary("MulNode", "Multiply", lpt, lpt, lpt)
+                g.link(*end, m, port("A"))
+                g.link(*local_pose_of_target(), m, port("B"))
+                end = (m, port("Result"))
+            memo["part"] = unpack_local(end, "unpack part")
+        return memo["part"]
+
+    def aim_parts():
+        """(angle, axis) outputs: the signed angle about the aim joint's axis from the target
+        part's current position to the Destination, and that axis in the equipment."""
+        if "aim" not in memo:
+            aim = spec["aim"]
+            eid = aim["joint"]
+            name = joints[eid][0]
+            lpos, loff, ldir = atomic("LocalPosition"), atomic("LocalOffset"), atomic("LocalDirection")
+            joint_frame = unpack_local(frame_of(aim["path"], name), "unpack aim joint")
+            dest = unpack_local(g.input(ins["Destination"], "Destination"), "unpack aim destination")
+            cons = g.add(g.unique(f"aim axis {eid}"), {"$case": CONSTRAINTS["REVOLUTE"][0]},
+                         CONSTRAINTS["REVOLUTE"][1], ins=[port("Joint")],
+                         outs=[port(o) for o in CONSTRAINTS["REVOLUTE"][2]])
+            g.link(*g.joint(eid, name), cons, port("Joint"))
+            axis = g.binary("MulNode", "Multiply", atomic("LocalRotation"), ldir, ldir)
+            g.link(joint_frame, port("Rotation"), axis, port("A"))
+            g.link(cons, port("Axis"), axis, port("B"))
+            offsets = []
+            for src in (current_part(), dest):
+                sub = g.binary("SubtractNode", "Subtract", lpos, lpos, loff, out="Difference")
+                g.link(src, port("Position"), sub, port("A"))
+                g.link(joint_frame, port("Position"), sub, port("B"))
+                offsets.append(sub)
+            angle = g.add(g.unique("signed angle"), {
+                "MacroId": SIGNED_ANGLE_MACRO, "Name": "Signed Angle on Plane",
+                "ResolvedInputTypes": [{"InputId": {"Guid": SIGNED_ANGLE_A}, "Type": loff},
+                                       {"InputId": {"Guid": SIGNED_ANGLE_B}, "Type": loff},
+                                       {"InputId": {"Guid": SIGNED_ANGLE_AXIS}, "Type": ldir}],
+                "ResolvedOutputTypes": [{"OutputId": {"Guid": SIGNED_ANGLE_RESULT}, "Type": atomic("Angle")}],
+                "$case": "GlobalMacro"}, "Signed Angle on Plane",
+                ins=[SIGNED_ANGLE_A, SIGNED_ANGLE_B, SIGNED_ANGLE_AXIS], outs=[SIGNED_ANGLE_RESULT],
+                style="collapsed", atomic_node=False)
+            g.link(offsets[0], port("Difference"), angle, SIGNED_ANGLE_A)
+            g.link(offsets[1], port("Difference"), angle, SIGNED_ANGLE_B)
+            g.link(axis, port("Result"), angle, SIGNED_ANGLE_AXIS)
+            memo["aim"] = ((angle, SIGNED_ANGLE_RESULT), (axis, port("Result")))
+        return memo["aim"]
+
+    def aim_entry(d):
+        """Adds the aim joint to the revolute start values d: its current angle plus the aim
+        angle."""
+        eid = spec["aim"]["joint"]
+        name = joints[eid][0]
+        angle, _ = aim_parts()
+        vt = atomic("Angle")
+        add = g.binary("AddNode", "Add", vt, vt, vt, out="Sum")
+        g.link(*g.read_current(eid, name, "REVOLUTE"), add, port("A"))
+        g.link(*angle, add, port("B"))
+        s_ = g.set_entry("REVOLUTE")
+        g.link(*(d or g.empty_dict("REVOLUTE")), s_, port("Dictionary"))
+        g.link(*g.joint(eid, name), s_, port("Key"))
+        g.link(add, port("Sum"), s_, port("Value"))
+        return s_, port("Result")
+
     # ---- start values: limited joints away from their limits
     seed = {}
-    if seeded:
+    if seeded or spec.get("aim"):
         g.section = "Start away from limits"
         for kind in ("REVOLUTE", "PRISMATIC"):
             d = None
@@ -403,6 +525,10 @@ def build_graph(spec):
                 g.link(*g.joint(eid, name), s, port("Key"))
                 g.link(clamp, MACRO_RESULT, s, port("Value"))
                 d = (s, port("Result"))
+            if kind == "REVOLUTE" and spec.get("aim"):
+                g.section = "Turn towards the target"
+                d = aim_entry(d)
+                g.section = "Start away from limits"
             if d is not None:
                 seed[kind] = d
         g.section = None
@@ -411,23 +537,16 @@ def build_graph(spec):
         """The end joint's target pose for the Destination of the target part.
 
         The Destination is the part's frame in the equipment, as dProB's attachment point poses
-        are (Lift and Deliver pass such poses). Its rotation gives the joint's rotation:
-        Destination * inverse(local pose). Its position gives the joint's position, but the
-        part's offset from its joint is turned with the part's current rotation, not the
-        Destination's: the IK may not reach that rotation (orientation weight 0, or a Destination
-        rotation the rig cannot take, like identity from a gizmo), and a turned offset would move
-        the part away from the position. For a crane hook hanging below its joint this is exact."""
-        if not spec["attachment_point"]:
-            return g.input(ins["Destination"], "Destination")
-        lpt, rot, lpos = atomic("LocalPose"), atomic("LocalRotation"), atomic("LocalPosition")
-        unpack_types = {"TPos": lpos, "TRot": rot, "TDir": atomic("LocalDirection"), "TPose": lpt}
+        are (Lift and Deliver pass such poses). With Position Only the target rotation is the
+        part's current rotation, turned with the aim joint (slewing) towards the Destination, so
+        a rotation the rig can reach; else the Destination's.
 
-        def unpack(src, name):
-            n = g.add(g.unique(name), {**unpack_types, "$case": "UnpackPoseNode"}, "Unpack Pose",
-                      ins=[port("Pose")], outs=[port("Position"), port("Rotation"), port("Forward")],
-                      style="collapsed")
-            g.link(*src, n, port("Pose"))
-            return n
+        The joint's position: the Destination's, minus the part's offset from its joint turned
+        like the part will be (current rotation turned with the aim joint), not like the
+        Destination: the IK may not reach the Destination's rotation, and an offset turned with it
+        would move the part away from the position. For a hook hanging below its joint this is
+        exact."""
+        lpt, rot, lpos = atomic("LocalPose"), atomic("LocalRotation"), atomic("LocalPosition")
 
         def pack(position, rotation, name):
             n = g.add(g.unique(name), {"TPos": lpos, "TRot": rot, "TPose": lpt, "$case": "PackPoseNode"},
@@ -442,32 +561,38 @@ def build_graph(spec):
             g.link(*b_, n, port("B"))
             return n, port("Result")
 
-        # the part's current pose in the equipment
-        gp = g.add(g.unique("point global pose"), {"$case": "AttachmentPointGetGlobalPoseNode"},
-                   "Get Current Global Pose", ins=[port("Attachment Point"), port("Time")], outs=[port("Pose")])
-        g.link(*g.attachment_point(*spec["target"]), gp, port("Attachment Point"))
-        cp = g.add(g.unique("self pose"), {"$case": "ReadCurrentPoseNode"}, "Read Current Pose",
-                   ins=[port("Subject"), port("Time")], outs=[port("Pose"), port("Position")])
-        g.link(*g.input(port("Self"), "Self"), cp, port("Subject"))
-        rel = g.add(g.unique("relative"), {"TGlobal": atomic("GlobalPose"), "TLocal": lpt, "$case": "RelativeToNode"},
-                    "Relative To", ins=[port("Global"), port("Reference")], outs=[port("Local")])
-        g.link(gp, port("Pose"), rel, port("Global"))
-        g.link(cp, port("Pose"), rel, port("Reference"))
-        current = unpack((rel, port("Local")), "unpack current")
-        # inverse of the part's local pose on its joint
-        lp = g.add(g.unique("local pose"), {"$case": "AttachmentPointGetLocalPoseNode"}, "Get Local Pose",
-                   ins=[port("Attachment Point")], outs=[port("Pose"), port("Joint")])
-        g.link(*g.attachment_point(*spec["target"]), lp, port("Attachment Point"))
+        def branch(if_true, if_false):
+            n = g.add(g.unique("position only"), {"T": rot, "$case": "DeferredBranchNode"}, "Branch",
+                      ins=[port("Pick A"), port("A"), port("B")], outs=[port("Result")], style="collapsed")
+            g.link(*g.input(ins["Position Only"], "Position Only"), n, port("Pick A"))
+            g.link(*if_true, n, port("A"))
+            g.link(*if_false, n, port("B"))
+            return n, port("Result")
+
+        dest_pose = g.input(ins["Destination"], "Destination")
+        dest = unpack_local(dest_pose, "unpack destination")
+        turned = (current_part(), port("Rotation"))
+        if spec.get("aim"):
+            angle, axis = aim_parts()
+            r = g.add(g.unique("aim rotation"), {"TRot": rot, "TDir": atomic("LocalDirection"),
+                                                 "$case": "PackRotationAngleAxisNode"}, "Pack Rotation (Angle, Axis)",
+                      ins=[port("Angle"), port("Axis")], outs=[port("Rotation")], style="collapsed")
+            g.link(*angle, r, port("Angle"))
+            g.link(*axis, r, port("Axis"))
+            m = g.binary("MulNode", "Multiply", rot, rot, rot)
+            g.link(r, port("Rotation"), m, port("A"))
+            g.link(*turned, m, port("B"))
+            turned = (m, port("Result"))
+        if not spec["attachment_point"]:
+            return pack((dest, port("Position")), branch(turned, (dest, port("Rotation"))), "pack joint target")
         inv = g.add(g.unique("invert"), {"T": lpt, "$case": "InvertNode"}, "Invert",
                     ins=[port("Input")], outs=[port("Result")], style="collapsed")
-        g.link(lp, port("Pose"), inv, port("Input"))
-        # position: Destination's position, offset turned like the part is now
-        dest = unpack(g.input(ins["Destination"], "Destination"), "unpack destination")
-        where = unpack(mul(pack((dest, port("Position")), (current, port("Rotation")), "pack offset"),
-                           (inv, port("Result"))), "unpack joint position")
-        # rotation: Destination * inverse(local pose)
-        turn = unpack(mul(g.input(ins["Destination"], "Destination"), (inv, port("Result"))), "unpack joint rotation")
-        return pack((where, port("Position")), (turn, port("Rotation")), "pack joint target")
+        g.link(*local_pose_of_target(), inv, port("Input"))
+        where = unpack_local(mul(pack((dest, port("Position")), turned, "pack offset"), (inv, port("Result"))),
+                             "unpack joint position")
+        given = unpack_local(mul(dest_pose, (inv, port("Result"))), "unpack joint rotation")
+        rotation = branch((where, port("Rotation")), (given, port("Rotation")))
+        return pack((where, port("Position")), rotation, "pack joint target")
 
     def ik_node():
         n = g.add("ik", {"$case": "InverseKinematicsNode"}, "Inverse Kinematics",
@@ -922,11 +1047,23 @@ class _Run:
         if case == "RelativeToNode":
             return np.linalg.inv(inp(node_id, "Reference")) @ inp(node_id, "Global")
         if case in ("GetRevoluteJointConstraintsNode", "GetPrismaticJointConstraintsNode"):
-            lim = sim.joints[inp(node_id, "Joint")].limits
+            joint = sim.joints[inp(node_id, "Joint")]
+            lim = joint.limits
             names = {port("Min Angle"): 0, port("Max Angle"): 1, port("Min Offset"): 0, port("Max Offset"): 1}
+            if out_port == port("Axis"):
+                return joint.axis
             if out_port == port("Has Limits"):
                 return lim is not None
             return None if lim is None else lim[names[out_port]]
+        if case == "PackRotationAngleAxisNode":
+            axis = np.asarray(inp(node_id, "Axis"), dtype=float)
+            return ik_solver.axis_angle(axis / np.linalg.norm(axis), inp(node_id, "Angle"))
+        if case == "GlobalMacro" and n["MacroId"] == EFFECTIVE_POSE_MACRO:
+            j = inp(node_id, EFFECTIVE_POSE_JOINT)
+            return sim.joints[j].initial_pose @ ik_solver.offset(sim.joints[j], sim.state[j])
+        if case == "GlobalMacro" and n["MacroId"] == SIGNED_ANGLE_MACRO:
+            return ik_solver.aim_angle(np.zeros(3), inp(node_id, SIGNED_ANGLE_AXIS),
+                                       inp(node_id, SIGNED_ANGLE_A), inp(node_id, SIGNED_ANGLE_B))
         if case == "GlobalMacro" and n["MacroId"] == CLAMP_MACRO:
             return min(max(inp(node_id, CLAMP_VALUE), inp(node_id, CLAMP_MIN)), inp(node_id, CLAMP_MAX))
         if case == "GlobalMacro" and n["MacroId"] == LERP_MACRO:
