@@ -682,6 +682,7 @@ def _terrain_objects(context):
 def _plan_samples(context, projection, zone):
     """Punkte (UTM) auf jedem flachen Lageplan der Szene (BII Import), einer Liste je Plan:
     Ecken und ein Raster über die sichtbare Fläche."""
+    from mathutils import Vector
     out = []
     for obj in context.scene.objects:
         pg = getattr(obj, "bii_plan", None)
