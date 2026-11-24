@@ -1,0 +1,1025 @@
+{
+ "Id": {
+  "Guid": "15f9ce8a-831e-42a1-b588-36336804154d"
+ },
+ "Name": "Rotate Joint",
+ "Inputs": [
+  {
+   "Id": {
+    "Guid": "38c9945b-208f-4c2a-baa6-9b81e9951854"
+   },
+   "Name": {
+    "Text": "Joint",
+    "$case": "Plain"
+   },
+   "Type": {
+    "Type": "RigJoint",
+    "$case": "Atomic"
+   },
+   "DefaultValue": null,
+   "Description": null,
+   "IsOptional": false
+  },
+  {
+   "Id": {
+    "Guid": "7e6f808f-6057-4d44-aa4e-a1bf51d876ed"
+   },
+   "Name": {
+    "Text": "Target Angle",
+    "$case": "Plain"
+   },
+   "Type": {
+    "Type": "Angle",
+    "$case": "Atomic"
+   },
+   "DefaultValue": null,
+   "Description": null,
+   "IsOptional": false
+  },
+  {
+   "Id": {
+    "Guid": "f8f66365-f020-4cd1-8b66-d5b5a0283b1e"
+   },
+   "Name": {
+    "Text": "Duration",
+    "$case": "Plain"
+   },
+   "Type": {
+    "Type": "Duration",
+    "$case": "Atomic"
+   },
+   "DefaultValue": null,
+   "Description": null,
+   "IsOptional": false
+  }
+ ],
+ "EndNodeIds": [
+  {
+   "Guid": "f7cbb9d6-9769-43f6-9408-53b2823486f2"
+  }
+ ],
+ "GraphData": {
+  "Outputs": [
+   {
+    "Id": {
+     "Guid": "eacaef72-6d6e-416e-87b6-5154b60882d0"
+    },
+    "Name": {
+     "Text": "Process",
+     "$case": "Plain"
+    },
+    "Type": {
+     "Type": "Process",
+     "$case": "Atomic"
+    },
+    "Description": null,
+    "IsOptional": false
+   }
+  ],
+  "LocalVariables": [],
+  "Nodes": [
+   {
+    "Node": {
+     "Id": {
+      "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+     },
+     "$case": "MoveRevoluteJointNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "SubtractNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "1ca41d43-ec56-4489-8be1-252e040629b5"
+     },
+     "$case": "OrNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "InputSlotId": {
+     "Guid": "7e6f808f-6057-4d44-aa4e-a1bf51d876ed"
+    },
+    "DisplayName": "Target Angle",
+    "Id": {
+     "Guid": "76bd48a6-263b-4ba4-95a6-3a1a2d92e5e4"
+    },
+    "FromOuterContext": false,
+    "IsOptional": false,
+    "$case": "InputGetter"
+   },
+   {
+    "Exec": false,
+    "Id": {
+     "Guid": "58d2b89a-a42e-4340-84e6-71bafb43fe6d"
+    },
+    "$case": "Reroute"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "c4e69b9f-af4b-48e3-baaf-4fa0c6eec6f6"
+     },
+     "T": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "AbsNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "957e550a-db3c-4cfc-93bb-c9d9e008e5e5"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "AddNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "b23b0ce1-ba86-448b-9aea-9678326c1967"
+     },
+     "$case": "ReadCurrentRevoluteJointStateNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "911a3359-6107-4641-8de8-3753ddce126b"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "ModuloNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "InputSlotId": {
+     "Guid": "38c9945b-208f-4c2a-baa6-9b81e9951854"
+    },
+    "DisplayName": "Joint",
+    "Id": {
+     "Guid": "933367c2-1250-4f6f-988c-e989c92bbaa3"
+    },
+    "FromOuterContext": false,
+    "IsOptional": false,
+    "$case": "InputGetter"
+   },
+   {
+    "InputSlotId": {
+     "Guid": "7e6f808f-6057-4d44-aa4e-a1bf51d876ed"
+    },
+    "DisplayName": "Target Angle",
+    "Id": {
+     "Guid": "6e1caa4a-11b8-45a0-ad09-7252100f6a7e"
+    },
+    "FromOuterContext": false,
+    "IsOptional": false,
+    "$case": "InputGetter"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "2c2fc290-5083-4f37-be0a-4673dd1fec17"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "ModuloNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "0e29dd3c-f27a-42ca-86e6-fbb5dc998af4"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "CompareNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "af98a0f8-28a9-4b31-903a-730bca8532c9"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "SubtractNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "5c28cee7-53c5-4e03-923a-56e21ef87eda"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "AddNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "InputSlotId": {
+     "Guid": "38c9945b-208f-4c2a-baa6-9b81e9951854"
+    },
+    "DisplayName": "Joint",
+    "Id": {
+     "Guid": "3f26fc38-74b7-4bfd-85e9-74a23d9d62ea"
+    },
+    "FromOuterContext": false,
+    "IsOptional": false,
+    "$case": "InputGetter"
+   },
+   {
+    "InputSlotId": {
+     "Guid": "f8f66365-f020-4cd1-8b66-d5b5a0283b1e"
+    },
+    "DisplayName": "Duration",
+    "Id": {
+     "Guid": "8f32254a-a7cd-4f36-b001-a728db600ebf"
+    },
+    "FromOuterContext": false,
+    "IsOptional": false,
+    "$case": "InputGetter"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+     },
+     "T": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "DeferredBranchNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "e9561810-5184-437e-939a-aa2442304be6"
+     },
+     "$case": "GetRevoluteJointConstraintsNode"
+    },
+    "$case": "AtomicNode"
+   },
+   {
+    "Node": {
+     "Id": {
+      "Guid": "ba0f4acc-1f6b-4201-bb41-805952213fd4"
+     },
+     "TA": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TB": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "TRes": {
+      "Type": "Angle",
+      "$case": "Atomic"
+     },
+     "$case": "AddNode"
+    },
+    "$case": "AtomicNode"
+   }
+  ],
+  "Frames": [
+   {
+    "Frame": {
+     "Guid": "e343d32d-568f-4e87-93bb-94ca82624100"
+    },
+    "Name": "Normalize Angle diff between [-180°.. 180°) so the joint takes the shortest path (if it is unlimited)",
+    "Xpos": 320.0,
+    "Ypos": 96.0,
+    "Width": 1472.0,
+    "Height": 576.0,
+    "ColorR": 0.627451,
+    "ColorG": 0.627451,
+    "ColorB": 0.627451,
+    "ColorA": 1.0
+   }
+  ],
+  "FirstNodeId": {
+   "Guid": "250118e6-7693-4395-b8ee-0b8471fe5023"
+  },
+  "ExecutionConnections": [
+   {
+    "FromNode": {
+     "Guid": "250118e6-7693-4395-b8ee-0b8471fe5023"
+    },
+    "SuccessionSlotId": {
+     "Guid": "5eb27483-0a85-5a62-ba0e-e76f73ffc300"
+    },
+    "ToNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "SuccessionSlotId": {
+     "Guid": "5eb27483-0a85-5a62-ba0e-e76f73ffc300"
+    },
+    "ToNode": {
+     "Guid": "f7cbb9d6-9769-43f6-9408-53b2823486f2"
+    }
+   }
+  ],
+  "DataConnections": [
+   {
+    "FromNode": {
+     "Guid": "b23b0ce1-ba86-448b-9aea-9678326c1967"
+    },
+    "OutputSlotId": {
+     "Guid": "6bd1ba06-afbc-52d7-86f1-b62c08f2be6f"
+    },
+    "ToNode": {
+     "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+    },
+    "OutputSlotId": {
+     "Guid": "98fbc9f0-6589-54cf-970c-9cd0f5b3d2e1"
+    },
+    "ToNode": {
+     "Guid": "c4e69b9f-af4b-48e3-baaf-4fa0c6eec6f6"
+    },
+    "InputSlotId": {
+     "Guid": "c31a93b4-ea56-5761-b941-8202edf7c3ff"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "c4e69b9f-af4b-48e3-baaf-4fa0c6eec6f6"
+    },
+    "OutputSlotId": {
+     "Guid": "383f9e33-9903-5871-ad03-207c041783ab"
+    },
+    "ToNode": {
+     "Guid": "0e29dd3c-f27a-42ca-86e6-fbb5dc998af4"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "0e29dd3c-f27a-42ca-86e6-fbb5dc998af4"
+    },
+    "OutputSlotId": {
+     "Guid": "b6ab7f32-4d51-58c5-96c9-46756e5b255c"
+    },
+    "ToNode": {
+     "Guid": "1ca41d43-ec56-4489-8be1-252e040629b5"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "1ca41d43-ec56-4489-8be1-252e040629b5"
+    },
+    "OutputSlotId": {
+     "Guid": "95b7396c-8fca-55f4-8347-f0ec331ef218"
+    },
+    "ToNode": {
+     "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+    },
+    "InputSlotId": {
+     "Guid": "c06dd2a2-d557-584c-8433-5d57c81a8bfb"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+    },
+    "OutputSlotId": {
+     "Guid": "98fbc9f0-6589-54cf-970c-9cd0f5b3d2e1"
+    },
+    "ToNode": {
+     "Guid": "5c28cee7-53c5-4e03-923a-56e21ef87eda"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "5c28cee7-53c5-4e03-923a-56e21ef87eda"
+    },
+    "OutputSlotId": {
+     "Guid": "aa1ef708-1cdb-55a1-a844-aff683807449"
+    },
+    "ToNode": {
+     "Guid": "911a3359-6107-4641-8de8-3753ddce126b"
+    },
+    "InputSlotId": {
+     "Guid": "d2964e4d-5ac2-5a7e-bf55-9f9a9ccda001"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "911a3359-6107-4641-8de8-3753ddce126b"
+    },
+    "OutputSlotId": {
+     "Guid": "3bb55332-ae64-509c-8535-82d913fb9a49"
+    },
+    "ToNode": {
+     "Guid": "957e550a-db3c-4cfc-93bb-c9d9e008e5e5"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "957e550a-db3c-4cfc-93bb-c9d9e008e5e5"
+    },
+    "OutputSlotId": {
+     "Guid": "aa1ef708-1cdb-55a1-a844-aff683807449"
+    },
+    "ToNode": {
+     "Guid": "2c2fc290-5083-4f37-be0a-4673dd1fec17"
+    },
+    "InputSlotId": {
+     "Guid": "d2964e4d-5ac2-5a7e-bf55-9f9a9ccda001"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "2c2fc290-5083-4f37-be0a-4673dd1fec17"
+    },
+    "OutputSlotId": {
+     "Guid": "3bb55332-ae64-509c-8535-82d913fb9a49"
+    },
+    "ToNode": {
+     "Guid": "af98a0f8-28a9-4b31-903a-730bca8532c9"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "e9561810-5184-437e-939a-aa2442304be6"
+    },
+    "OutputSlotId": {
+     "Guid": "10daaeee-0c72-580a-a6f0-f5fb78e00de2"
+    },
+    "ToNode": {
+     "Guid": "58d2b89a-a42e-4340-84e6-71bafb43fe6d"
+    },
+    "InputSlotId": {
+     "Guid": "c31a93b4-ea56-5761-b941-8202edf7c3ff"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "58d2b89a-a42e-4340-84e6-71bafb43fe6d"
+    },
+    "OutputSlotId": {
+     "Guid": "383f9e33-9903-5871-ad03-207c041783ab"
+    },
+    "ToNode": {
+     "Guid": "1ca41d43-ec56-4489-8be1-252e040629b5"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "af98a0f8-28a9-4b31-903a-730bca8532c9"
+    },
+    "OutputSlotId": {
+     "Guid": "98fbc9f0-6589-54cf-970c-9cd0f5b3d2e1"
+    },
+    "ToNode": {
+     "Guid": "ba0f4acc-1f6b-4201-bb41-805952213fd4"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "ba0f4acc-1f6b-4201-bb41-805952213fd4"
+    },
+    "OutputSlotId": {
+     "Guid": "aa1ef708-1cdb-55a1-a844-aff683807449"
+    },
+    "ToNode": {
+     "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "b23b0ce1-ba86-448b-9aea-9678326c1967"
+    },
+    "OutputSlotId": {
+     "Guid": "6bd1ba06-afbc-52d7-86f1-b62c08f2be6f"
+    },
+    "ToNode": {
+     "Guid": "ba0f4acc-1f6b-4201-bb41-805952213fd4"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+    },
+    "OutputSlotId": {
+     "Guid": "95b7396c-8fca-55f4-8347-f0ec331ef218"
+    },
+    "ToNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "InputSlotId": {
+     "Guid": "7167700b-94e7-56b0-bf5d-c772532c9b28"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "3f26fc38-74b7-4bfd-85e9-74a23d9d62ea"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "e9561810-5184-437e-939a-aa2442304be6"
+    },
+    "InputSlotId": {
+     "Guid": "ae17e82b-5328-59c4-ac90-f5b0ded1c233"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "3f26fc38-74b7-4bfd-85e9-74a23d9d62ea"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "b23b0ce1-ba86-448b-9aea-9678326c1967"
+    },
+    "InputSlotId": {
+     "Guid": "ae17e82b-5328-59c4-ac90-f5b0ded1c233"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "76bd48a6-263b-4ba4-95a6-3a1a2d92e5e4"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "6e1caa4a-11b8-45a0-ad09-7252100f6a7e"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+    },
+    "InputSlotId": {
+     "Guid": "8482b9be-7643-5b1c-9a02-8fc4a9cec74f"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "933367c2-1250-4f6f-988c-e989c92bbaa3"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "InputSlotId": {
+     "Guid": "ae17e82b-5328-59c4-ac90-f5b0ded1c233"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "8f32254a-a7cd-4f36-b001-a728db600ebf"
+    },
+    "OutputSlotId": {
+     "Guid": "5bc35045-e0c1-5cde-9076-0bfcc5320ed1"
+    },
+    "ToNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "InputSlotId": {
+     "Guid": "38a4021e-d57c-591e-a1c3-e7338e24e6ac"
+    }
+   },
+   {
+    "FromNode": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "OutputSlotId": {
+     "Guid": "bf48d280-6a2c-53d1-b4d6-3438d001a81c"
+    },
+    "ToNode": {
+     "Guid": "f7cbb9d6-9769-43f6-9408-53b2823486f2"
+    },
+    "InputSlotId": {
+     "Guid": "eacaef72-6d6e-416e-87b6-5154b60882d0"
+    }
+   }
+  ],
+  "FixedInputs": [
+   {
+    "Node": {
+     "Guid": "5c28cee7-53c5-4e03-923a-56e21ef87eda"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 3.141592653589793,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   },
+   {
+    "Node": {
+     "Guid": "2c2fc290-5083-4f37-be0a-4673dd1fec17"
+    },
+    "InputSlotId": {
+     "Guid": "624bd211-8ec1-5404-9feb-c74736af66ee"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 6.283185307179586,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   },
+   {
+    "Node": {
+     "Guid": "0e29dd3c-f27a-42ca-86e6-fbb5dc998af4"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 3.141592653589793,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   },
+   {
+    "Node": {
+     "Guid": "af98a0f8-28a9-4b31-903a-730bca8532c9"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 3.141592653589793,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   },
+   {
+    "Node": {
+     "Guid": "957e550a-db3c-4cfc-93bb-c9d9e008e5e5"
+    },
+    "InputSlotId": {
+     "Guid": "3b1e9d69-dfbf-5b1d-942a-cbafcca343b7"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 6.283185307179586,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   },
+   {
+    "Node": {
+     "Guid": "911a3359-6107-4641-8de8-3753ddce126b"
+    },
+    "InputSlotId": {
+     "Guid": "624bd211-8ec1-5404-9feb-c74736af66ee"
+    },
+    "Value": {
+     "Value": {
+      "SiValue": 6.283185307179586,
+      "$case": "Angle"
+     },
+     "$case": "ValueWithUnit"
+    }
+   }
+  ],
+  "EditorMetadata": [
+   {
+    "Node": {
+     "Guid": "e7debae5-febf-42f0-a789-a18b2a4e60bf"
+    },
+    "Description": null,
+    "Xpos": 1952.0,
+    "Ypos": 128.0
+   },
+   {
+    "Node": {
+     "Guid": "250118e6-7693-4395-b8ee-0b8471fe5023"
+    },
+    "Description": null,
+    "Xpos": 32.0,
+    "Ypos": 128.0
+   },
+   {
+    "Node": {
+     "Guid": "e2a807cb-5fca-4595-bc8b-96a0842c87c5"
+    },
+    "Description": null,
+    "Xpos": 704.0,
+    "Ypos": 352.0
+   },
+   {
+    "Node": {
+     "Guid": "1ca41d43-ec56-4489-8be1-252e040629b5"
+    },
+    "Description": null,
+    "Xpos": 1248.0,
+    "Ypos": 288.0
+   },
+   {
+    "Node": {
+     "Guid": "76bd48a6-263b-4ba4-95a6-3a1a2d92e5e4"
+    },
+    "Description": null,
+    "Xpos": 672.0,
+    "Ypos": 352.0
+   },
+   {
+    "Node": {
+     "Guid": "58d2b89a-a42e-4340-84e6-71bafb43fe6d"
+    },
+    "Description": null,
+    "Xpos": 1120.0,
+    "Ypos": 224.0
+   },
+   {
+    "Node": {
+     "Guid": "c4e69b9f-af4b-48e3-baaf-4fa0c6eec6f6"
+    },
+    "Description": null,
+    "Xpos": 832.0,
+    "Ypos": 320.0
+   },
+   {
+    "Node": {
+     "Guid": "957e550a-db3c-4cfc-93bb-c9d9e008e5e5"
+    },
+    "Description": null,
+    "Xpos": 1056.0,
+    "Ypos": 512.0
+   },
+   {
+    "Node": {
+     "Guid": "b23b0ce1-ba86-448b-9aea-9678326c1967"
+    },
+    "Description": null,
+    "Xpos": 448.0,
+    "Ypos": 384.0
+   },
+   {
+    "Node": {
+     "Guid": "911a3359-6107-4641-8de8-3753ddce126b"
+    },
+    "Description": null,
+    "Xpos": 928.0,
+    "Ypos": 480.0
+   },
+   {
+    "Node": {
+     "Guid": "f7cbb9d6-9769-43f6-9408-53b2823486f2"
+    },
+    "Description": null,
+    "Xpos": 2208.0,
+    "Ypos": 128.0
+   },
+   {
+    "Node": {
+     "Guid": "933367c2-1250-4f6f-988c-e989c92bbaa3"
+    },
+    "Description": null,
+    "Xpos": 1920.0,
+    "Ypos": 192.0
+   },
+   {
+    "Node": {
+     "Guid": "6e1caa4a-11b8-45a0-ad09-7252100f6a7e"
+    },
+    "Description": null,
+    "Xpos": 1504.0,
+    "Ypos": 224.0
+   },
+   {
+    "Node": {
+     "Guid": "2c2fc290-5083-4f37-be0a-4673dd1fec17"
+    },
+    "Description": null,
+    "Xpos": 1152.0,
+    "Ypos": 544.0
+   },
+   {
+    "Node": {
+     "Guid": "0e29dd3c-f27a-42ca-86e6-fbb5dc998af4"
+    },
+    "Description": null,
+    "Xpos": 992.0,
+    "Ypos": 288.0
+   },
+   {
+    "Node": {
+     "Guid": "af98a0f8-28a9-4b31-903a-730bca8532c9"
+    },
+    "Description": null,
+    "Xpos": 1280.0,
+    "Ypos": 576.0
+   },
+   {
+    "Node": {
+     "Guid": "5c28cee7-53c5-4e03-923a-56e21ef87eda"
+    },
+    "Description": null,
+    "Xpos": 832.0,
+    "Ypos": 448.0
+   },
+   {
+    "Node": {
+     "Guid": "3f26fc38-74b7-4bfd-85e9-74a23d9d62ea"
+    },
+    "Description": null,
+    "Xpos": 416.0,
+    "Ypos": 320.0
+   },
+   {
+    "Node": {
+     "Guid": "8f32254a-a7cd-4f36-b001-a728db600ebf"
+    },
+    "Description": null,
+    "Xpos": 1920.0,
+    "Ypos": 256.0
+   },
+   {
+    "Node": {
+     "Guid": "d97bf3d9-14de-4f20-8ac4-23d170fd5418"
+    },
+    "Description": null,
+    "Xpos": 1536.0,
+    "Ypos": 192.0
+   },
+   {
+    "Node": {
+     "Guid": "e9561810-5184-437e-939a-aa2442304be6"
+    },
+    "Description": null,
+    "Xpos": 448.0,
+    "Ypos": 192.0
+   },
+   {
+    "Node": {
+     "Guid": "ba0f4acc-1f6b-4201-bb41-805952213fd4"
+    },
+    "Description": null,
+    "Xpos": 1408.0,
+    "Ypos": 416.0
+   }
+  ],
+  "InputPortTypeConstraints": [],
+  "OutputPortTypeConstraints": [],
+  "InvalidExecutionConnections": [],
+  "InvalidDataConnections": [],
+  "ViewportData": {
+   "PanX": 390.1096,
+   "PanY": 340.677765,
+   "Zoom": 0.660693467
+  },
+  "OutputSections": [],
+  "VariableSections": []
+ },
+ "InputSections": []
+}

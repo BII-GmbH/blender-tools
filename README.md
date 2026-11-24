@@ -17,6 +17,8 @@ The release notes list the commits that changed that plugin's folder since its p
 The release [all-plugins](https://github.com/BII-GmbH/blender-tools/releases/latest) always holds the latest version of every plugin: each release workflow replaces its plugin's zips there.
 It is the release marked Latest, so `/releases/latest` leads to it. Pre-releases do not go into it.
 
+BII Tools also has [equipment rigs](plugins/bii_blender_tools/equipment/README.md): it rigs a model with joints (revolute, prismatic, ball), previews the movements and exports it as a dProB scriptable equipment (`.dequip`). Its `rig_api` lets scripts and AI agents do the same through the Blender MCP; the skill `skills/bii-equipment-rig` describes how. To use the skill, link its folder into `~/.claude/skills` (Windows: `New-Item -ItemType Junction -Path $HOME\.claude\skills\bii-equipment-rig -Target <repo>\skills\bii-equipment-rig`).
+
 ## Pipelines
 
 Pipelines automate workflows that a) take time and b) are tedious.

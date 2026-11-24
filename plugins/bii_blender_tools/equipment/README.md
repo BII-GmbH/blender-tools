@@ -1,0 +1,114 @@
+# Equipment rigs (BII Tools)
+
+Part of the BII Tools extension. Turns a model into a dProB scriptable equipment: give its parts joints (revolute, prismatic, ball) with axes and limits, preview the movements in the viewport the way dProB moves them, and export a `.dequip` file that dProB imports as scriptable equipment. Its capabilities are then scripted in dProB's equipment configurator; for parts you mark, the export also writes inverse kinematics capabilities ("move this part to a pose").
+
+Install BII Tools (see [its README](../README.md)); tested with Blender 5.2 and 5.3.
+
+## Use
+
+View3D > Sidebar (N) > BII Equipment.
+
+1. **Make Rig**: select the top object of the equipment and click Make Rig. It and all its children become the equipment, one dProB part per object. Its origin is the equipment's origin. Blender's +Y is dProB's forward, +Z is up.
+2. **Joint** panel, for each moving part:
+   - Joint type: Fixed (moves only with its parent), Revolute (hinge), Prismatic (slider), Ball (free rotation).
+   - Axis: X, Y, Z, their negatives, or a custom direction, in the object's own axes (its rotation, without scale).
+   - Limits: angles for revolute (Limits off: turns all the way round), distances for prismatic.
+   - The joint turns about, or slides from, the object's **origin**. Pivot to 3D Cursor moves the origin without moving the geometry or the children.
+   - Visible (dProB shows the geometry) and Attachment Point (dProB can attach objects there).
+   - Copy Joint to Selected gives the selected objects the active object's joint.
+3. **Preview**: the Equipment Rig panel has a slider per joint. Play Joints moves every joint back and forth through its range (Esc stops); Rest Pose sets all joints to 0. The viewport draws each joint: an axis with the arc of its angle range (orange), the slide range (blue) or rings (ball joint, purple).
+4. **Drive** (Joint panel, revolute and prismatic joints): how a joint is moved besides by hand.
+   - Free: by hand or by IK.
+   - Follow: value = offset + sum of factor × leader joint. A pitch reversal that keeps the hook level follows the boom with factor 1 (axes opposite) or -1 (same axis). Without leaders the joint stays at the offset (a constant). Leader and follower must be of the same type. The preview moves followers with their leaders.
+   - Hold: IK capabilities keep the joint at the value it has when they start (for example the slewing, if a capability should only luff and telescope).
+5. **Inverse Kinematics** panel, on the part to be moved (a joint, or a fixed part such as an attachment point under one): tick the header to export an IK capability for it.
+   - Name, Description: of the capability in dProB (default "Move <part>").
+   - Root Joint: the lowest joint the IK may move; empty: all joints down to the rig root.
+   - Iterations: solver steps per pass. Passes: when joints of the chain follow or hold, the IK runs this many times and sets them after each pass (dProB's IK node knows nothing about them); one pass otherwise.
+   - Start Away from Limits: the IK starts from the current joint values, but every limited joint at least this share of its range inside its limits (default 10 %). A joint resting at a limit often stalls the solver: a boom lying flat cannot get closer to the crane by rising, to first order, so the solver never raises it and only pulls the telescope, which is already in. Joints that are inside the margin keep their values, so small moves stay small. 0 starts from the current values as they are.
+   - Orientation Weight: how much the orientation counts against the position. dProB measures the orientation error in degrees, so small values are usual: 0.001 is about position only (dProB's Crane Move Arm uses it), the default is 0.01; avoid 0 with a pitch reversal (the IK then tilts the rope and the passes converge slowly); from about 0.03 the orientation overshoots and the solver may not settle.
+   - **IK Preview**: a gizmo appears at the part. Drag the ring (free move), the arrows (along the part's axes) or the circles (turn). The rig shows the result of the capability for that destination, solved from the joint values when you started (the equipment's state). Solving runs in the background; a new solve starts when the last one is done, so the rig may lag behind the gizmo. The panel and the status bar show how far the part is off and the destination as dProB gets it. Esc, right click or End IK Preview ends it: the gizmo disappears and the joints go back.
+6. **Export**: choose the file, click Export. Check File compares the written file with the preview (see below).
+
+### What dProB gets
+
+- The model as an FBX (modifiers applied) and the hierarchy of the parts with their joints.
+- Every texture is packed into the FBX, as PNG or JPEG. Other formats (TIFF, TGA, EXR, BMP, WebP, ...) and images without a readable file (generated, edited and not saved) are converted to PNG for the export; your materials keep their images. A texture whose file is missing stops the export. Only textures the FBX exporter takes are exported: images connected to the Principled BSDF.
+- A part's pose, axis and limits are computed the way dProB's configurator imports an FBX, so the file looks in dProB as if you had imported the FBX there and set the joints by hand. Angles keep their sign: a joint at 30° in Blender looks the same at 30° in dProB.
+- Ids stay the same over exports: the equipment id is on the root, every part has an element id (a duplicated object gets a new one). dProB's capabilities refer to the joints by these ids.
+- **Keep Capabilities** (on by default): if the file exists, its capabilities, equipment types, state variables and vehicle data, which you scripted in dProB, are kept; only the model and the joints are replaced. Vehicle data pointing to parts that are gone is cleared. Import the new file in dProB and let it replace the old asset.
+
+### The IK capabilities
+
+For every IK part the export writes a custom capability (inputs Self, Destination as a LocalPose of the part relative to the equipment (the part's frame, as dProB's attachment point poses are; the part's offset from its joint is turned with the part's current rotation, so the position is reached also when the rotation is not), Duration, and the IK settings Iterations, Orientation Weight, Start Away from Limits and Passes with the Blender values as defaults; output Processes). The graph reads the rig's values from the rig: joint limits with Get Revolute / Prismatic Joint Constraints, a fixed target's offset with its attachment point's Get Local Pose (so a fixed IK part must be an attachment point; the API makes it one). Only the Follow factors and offsets are numbers in the graph. The nodes are laid out in rows (execution left to right, each node's inputs as a tree to its left, getters next to their consumer, the loop's Done on its own row) with named frames around the sections; dProB's Arrange can reformat it. It works like dProB's built-in Crane Move Arm: the Inverse Kinematics node computes the joint values, then one process per moved joint (For Each Dictionary Entry over the result; revolute joints through the Rotate Joint function of dProB's sample crane, which takes the short way round for unlimited joints), all with the full duration so they run together. Before the first IK pass, the graph clamps the current values of the limited joints into their ranges minus the margin (dProB's Clamp macro) and passes them as the IK's initial values. With Follow or Hold joints in the chain, the IK runs in a Loop Range and the graph sets those joints in the result after each pass.
+
+- The capability id stays the same over exports. On export, earlier generated capabilities (marked `[BII Tools IK]` in their description) are replaced; your own capabilities are kept. Copy a generated capability in dProB before you change it, or the next export overwrites it.
+- Followers keep their relation during the movement too, as all joints move linearly over the same duration.
+- The coupling exists only in these capabilities. Another script that moves the leader alone does not move its followers.
+- The IK preview runs a port of dProB's IK node (`ik_solver.py`), on joints built from the Blender objects. Tests check that these joints equal the ones dProB reads from the exported file, and that the generated graph, run by a small interpreter, gives the preview's values.
+
+### Crane
+
+Set **Crane Hook** (Export panel) to an attachment point with an IK capability, and the export makes the equipment a dProB Crane:
+
+- Move Arm turns the global Destination into a pose relative to the equipment (Relative To its current pose) and invokes the hook's IK capability with it, with the IK settings from Blender, but orientation weight 0.001 as dProB's own crane. It keeps the hook turned as it is and uses only the Destination's position: Lift passes identity rotations, Deliver the hook's rotation from the cargo offset, a gizmo whatever it is turned to, and a rotation the hook cannot take pulls it off the position.
+- Lift and Deliver are dProB's own implementations (copied from a sample crane, `crane_templates.json`), on the hook's attachment point. They move the arm through Move Arm.
+- The state variables Current Cargo and Current Cargo Hook Offset, which Lift and Deliver use, are added when missing.
+
+The Crane type's implementations replace those in the file (edit them in dProB under a copy if you need changes); other equipment types and state variables are kept.
+
+### Notes
+
+- The preview uses the delta transforms (Object > Transform > Delta Transform) of the moving parts, so their own location, rotation and scale stay the rest pose. A part that already uses delta transforms cannot be previewed; apply or clear them.
+- Apply non-uniform scale on parts that have children: Blender and dProB handle a non-uniform parent scale differently (the export warns).
+- Only meshes, empties, curves, surfaces, text and metaballs become parts. Cameras, lights and armatures are left out, with their children.
+- Check File sets random joint values, evaluates the file with dProB's rig math (`dprob_math.py`, a port of dProB's FBX import and joint code) and compares every part with Blender. It shows how far they differ; less than 0.1 mm means the file matches the preview.
+
+## Scripting and AI agents
+
+`rig_api.py` is the public interface, for scripts and for AI agents that work in Blender through the Blender MCP (`execute_blender_code`). Angles in degrees, lengths in meters, objects as objects or names. Errors raise `RigError` or `ValueError` with a message for the user.
+
+```python
+from bl_ext.user_default.bii_blender_tools.equipment import rig_api as rig
+
+rig.make_rig("Crane")
+rig.set_joint("Tower", "REVOLUTE", axis="Z", limits=None)          # unlimited
+rig.set_joint("Boom", "REVOLUTE", axis="X", limits=(-10, 80))      # degrees
+rig.set_joint("Trolley", "PRISMATIC", axis="Y", limits=(0, 12))    # meters
+rig.set_joint("Hook", "BALL")
+rig.set_pivot("Boom", (0, 1.5, 22))          # world point; geometry and children stay
+rig.preview("Crane", {"Tower": 45, "Boom": 30, "Trolley": 6})
+rig.set_follow("HookRot", [("Boom", 1.0)])   # pitch reversal: keeps the hook level
+rig.set_ik_target("Hook", name="Move Hook", orientation_weight=0.001)
+rig.solve_ik("Hook", position_world=(4, 10, 15))  # shows the capability's result
+rig.describe("Crane")                         # tree of parts with joints, problems
+rig.export("Crane", r"C:\work\crane.dequip")  # summary: parts, joints, warnings
+rig.verify("Crane")                           # {"max_error": ...} in meters
+rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
+```
+
+| Function | Does |
+|---|---|
+| `make_rig(obj, export_path=None)`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots |
+| `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited |
+| `clear_joint(obj)`, `describe_joint(obj)`, `describe(root)` | Read and reset |
+| `set_pivot(obj, point_world)` | Moves the origin (pivot) |
+| `insert_joint(name, parent, children, pivot_world, axes_from=None)` | Adds an empty joint between a part and its children (level joints, hook spin); nothing moves |
+| `set_preview(obj, value)`, `preview(root, {name: value})`, `sweep_pose(root, phase_deg)`, `reset_preview(root)` | Preview |
+| `set_follow(obj, [(leader, factor)], offset=0)`, `set_hold(obj)`, `set_free(obj)` | Drive: couplings |
+| `set_crane_hook(root, hook)` | Crane type: Move Arm on the hook's IK capability, Lift, Deliver |
+| `set_ik_target(obj, enabled=True, name=None, root_joint="keep", iterations=None, loops=None, orientation_weight=None)`, `ik_targets(root)` | IK capabilities |
+| `solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, apply=True)`, `ik_destination(obj)` | Solve as the capability would, show it; the destination as dProB gets it |
+| `problems(root)`, `export(root, path=None, keep_capabilities=None)`, `verify(root, path=None, samples=3)`, `read_dequip(path)` | Export and check |
+
+The skill `skills/bii-equipment-rig` in this repo tells Claude Code how to rig an equipment with these functions; its `rigging-patterns.md` shows how to build common mechanisms (hinges, telescopes, parts that stay level, hoists, trolleys, excavator arms) from joints.
+
+## The .dequip format
+
+A zip archive (dProB's asset system, format `ScriptableEquipment_v2`): `asset_guid.txt`, `dProB_asset_metadata.json`, `model.json` (the `EquipmentAssetModel` of `BII.Common.Equipment`) and the FBX under `<geometry id>/<name>.fbx`. `dequip_format.py` writes and reads it; `PRODUCT_VERSION` there is the dProB version whose format it writes.
+
+## Tests
+
+```
+blender -b --factory-startup --python-exit-code 1 --python tests/bii_blender_tools/run_in_blender.py
+```
