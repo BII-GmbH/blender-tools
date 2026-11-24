@@ -97,8 +97,12 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 |---|---|
 | `make_rig(obj, export_path=None, forward=None)`, `set_forward(root, "+Y"/"-Y"/"+X"/"-X")`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots and where the model's front points |
 | `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None, axis_world=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited; `axis_world` for an axis given in world space |
-| `fit_follow_aim(part, leader, target, samples=9)` | Fits a Follow so a revolute part (a hydraulic cylinder) keeps pointing at a target that moves with the leader; returns the worst error |
-| `add_point(name, parent, point_world, axes_from=None)` | A fixed empty at a world point, marked as attachment point: the load point of a hook or tool |
+| `fit_follow_aim(part, leader, target, samples=9, value_range=None, exact_at="rest")` | Fits a Follow so a revolute part (a hydraulic cylinder) keeps pointing at a target that moves with the leader, exact at rest; returns the worst error |
+| `rotate_parts(objects, pivot_world, axis_world, degrees)` | Turns parts with their children about a world axis (re-posing a hook block modeled for transport) |
+| `outline(obj, depth=3)` | Compact hierarchy for a first look at a big model (same-named siblings folded) |
+| `to_dprob(root, point_world)` | A world point in dProB's equipment space (+Y up, +Z forward), to check the Forward setting |
+| `verify_ik(obj, targets_world, path=None, position_only=True)` | Runs the exported IK capability (its graph, with the ported IK node) for targets and compares it with the preview |
+| `add_point(name, parent, point_world, axes_from=None, attachment_point=True)` | A fixed empty at a world point, marked as attachment point: the load point of a hook or tool |
 | `clear_joint(obj)`, `describe_joint(obj)`, `describe(root)` | Read and reset |
 | `set_pivot(obj, point_world)` | Moves the origin (pivot) |
 | `insert_joint(name, parent, children, pivot_world, axes_from=None)` | Adds an empty joint between a part and its children (level joints, hook spin); nothing moves |

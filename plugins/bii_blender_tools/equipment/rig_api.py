@@ -193,21 +193,24 @@ def _unit_scale():
     return bpy.context.scene.unit_settings.scale_length or 1.0
 
 
-def _rest_world_full(o):
-    """World matrix of o with every joint of its rig at rest (also when its parents are posed)."""
+def _rest_world_full(o, worlds=None):
+    """World matrix of o with every joint of its rig at rest (also when its parents are posed).
+    worlds: ik_chain.rest_worlds of the rig, to reuse."""
+    if worlds is not None and o in worlds:
+        return worlds[o]
     root = rig_props.rig_root(o)
     if root is None:
         return rig_export._np(o.matrix_world)
     return ik_chain.rest_worlds(root)[o]
 
 
-def describe_joint(obj):
+def describe_joint(obj, _worlds=None):
     """Joint of an object as a dict (degrees, meters; the axis also in world space)."""
     o = _obj(obj)
     j = o.bii_rig
     d = {"object": o.name, "joint": j.joint_type, "visible": j.visible,
          "attachment_point": j.attachment_point, "element_id": j.element_id,
-         "pivot_world": tuple(round(float(v), 6) for v in _rest_world_full(o)[:3, 3])}
+         "pivot_world": tuple(round(float(v), 6) for v in _rest_world_full(o, _worlds)[:3, 3])}
     if j.joint_type in ("REVOLUTE", "PRISMATIC"):
         d["axis"] = j.axis.replace("NEG_", "-") if j.axis != "CUSTOM" else tuple(j.custom_axis)
         try:
@@ -241,9 +244,10 @@ def describe(root):
     r = _root(root)
 
     all_kids = rig_props.children_map()
+    worlds = ik_chain.rest_worlds(r)
 
     def node(o):
-        d = describe_joint(o)
+        d = describe_joint(o, worlds)
         d["type"] = o.type
         kids = [c for c in all_kids.get(o, ()) if rig_props.is_rig_object(c)]
         if kids:
@@ -323,7 +327,7 @@ def set_follow(obj, leaders, offset=0.0):
     return describe_joint(o)
 
 
-def fit_follow_aim(part, leader, target, samples=9, value_range=None):
+def fit_follow_aim(part, leader, target, samples=9, value_range=None, exact_at="rest"):
     """Makes a revolute part follow a leader so that it keeps pointing at a target point that
     moves with the leader: a hydraulic cylinder that points at its piston's eye on the boom, or
     the piston that points back at the cylinder's base pin.
@@ -331,7 +335,9 @@ def fit_follow_aim(part, leader, target, samples=9, value_range=None):
     part: revolute joint (its axis and pivot set). leader: revolute joint. target:
     an object whose origin the part should point at (an empty at the other pin). Samples the
     leader over its limits (or value_range in degrees), works out the angle the part needs
-    at each, fits value = factor * leader + offset and sets that Follow. Returns factor, offset
+    at each, fits value = factor * leader + offset and sets that Follow. exact_at: a leader value
+    (degrees) where the fit is exact, by default "rest" (0, where the machine mostly stands, or
+    the lower limit when 0 is outside the range); None fits the whole range evenly. Returns factor, offset
     (degrees) and the worst angle error over the samples (degrees): the pointing is not linear,
     so report the error to the user when it is noticeable.
     """
@@ -361,8 +367,16 @@ def fit_follow_aim(part, leader, target, samples=9, value_range=None):
         axis_local = rig_props.local_axis(p.bii_rig)
         xs, ys = [], []
         prev = 0.0
-        for i in range(samples):
-            v = lo + (hi - lo) * i / max(samples - 1, 1)
+        if exact_at == "rest":
+            v0 = 0.0 if lo <= 0.0 <= hi else lo
+        elif exact_at is None:
+            v0 = None
+        else:
+            v0 = math.radians(exact_at)
+        values = [lo + (hi - lo) * i / max(samples - 1, 1) for i in range(samples)]
+        if v0 is not None and all(abs(v - v0) > 1e-9 for v in values):
+            values = sorted(values + [v0])
+        for v in values:
             rig_props.set_preview_value(l, v, followers=False)
             rig_props.set_preview_value(p, 0.0, followers=False)
             bpy.context.view_layer.update()
@@ -381,7 +395,11 @@ def fit_follow_aim(part, leader, target, samples=9, value_range=None):
             xs.append(v)
             ys.append(ang)
         n = len(xs)
-        mx, my = sum(xs) / n, sum(ys) / n
+        if v0 is None:
+            mx, my = sum(xs) / n, sum(ys) / n
+        else:                                   # the line through the sample at v0
+            k = min(range(n), key=lambda i: abs(xs[i] - v0))
+            mx, my = xs[k], ys[k]
         sxx = sum((x - mx) ** 2 for x in xs)
         factor = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx if sxx > 1e-12 else 0.0
         offset = my - factor * mx
@@ -565,6 +583,129 @@ def set_pivot(obj, point_world):
         rig_props.set_preview_value(j, v)
     bpy.context.view_layer.update()
     return pivot
+
+
+def rotate_parts(objects, pivot_world, axis_world, degrees):
+    """Turns objects about a world axis through a world point, with their children (as a
+    rigid group), for example to re-pose a hook block that is modeled tilted for transport.
+    Objects whose parent is also in the list move with it. Works in the rest pose; the joint
+    preview is restored afterwards. Returns the names turned."""
+    objs = [_obj(o) for o in objects]
+    root = rig_props.rig_root(objs[0]) if objs else None
+    saved = {}
+    if root is not None:
+        saved = {j: rig_props.preview_value(j.bii_rig) for j in rig_props.joints(root)}
+        rig_preview.reset(root)
+    bpy.context.view_layer.update()
+    pivot = Vector(pivot_world)
+    turn = (Matrix.Translation(pivot) @ Matrix.Rotation(math.radians(degrees), 4, Vector(axis_world).normalized())
+            @ Matrix.Translation(-pivot))
+    chosen = set(objs)
+    tops = [o for o in objs if not any(p in chosen for p in rig_props.ancestors(o))]
+    worlds = {o: o.matrix_world.copy() for o in tops}
+    for o in tops:
+        o.matrix_world = turn @ worlds[o]
+    bpy.context.view_layer.update()
+    for j, v in saved.items():
+        rig_props.set_preview_value(j, v, followers=False)
+    if root is not None:
+        rig_props.update_followers(root)
+    bpy.context.view_layer.update()
+    return [o.name for o in tops]
+
+
+def outline(obj, depth=3, group=True, limit=200):
+    """A compact tree of an object's hierarchy for a first look at big models: name, type and,
+    with group, siblings with the same base name (Bolt, Bolt.001, ...) folded into one line
+    with a count. Returns a list of indented lines (at most limit)."""
+    import re
+    kids = rig_props.children_map()
+    lines = []
+
+    def base(n):
+        return re.sub(r"\.\d{3}$", "", n)
+
+    def visit(o, level):
+        if len(lines) >= limit:
+            return
+        n_kids = len(kids.get(o, ()))
+        lines.append(f"{'  ' * level}{o.name} [{o.type.lower()}" + (f", {n_kids} children]" if n_kids else "]"))
+        if level + 1 >= depth:
+            return
+        children = kids.get(o, ())
+        if not group:
+            for c in children:
+                visit(c, level + 1)
+            return
+        groups = {}
+        for c in children:
+            groups.setdefault(base(c.name), []).append(c)
+        for name, members in groups.items():
+            if len(members) == 1 or any(kids.get(c) for c in members):
+                for c in members:
+                    visit(c, level + 1)
+            elif len(lines) < limit:
+                lines.append(f"{'  ' * (level + 1)}{name} x{len(members)} [{members[0].type.lower()}]")
+
+    visit(_obj(obj), 0)
+    if len(lines) >= limit:
+        lines.append("... (more; raise limit or depth)")
+    return lines
+
+
+def to_dprob(root, point_world):
+    """A world point in dProB's equipment space (meters; +Y up, +Z forward, +X right), as the
+    exported equipment has it. Use it to check the Forward setting."""
+    space = ik_chain.Space(_root(root))
+    m = Matrix.Translation(Vector(point_world))
+    return tuple(round(float(v), 6) for v in space.pose(rig_export._np(m))[:3, 3])
+
+
+def verify_ik(obj, targets_world, path=None, position_only=True):
+    """Runs the IK capability of a part as exported (the graph in the .dequip, with a port of
+    dProB's IK node) for world targets, and compares it with the Blender preview's solve.
+
+    Returns per target: the position error of the exported graph's result (meters, the target
+    part's distance from the target) and the largest joint difference to the preview.
+    """
+    import numpy as np
+    from . import ik_capability, ik_solver
+    o = _obj(obj)
+    root = rig_props.rig_root(o)
+    path = bpy.path.abspath(path or root.bii_rig.export_path)
+    model = dequip_format.read(path).model
+    cap_id = o.bii_rig.ik_capability_id
+    cap = next((c for c in model.get("CustomCapabilities", []) if c["Signature"]["Id"]["Guid"] == cap_id), None)
+    if cap is None:
+        raise RigError(f"{path} has no IK capability of {o.name}; export first")
+    setup = ik_chain.Setup(o)
+    by_name = {e["Name"]: e["Id"] for e in dequip_format.walk(model["HierarchyRoots"])}
+    joints, parents, fixed = ik_solver.rig_from_model(model["HierarchyRoots"])
+    state = {k: (np.eye(3) if j.kind == "BALL" else 0.0) for k, j in joints.items()}
+    for name, v in setup.start_values.items():
+        if name in by_name:
+            state[by_name[name]] = v
+    out = []
+    cur = setup.current_world()
+    for t in targets_world:
+        world = np.array(cur)
+        world[:3, 3] = t
+        dest = setup.destination(world)
+        moves = ik_capability.simulate(cap, model, dest, state, inputs={"Position Only": position_only})
+        values, _, _ = setup.solve(dest, position_only=position_only)
+        sim = ik_capability._Sim(model, {**state, **moves}, None)
+        reached = sim.point_pose(by_name[o.name])[:3, 3]
+        diff = 0.0
+        for name, v in values.items():
+            k = by_name.get(name)
+            if k in moves and not isinstance(v, np.ndarray):
+                d = float(moves[k]) - float(v)
+                if joints[k].kind == "REVOLUTE" and joints[k].limits is None:
+                    d = (d + math.pi) % (2 * math.pi) - math.pi
+                diff = max(diff, abs(d))
+        out.append({"target": tuple(t), "position_error_m": float(np.linalg.norm(reached - dest[:3, 3])),
+                    "max_joint_difference": diff})
+    return out
 
 
 def add_point(name, parent, point_world, axes_from=None, attachment_point=True, size=0.2):

@@ -49,8 +49,10 @@ load.
 ## 1. Look at the model first
 
 Walk the hierarchy (parents, children, types, names, origins, rotations, scales) and look at it
-(screenshot from `blender-window`, or a Workbench render into a file). Change nothing yet. Find
-out, and ask the user where names and shape do not tell:
+(screenshot from `blender-window`, or a Workbench render into a file). For big models start with
+`rig.outline(top_object, depth=3)` (a full dump overflows the MCP result). The window is a
+Blender of its own: save in the headless one and open that file in the window before
+screenshots. Change nothing yet. Find out, and ask the user where names and shape do not tell:
 
 - The top of the equipment and the equipment's origin: on the ground, where dProB places it (for
   a crane under the slewing center). If the top object's origin is elsewhere, add a new empty as
@@ -69,12 +71,16 @@ out, and ask the user where names and shape do not tell:
 - Where the load or tool point is (hook bottom, bucket teeth, fork tip), and whether something
   must stay level or keep its direction while other parts move.
 - Scale: moving parts with children need uniform scale (warned at export). Ask before applying.
+- Re-posing: `rig.rotate_parts(parts, pivot, axis, degrees)` turns parts with their children
+  about a world axis. Find the angle from the geometry (for example the long axis of a plate's
+  vertices), not by eye.
 - Proportions: where the model does not match the real machine (short cylinders, short outrigger
   beams), real ranges make parts drift apart. Prefer ranges the model shows correctly, and tell
   the user which real values differ.
 
-Old setups may carry custom properties from other tools (for example `devision.joint.*`). Read
-them as hints for axes and limits, then confirm.
+Old setups may carry hints: custom properties from other tools (for example `devision.joint.*`),
+or empties named after their axis (`Drehwerk | Z-Achse`, `Teleskopschuss 01 | X`) that already
+sit at the pivots. Use them as hints for joints, axes and limits, then confirm.
 
 ## 2. Joints, pivots, couplings
 
@@ -159,5 +165,10 @@ check = rig.verify("Machine")
 - Tell the user: the file, number of parts and joints, the capabilities, warnings, what the rig
   cannot show (ropes that do not stretch, cylinders that do not extend), and that dProB should
   replace the earlier asset when they import it again.
+
+- `rig.verify_ik(target, [points])` runs the exported IK capability (the graph in the file)
+  and compares it with the preview; run it for a few of your IK test targets.
+- Check the direction: `rig.to_dprob(root, point_in_front_of_the_machine)` must have a positive
+  Z (forward) and the right height in Y (up).
 
 `rig.read_dequip(path)` shows what a .dequip contains (parts, joints, capabilities).

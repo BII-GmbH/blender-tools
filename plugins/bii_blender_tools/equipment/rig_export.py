@@ -98,7 +98,7 @@ def problems(root):
         elif j.joint_type == "FIXED" and not j.attachment_point:
             out.append(("ERROR", f"IK capability of {o.name}: a fixed part must be an attachment point "
                                  "(dProB reads its pose from there)"))
-        elif j.ik_root is not None and j.ik_root is not o and j.ik_root not in o.parent_recursive:
+        elif j.ik_root is not None and j.ik_root is not o and j.ik_root not in rig_props.ancestors(o):
             out.append(("ERROR", f"IK capability of {o.name}: its root joint {j.ik_root.name} is not above it"))
     return out
 

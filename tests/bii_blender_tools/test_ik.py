@@ -829,3 +829,62 @@ class FitAimTest(IkTestCase):
             rest_dir = (Matrix.Translation((0, 3, 2.2)).translation - Matrix.Translation((0, 0.2, 1.0)).translation).normalized()
             now = (m.to_3x3().normalized() @ rest_dir).normalized()
             self.assertLess(math.degrees(now.angle(want)), 3.0)
+
+
+class TrialHelpersTest(IkTestCase):
+    def test_rotate_parts_outline_to_dprob(self):
+        root = truck_crane()
+        hook = bpy.data.objects["Hook"]
+        before = hook.matrix_world.translation.copy()
+        rig.rotate_parts(["Hook"], (0, -6, 3), (1, 0, 0), 90)
+        bpy.context.view_layer.update()
+        after = hook.matrix_world.translation
+        self.assertLess((after - before).length, 1e-6)                 # pivot at its origin
+        point = bpy.data.objects["HookPoint"].matrix_world.translation   # child turned with it
+        self.assertAlmostEqual(point.y, -6 + 0.4, places=4)
+        for i in range(30):
+            e = bpy.data.objects.new(f"Bolt.{i:03d}", None)
+            bpy.context.scene.collection.objects.link(e)
+            e.parent = root
+        lines = rig.outline(root, depth=2)
+        self.assertTrue(any("Bolt x" in l for l in lines))
+        self.assertLess(len(lines), 10)
+        root.bii_rig.forward = "POS_X"
+        self.assertAlmostEqual(rig.to_dprob(root, (5, 0, 1))[2], 5.0, places=5)   # front is forward
+        self.assertAlmostEqual(rig.to_dprob(root, (5, 0, 1))[1], 1.0, places=5)   # up is up
+
+    def test_verify_ik_runs_the_exported_graph(self):
+        root = truck_crane()
+        rig.set_ik_target("HookPoint", orientation_weight=0.001)
+        rig.export(root, self.path)
+        res = rig.verify_ik("HookPoint", [(0, -3, 4), (0, 8, 2), (5, 0, 6)])
+        for r in res:
+            self.assertLess(r["position_error_m"], 0.01, r)
+            self.assertLess(r["max_joint_difference"], 1e-4, r)
+
+    def test_fit_exact_at_rest(self):
+        root = bpy.data.objects.new("Exc2", None)
+        bpy.context.scene.collection.objects.link(root)
+        house = cube("House2", (0, 0, 1), root)
+        boom = cube("Boom4", (0, 1, 2), house)
+        eye = bpy.data.objects.new("Eye2", None)
+        bpy.context.scene.collection.objects.link(eye)
+        eye.parent = boom
+        eye.matrix_world = Matrix.Translation((0, 3, 2.2))
+        cyl = cube("Cyl2", (0, 0.2, 1.0), house, size=0.3)
+        bpy.context.view_layer.update()
+        rig.make_rig(root)
+        rig.set_joint(boom, "REVOLUTE", axis="-X", limits=(0, 80))
+        rig.set_joint(cyl, "REVOLUTE", axis="-X", limits=None)
+        rig.fit_follow_aim(cyl, boom, eye)
+        rig.set_preview(boom, 0)
+        self.assertAlmostEqual(rig.describe_joint(cyl)["preview_deg"], 0.0, places=3)   # exact at rest
+
+
+class IkRootProblemTest(IkTestCase):
+    def test_root_joint_check(self):
+        root = truck_crane()
+        rig.set_ik_target("HookPoint", root_joint="Boom")
+        self.assertFalse([p for p in rig.problems(root) if "root joint" in p])
+        bpy.data.objects["HookPoint"].bii_rig.ik_root = bpy.data.objects["Cab"]
+        self.assertFalse([p for p in rig.problems(root) if "root joint" in p])

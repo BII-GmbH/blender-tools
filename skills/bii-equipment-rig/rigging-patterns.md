@@ -56,9 +56,15 @@ leader moves.
 - Hook spin: a revolute joint about the rope axis, unlimited, so the IK can turn a load.
 - Load point: `rig.add_point(name, hook, saddle_point, axes_from=root)`, a fixed empty at the exact
   point a load hangs from (the hook's saddle, not the hook's origin), marked as attachment point.
+  Finding the saddle: for a hook made of a curve with a bevel, the lowest point of the curve's
+  centerline inside the hook's mouth plus the bevel radius; for a mesh, the lowest vertices of
+  the inner surface of the mouth.
   That is the IK target and the crane hook; cargo hangs in its axes, so give it the root's axes.
 - Typical chain: tip/trolley -> level joint (if luffing) -> rope (prismatic down) -> hook spin
   (revolute) -> hook block and hook -> load point (fixed, attachment point).
+- Rope length is free for the IK: for a position it may lengthen the rope instead of luffing or
+  telescoping, unlike an operator who keeps the rope short. Tell the user; give the rope a smaller
+  maximum if the results look wrong.
 - Ropes cannot stretch: a rope mesh stays as long as modeled. Put rope meshes on the hook block
   (they move down with it and leave a gap at the top) or on the boom head (a gap above the block),
   hide them, or keep them short; tell the user which.
@@ -86,8 +92,9 @@ Joints cannot keep a cylinder between two moving pins (no aim constraint in dPro
 - Revolute joints at each pin that Follow the luffing joint with a fitted factor (the cylinder's
   angle changes about linearly with the boom's): pivot each at its pin, add an empty at the other
   pin (`add_point(..., attachment_point=False)`), then `rig.fit_follow_aim(cylinder, boom,
-  rod_eye_empty)` and `rig.fit_follow_aim(piston, boom, base_pin_empty)`. They return the worst
-  angle error; report it if it is noticeable. It only moves in the generated IK
+  rod_eye_empty)` and `rig.fit_follow_aim(piston, boom, base_pin_empty)`. They are exact at rest (boom 0,
+  where the machine mostly stands) and return the worst angle error; over a long luffing range
+  (0..80°) the pointing is clearly nonlinear (several degrees), so report it. It only moves in the generated IK
   capabilities (they set followers of joints in the chain), not in other scripts that move the
   boom alone. Real strokes longer than the modeled cylinder still pull the piston out.
 
@@ -95,6 +102,8 @@ Joints cannot keep a cylinder between two moving pins (no aim constraint in dPro
 
 The chassis is usually the rig root or fixed below it. Outrigger beams and jacks are prismatic
 joints that IK capabilities of the arm never move (they are not above the target, or use Hold).
+Everything that moves with a beam goes below it: the jack cylinder, ram and pad, but also warning
+plates, stripes and lamps on the beam end, which models often keep flat under the chassis.
 Wheels and tracks are not driven by the rig.
 
 ## IK target and root

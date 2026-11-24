@@ -65,6 +65,16 @@ def rig_root(obj):
     return None
 
 
+def ancestors(obj):
+    """Parents of obj up to the top (Blender has no Object.parent_recursive)."""
+    out = []
+    p = obj.parent
+    while p is not None:
+        out.append(p)
+        p = p.parent
+    return out
+
+
 def children_map():
     """{object: [children sorted by name]} of all objects, in one pass.
 
