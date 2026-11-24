@@ -214,7 +214,11 @@ bis 25 m; der Server liefert bereits in der gewählten Weite, sodass nur die
 tatsächlich benötigte Datenmenge übertragen wird.
 
 Geladen werden ausschließlich die Kacheln, die der Korridor berührt – die Länge der
-Strecke spielt daher keine Rolle. Der Abruf läuft im Hintergrund, Blender bleibt
+Strecke spielt daher keine Rolle.
+
+**Nur unter Plänen** begrenzt das Gelände auf die Abschnitte der Linien, über denen flache
+Lagepläne des BII Import liegen, plus einen Korridorradius davor und dahinter. Laufen zwei
+Kilometrierungslinien nebeneinander (etwa im Bahnhof), entsteht das Gelände dort nur einmal. Der Abruf läuft im Hintergrund, Blender bleibt
 bedienbar, **Esc** bricht ab. Heruntergeladene Kacheln werden lokal gespeichert.
 
 **Auf Gelände legen** bestimmt, wie Linie, Marken und Beschriftung mit dem Gelände
