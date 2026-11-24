@@ -471,7 +471,8 @@ def grid_labels(obj, folder, per_image=4):
     gray, dpi = _full_gray(obj)
     cands = plan_grid.label_candidates(gray, _grid_to_px(obj, gray, stored), dpi)
     cands.sort(key=lambda c: not c["near_cross"])
-    obj["bii_grid_labels"] = [[c["family"], c["index"]] for c in cands]
+    import json
+    obj["bii_grid_labels"] = json.dumps([[c["family"], c["index"]] for c in cands])
     os.makedirs(folder, exist_ok=True)
     out = []
     for k0 in range(0, len(cands), per_image):
@@ -515,7 +516,8 @@ def place_from_grid(obj, readings, crs=None):
         raise ValueError(f"{obj.name}: no grid yet, run find_grid() first")
     if crs:
         obj.bii_plan.crs = crs
-    labels = obj.get("bii_grid_labels") or []
+    import json
+    labels = json.loads(obj.get("bii_grid_labels") or "[]")
     rows = []
     for r in readings:
         if len(r) == 2:
@@ -884,6 +886,27 @@ def _overlap_area(quad_a, quad_b, step=None):
             if _inside(quad_a, (x, y)) and _inside(quad_b, (x, y)):
                 n += 1
     return n * step * step
+
+
+def seat_above_terrain(obj, clearance=3.0, samples=12):
+    """Lift or lower a flat plan so it lies clearance meters above the highest BII Umgebung
+    terrain under its visible part (terrain: meshes with the property "dem_service"). Only the
+    height changes. Returns the new height, or None without terrain under the plan."""
+    from . import signal_panel
+    x0, y0, x1, y1 = crop_rectangle(obj)
+    m = obj.matrix_world
+    zs = []
+    for i in range(samples + 1):
+        for j in range(samples + 1):
+            w = m @ Vector((x0 + (x1 - x0) * i / samples, y0 + (y1 - y0) * j / samples, 0.0))
+            z = signal_panel.terrain_height(bpy.context, w.x, w.y)
+            if z is not None:
+                zs.append(z)
+    if not zs:
+        return None
+    obj.location.z += max(zs) + clearance - (m @ Vector((0.0, 0.0, 0.0))).z
+    bpy.context.view_layer.update()
+    return obj.matrix_world.translation.z
 
 
 def validate(obj, scene=None, compare_plans=True):

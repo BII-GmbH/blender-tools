@@ -113,6 +113,19 @@ class GridBlenderTest(unittest.TestCase):
         self.assertLess(rms, 0.2)
         self.assertTrue(any("misread" in w for w in warnings))
 
+    def test_grid_labels_images(self):
+        bpy.ops.import_image.bii_plan(filepath=self.path, massstab=1000)
+        plan = bpy.context.view_layer.objects.active
+        plan_api.find_grid(plan)
+        images = plan_api.grid_labels(plan, os.path.join(self._dir.name, "labels"))
+        for im in images:
+            self.assertTrue(os.path.isfile(im["image"]))
+        # ids of the boxes map back to grid lines
+        if images:
+            box = images[0]["boxes"][0]
+            with self.assertRaises(ValueError):          # one number cannot place the plan
+                plan_api.place_from_grid(plan, [(box, 3589000)])
+
     def test_turned_import_keeps_source_pixels(self):
         turned = os.path.join(self._dir.name, "Turned.png")
         Image.fromarray(self.img).transpose(Image.ROTATE_90).save(turned, dpi=(DPI, DPI))  # lies on its side

@@ -84,6 +84,15 @@ class PlanApiTest(unittest.TestCase):
         plan_api.crop_image(self.plan, 100, 100, 300, 150, path, up=(0, 1))   # upside down
         self.assertEqual(Image.open(path).size, (w, h))
 
+    def test_seat_above_terrain(self):
+        self.assertIsNone(plan_api.seat_above_terrain(self.plan))      # no terrain yet
+        bpy.ops.mesh.primitive_plane_add(size=2000, location=(0, 0, 10))
+        ground = bpy.context.view_layer.objects.active
+        ground["dem_service"] = "test"
+        bpy.context.view_layer.update()
+        z = plan_api.seat_above_terrain(self.plan, clearance=3.0)
+        self.assertAlmostEqual(z, 13.0, places=3)
+
     def test_world(self):
         self.plan.location = (100.0, 50.0, 3.0)
         self.plan.rotation_euler.z = math.radians(30)

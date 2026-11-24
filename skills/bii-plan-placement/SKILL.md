@@ -222,8 +222,9 @@ Keep all plan drawing, track stubs and "Anschluss Blatt" labels.
 
 ## 6. Height
 
-Plans keep the height they were imported at. They hide terrain and objects below them in top views:
-for renders that check other objects, hide the plans.
+Put every flat plan above the terrain after placing it: `plan_api.seat_above_terrain(plan)` (3 m
+above the highest terrain under it; only the height changes). Plans hide terrain and objects below
+them in top views: for renders that check other objects, hide the plans.
 
 ## 7. Check the placement (always)
 
