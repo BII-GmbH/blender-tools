@@ -49,10 +49,16 @@ def _root(o):
 
 # ------------------------------------------------------------------ rig
 
-def make_rig(root, export_path=None):
+_FORWARD = {"+Y": "POS_Y", "-Y": "NEG_Y", "+X": "POS_X", "-X": "NEG_X", "Y": "POS_Y", "X": "POS_X"}
+
+
+def make_rig(root, export_path=None, forward=None):
     """Makes the object the root of a rig: it and its descendants become the equipment.
 
-    The root's origin becomes the equipment's origin. Blender +Y is dProB's forward, +Z up.
+    The root's origin becomes the equipment's origin (put it on the ground, under the slewing
+    center for a crane). forward: where the model's front points in Blender, "+Y" (default),
+    "-Y", "+X" or "-X"; the export turns the equipment so that this is dProB's forward (+Z),
+    and Blender's +Z is dProB's up (+Y). The root's own rotation is part of the model.
     """
     obj = _obj(root)
     if not rig_props.is_rig_object(obj):
@@ -66,8 +72,19 @@ def make_rig(root, export_path=None):
     obj.bii_rig.is_root = True
     if export_path:
         obj.bii_rig.export_path = export_path
+    if forward is not None:
+        set_forward(obj, forward)
     rig_props.ensure_ids(obj)
     return obj
+
+
+def set_forward(root, forward):
+    """Where the model's front points in Blender: "+Y", "-Y", "+X" or "-X" (see make_rig)."""
+    key = _FORWARD.get(str(forward).upper().replace(" ", ""))
+    if key is None:
+        raise ValueError(f"forward {forward!r}: one of +Y, -Y, +X, -X")
+    _root(root).bii_rig.forward = key
+    return forward
 
 
 def remove_rig(root):
@@ -90,7 +107,16 @@ def rig_of(obj):
 
 # ------------------------------------------------------------------ joints
 
-def _axis(j, axis):
+def _axis(j, axis, obj=None, world=False):
+    if world:
+        v = Vector(axis)
+        if v.length < 1e-9:
+            raise ValueError("the axis vector is zero")
+        # the object's own axes: its rotation without scale, in the rest pose
+        rot = (rig_props.parent_space(obj).to_3x3() @ rig_props.rest_rotation(obj)).normalized()
+        j.custom_axis = (rot.inverted() @ v).normalized()
+        j.axis = "CUSTOM"
+        return
     if isinstance(axis, str):
         key = axis.upper().replace("-", "NEG_")
         if key not in rig_props.AXIS_VECTORS:
@@ -104,12 +130,14 @@ def _axis(j, axis):
         j.axis = "CUSTOM"
 
 
-def set_joint(obj, joint_type, axis=None, limits="keep", visible=None, attachment_point=None):
+def set_joint(obj, joint_type, axis=None, limits="keep", visible=None, attachment_point=None, axis_world=None):
     """Sets the joint of a rig object.
 
     joint_type: FIXED, REVOLUTE, PRISMATIC or BALL.
     axis: "X", "Y", "Z", "-X", "-Y", "-Z" or a vector, in the object's local axes (its rotation,
         without scale). The axis goes through the object's origin (see set_pivot).
+    axis_world: instead of axis, a direction in world space (taken in the rest pose), for
+        rotated parts whose axis is no local axis.
     limits: (min, max) in degrees for REVOLUTE, in meters for PRISMATIC; None makes a revolute
         joint unlimited; "keep" leaves them.
     visible: whether dProB shows the part's geometry. attachment_point: whether other objects can
@@ -124,7 +152,9 @@ def set_joint(obj, joint_type, axis=None, limits="keep", visible=None, attachmen
         raise ValueError(f"joint type {joint_type!r}: one of {JOINT_TYPES}")
     j = o.bii_rig
     j.joint_type = jt
-    if axis is not None:
+    if axis_world is not None:
+        _axis(j, axis_world, o, world=True)
+    elif axis is not None:
         _axis(j, axis)
     if limits != "keep":
         if jt == "REVOLUTE":
@@ -213,6 +243,7 @@ def describe(root):
         return d
 
     return {"root": r.name, "equipment_id": r.bii_rig.equipment_id, "export_path": r.bii_rig.export_path,
+            "forward": {"POS_Y": "+Y", "NEG_Y": "-Y", "POS_X": "+X", "NEG_X": "-X"}[r.bii_rig.forward],
             "crane_hook": r.bii_rig.crane_hook.name if r.bii_rig.crane_hook else None,
             "keep_capabilities": r.bii_rig.keep_capabilities,
             "parts": len(rig_props.rig_objects(r)), "joints": [o.name for o in rig_props.joints(r)],
@@ -451,6 +482,18 @@ def set_pivot(obj, point_world):
         rig_props.set_preview_value(j, v)
     bpy.context.view_layer.update()
     return pivot
+
+
+def add_point(name, parent, point_world, axes_from=None, attachment_point=True, size=0.2):
+    """Adds a fixed empty at a world point under `parent` and returns its name: the load point of
+    a hook or a tool (attachment_point=True), the exact point an IK capability moves and cargo
+    hangs from. axes_from: the object whose world rotation it takes (default the parent's); the
+    cargo hangs in these axes. Nothing else moves."""
+    name = insert_joint(name, parent, [], point_world, axes_from=axes_from, size=size)
+    o = bpy.data.objects[name]
+    o.bii_rig.joint_type = "FIXED"
+    o.bii_rig.attachment_point = bool(attachment_point)
+    return name
 
 
 def insert_joint(name, parent, children, pivot_world, axes_from=None, size=0.3):

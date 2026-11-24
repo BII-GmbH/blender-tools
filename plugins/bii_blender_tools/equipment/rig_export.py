@@ -77,6 +77,7 @@ def problems(root):
             rig_props.followers(root)
         except RigError as e:
             out.append(("ERROR", str(e)))
+    out += [("WARNING", t) for t in follower_range_warnings(objs)]
     hook = root.bii_rig.crane_hook
     if hook is not None:
         if rig_props.rig_root(hook) is not root:
@@ -99,6 +100,32 @@ def problems(root):
                                  "(dProB reads its pose from there)"))
         elif j.ik_root is not None and j.ik_root is not o and j.ik_root not in o.parent_recursive:
             out.append(("ERROR", f"IK capability of {o.name}: its root joint {j.ik_root.name} is not above it"))
+    return out
+
+
+def follower_range_warnings(objs):
+    """Follow joints whose leaders' limits drive them beyond their own limits. IK capabilities
+    set followers without clamping them (the Blender preview clamps), so the two would differ."""
+    out = []
+    for o in objs:
+        j = o.bii_rig
+        if j.drive != "FOLLOW" or j.joint_type not in ("REVOLUTE", "PRISMATIC"):
+            continue
+        own = rig_props.limits(j)
+        if own is None:
+            continue
+        lo = hi = rig_props.drive_offset(j)
+        for t in j.drive_terms:
+            lim = rig_props.limits(t.leader.bii_rig) if t.leader else None
+            if lim is None:
+                lo, hi = -math.inf, math.inf
+                break
+            a, b = t.factor * lim[0], t.factor * lim[1]
+            lo, hi = lo + min(a, b), hi + max(a, b)
+        eps = 1e-6
+        if lo < min(own) - eps or hi > max(own) + eps:
+            out.append(f"{o.name} follows values beyond its limits; IK capabilities do not clamp "
+                       "followers, the preview does. Widen its limits to the leaders' range")
     return out
 
 
@@ -233,7 +260,16 @@ def build(root, fbx_path):
             [make(c, origin) for c in el.children])
 
     roots = [make(el, el.position) for el in fbx_roots]
+    # the model's front to dProB's forward: turn the roots about dProB's up axis (Y)
+    turn = _np(rig_props.forward_turn(root))
+    turn_u = dprob_math_C @ turn @ dprob_math_C
+    for el, model in zip(fbx_roots, roots):
+        q = dprob_math.quat_from_matrix(turn_u @ el.rotation)
+        model["Pose"]["Rotation"] = dequip_format.quat(q)
     return roots, details
+
+
+dprob_math_C = np.array([[1.0, 0, 0], [0, 0, 1.0], [0, 1.0, 0]])    # Blender axes -> dProB axes
 
 
 def _safe_name(name):
@@ -310,7 +346,9 @@ def _unity_from_blender_map(root, model, fbx_roots):
     el = fbx_roots[0]
     g = el.global_transform.copy()
     g[:3, 3] -= el.position          # the root's origin is the equipment's origin
-    return g @ np.linalg.inv(b)
+    turn = np.eye(4)
+    turn[:3, :3] = dprob_math_C @ _np(rig_props.forward_turn(root)) @ dprob_math_C
+    return turn @ g @ np.linalg.inv(b)
 
 
 def _dprob_state(obj, el_rotation, unity_from_blender, rest_rotation):
@@ -369,7 +407,9 @@ def check(root, path=None, samples=3, seed=1):
                     value = rng.uniform(*lim)
                 rig_props.set_preview_value(o, value)
             bpy.context.view_layer.update()
-            states = {elements[o.name]["Id"]: _dprob_state(o, fbx_elements[o.name].rotation, ufb, rest_rotations[o])
+            turn_u = dprob_math_C @ _np(rig_props.forward_turn(root)) @ dprob_math_C
+            states = {elements[o.name]["Id"]: _dprob_state(o, turn_u @ fbx_elements[o.name].rotation, ufb,
+                                                           rest_rotations[o])
                       for o in jointed}
             worlds = dprob_math.element_world_matrices(model["HierarchyRoots"], states)
             for o in objs:

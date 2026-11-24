@@ -734,3 +734,68 @@ class AimTest(IkTestCase):
             self.assertAlmostEqual(moves[ids[name]], float(values[name]), places=4, msg=name)
         macros = [n.get("MacroId") for n in cap["Implementation"]["GraphData"]["Nodes"]]
         self.assertIn(ik_capability.SIGNED_ANGLE_MACRO, macros)
+
+
+class ForwardTest(IkTestCase):
+    def test_model_facing_x(self):
+        """A model whose front points along Blender +X: with Forward +X the export turns it so its
+        front is dProB's forward (+Z) and Blender's up is dProB's up (+Y); verify and the IK
+        capability still match Blender."""
+        root = truck_crane()                        # its boom points along -Y
+        root.rotation_euler = (0, 0, math.radians(90))   # now along +X... and the front (+Y) along -X
+        bpy.context.view_layer.update()
+        root.bii_rig.forward = "NEG_X"
+        rig.set_ik_target("HookPoint", orientation_weight=0.001)
+        rig.export(root, self.path)
+        self.assertLess(rig.verify(root)["max_error"], 1e-4)
+        model = dequip_format.read(self.path).model
+        ids = {e["Name"]: e["Id"] for e in dequip_format.walk(model["HierarchyRoots"])}
+        worlds = dprob_math.element_world_matrices(model["HierarchyRoots"])
+        hook = worlds[ids["HookPoint"]][:3, 3]
+        # the boom points backwards in the model (-Y as modeled = away from the front): dProB -Z
+        self.assertLess(hook[2], -4.0)
+        self.assertAlmostEqual(hook[0], 0.0, places=3)
+        self.assertGreater(hook[1], 1.0)           # up stays up
+        setup = ik_chain.Setup("HookPoint")
+        dest = setup.current_pose().copy()
+        dest[:3, 3] += (1.0, 1.0, 1.0)
+        values, pos_err, _ = setup.solve(dest, position_only=True)
+        self.assertLess(pos_err, 0.001)
+        state = {k: 0.0 for k in ik_solver.rig_from_model(model["HierarchyRoots"])[0]}
+        moves = ik_capability.simulate(model["CustomCapabilities"][0], model, dest, state,
+                                       inputs={"Position Only": True})
+        for name in ("Boom", "Tele", "Hook"):
+            self.assertAlmostEqual(moves[ids[name]], float(values[name]), places=4, msg=name)
+
+    def test_default_front_is_plus_y(self):
+        root = truck_crane()
+        rig.export(root, self.path)
+        model = dequip_format.read(self.path).model
+        ids = {e["Name"]: e["Id"] for e in dequip_format.walk(model["HierarchyRoots"])}
+        hook = dprob_math.element_world_matrices(model["HierarchyRoots"])[ids["HookPoint"]][:3, 3]
+        self.assertLess(hook[2], -4.0)             # Blender -Y is dProB -Z (behind)
+        self.assertGreater(hook[1], 1.0)           # Blender +Z is dProB +Y (up)
+
+
+class ApiAdditionsTest(IkTestCase):
+    def test_add_point_world_axis_forward_and_follower_range(self):
+        root = truck_crane()
+        name = rig.add_point("Saddle", "Hook", (0, -6, 2.3), axes_from=root)
+        p = bpy.data.objects[name]
+        self.assertTrue(p.bii_rig.attachment_point)
+        self.assertEqual(p.bii_rig.joint_type, "FIXED")
+        self.assertIs(p.parent, bpy.data.objects["Hook"])
+        self.assertLess((p.matrix_world.translation - Matrix.Translation((0, -6, 2.3)).translation).length, 1e-6)
+        # a rotated part, axis given in world space
+        arm = cube("Arm2", (2, 0, 3), root, rot=(0.3, 0.2, 0.9))
+        rig.set_joint(arm, "REVOLUTE", axis_world=(1, 0, 0), limits=(-10, 10))
+        ax = rig.describe_joint(arm)["axis_world"]
+        self.assertLess(max(abs(a - b) for a, b in zip(ax, (1, 0, 0))), 1e-5)
+        rig.set_forward(root, "-X")
+        self.assertEqual(rig.describe(root)["forward"], "-X")
+        with self.assertRaises(ValueError):
+            rig.set_forward(root, "up")
+        # a follower that its leader drives beyond its limits
+        self.assertFalse([t for t in rig.problems(root) if "beyond its limits" in t])
+        rig.set_joint("Reversal", "REVOLUTE", limits=(0, 40))
+        self.assertTrue([t for t in rig.problems(root) if "beyond its limits" in t])

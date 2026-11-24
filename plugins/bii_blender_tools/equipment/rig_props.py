@@ -454,6 +454,22 @@ def _leader_poll(self, obj):
     return obj.bii_rig.joint_type in ("REVOLUTE", "PRISMATIC")
 
 
+FORWARD_ITEMS = [
+    ("POS_Y", "+Y", "The model's front points along Blender +Y"),
+    ("NEG_Y", "-Y", "The model's front points along Blender -Y"),
+    ("POS_X", "+X", "The model's front points along Blender +X"),
+    ("NEG_X", "-X", "The model's front points along Blender -X"),
+]
+_FORWARD_ANGLE = {"POS_Y": 0.0, "NEG_Y": math.pi, "POS_X": math.pi / 2, "NEG_X": -math.pi / 2}
+
+
+def forward_turn(root):
+    """3x3 rotation about Blender Z (through the root's origin) that turns the model's front to
+    +Y, which the export maps to dProB's forward (+Z; +Z up becomes dProB's +Y)."""
+    a = _FORWARD_ANGLE.get(root.bii_rig.forward, 0.0)
+    return Matrix.Rotation(a, 3, "Z")
+
+
 def _hook_poll(self, obj):
     return obj.bii_rig.attachment_point and rig_root(obj) is self.id_data
 
@@ -482,6 +498,10 @@ class BiiRigSettings(bpy.types.PropertyGroup):
                     "(scripted in dProB) and replace only the model and joints")
     show_axes: bpy.props.BoolProperty(
         name="Show Joints", default=True, description="Draw the joint axes and limits in the viewport")
+    forward: bpy.props.EnumProperty(
+        name="Forward", items=FORWARD_ITEMS, default="POS_Y",
+        description="Where the model's front points in Blender. The export turns the equipment so "
+                    "its front is dProB's forward (+Z) and Blender's +Z is dProB's up (+Y)")
     crane_hook: bpy.props.PointerProperty(
         name="Crane Hook", type=bpy.types.Object, poll=_hook_poll,
         description="Attachment point with an IK capability that is the crane's hook. The export "

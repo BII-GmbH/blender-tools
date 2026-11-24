@@ -63,20 +63,22 @@ class Space:
         self.worlds = worlds or rest_worlds(root)
         self.origin = self.worlds[root][:3, 3].copy()
         self.k = unit_scale()
+        self.F = _np(rig_props.forward_turn(root))          # model front -> Blender +Y
 
     def pose(self, world):
         """dProB element frame (4x4 rigid) for a Blender world matrix."""
         w = np.asarray(world, dtype=float)
+        r = self.F @ w[:3, :3]
         m = np.eye(4)
-        m[:3, :3] = dprob_math.look_rotation_safe(C @ w[:3, 2], C @ w[:3, 1])
-        m[:3, 3] = C @ (w[:3, 3] - self.origin) * self.k
+        m[:3, :3] = dprob_math.look_rotation_safe(C @ r[:, 2], C @ r[:, 1])
+        m[:3, 3] = C @ (self.F @ (w[:3, 3] - self.origin)) * self.k
         return m
 
     def world(self, pose):
         """Blender world matrix (rigid, no scale) for a dProB element frame."""
         m = np.eye(4)
-        m[:3, :3] = C.T @ pose[:3, :3] @ D
-        m[:3, 3] = C.T @ pose[:3, 3] / self.k + self.origin
+        m[:3, :3] = self.F.T @ C.T @ pose[:3, :3] @ D
+        m[:3, 3] = self.F.T @ (C.T @ pose[:3, 3]) / self.k + self.origin
         return m
 
     def rest_pose(self, obj):
@@ -98,7 +100,7 @@ class Space:
         if j.joint_type == "BALL":
             return ik_solver.Joint(obj.name, "BALL", initial_pose=initial_pose)
         rot = self.rest_pose(obj)[:3, :3]
-        u = C @ self.world_axis(obj)
+        u = C @ self.F @ self.world_axis(obj)
         local = rot.T @ (u / np.linalg.norm(u))
         if j.joint_type == "REVOLUTE":
             return ik_solver.Joint(obj.name, "REVOLUTE", -local, rig_props.limits(j), initial_pose)

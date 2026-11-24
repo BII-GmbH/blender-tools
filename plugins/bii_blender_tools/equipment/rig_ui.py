@@ -262,6 +262,7 @@ class VIEW3D_PT_bii_rig(bpy.types.Panel):
         row.operator("bii_rig.remove_root", text="", icon="X")
         joints = rig_props.joints(root)
         layout.label(text=f"{len(rig_props.rig_objects(root))} parts, {len(joints)} joints")
+        layout.prop(r, "forward")
         layout.prop(r, "show_axes")
         if not joints:
             layout.label(text="Give parts a joint in the Joint panel.", icon="INFO")
