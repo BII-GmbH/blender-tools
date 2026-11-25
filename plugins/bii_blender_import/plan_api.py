@@ -249,6 +249,7 @@ def align_by_km(obj, km_points, strecke=None, unit='SHEET', replace=True, force=
     if _run(obj, bpy.ops.bii_plan.align_km) != {'FINISHED'}:
         raise ValueError(f"{obj.name}: Align by Kilometrierung failed: {place.report}")
     bpy.context.view_layer.update()
+    _record(obj, "km", points=len(km_points))
     return place.report.splitlines()
 
 
@@ -1047,6 +1048,264 @@ def check_placement(obj, cell=1.0, max_shift=15.0, scene=None):
             out.append(compare(obj, ref, cell, max_shift, scene))
         except ValueError:
             continue
+    return out
+
+
+# ---------------------------------------------------------------- fit to placed plans
+
+def grid_placed(obj):
+    """True if the plan is placed by its coordinate grid (find_grid/georeference, or Place in
+    Scene by two or more grid crosses): the most accurate placement there is."""
+    rec = placement(obj)
+    if rec:
+        return rec.get("method") == "grid"
+    return len(obj.bii_plan.points) >= 2
+
+
+def _neutral_ink(obj, cell, scale):
+    """Ink of the plan pooled to about cell meters: dark, not colored pixels (red or blue
+    symbols of a Signallageplan are not on the plans below). (mask, k, w, h)."""
+    rgb = _rgb(obj).astype(np.int16)
+    r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    sat = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
+    ink = ((r + g + b) < 3 * INK_LEVEL) & (sat < 60)
+    h, w = ink.shape
+    k = max(1, int(cell / scale / (obj.bii_plan.width / w)))
+    if k > 1:
+        hh, ww = (h // k) * k, (w // k) * k
+        ink = ink[:hh, :ww].reshape(hh // k, k, ww // k, k).any(axis=(1, 3))
+    return ink, k, w, h
+
+
+def _ink_at(obj, pooled, grid, m):
+    """(ink, valid) of the plan on the grid as if its matrix were m."""
+    pg = obj.bii_plan
+    ink, k, w, h = pooled
+    ph, pw = ink.shape
+    inv = m.inverted()
+    X, Y = grid.centers()
+    z = (m @ Vector((0.0, 0.0, 0.0))).z
+    sx = inv[0][0] * X + inv[0][1] * Y + inv[0][2] * z + inv[0][3]
+    sy = inv[1][0] * X + inv[1][1] * Y + inv[1][2] * z + inv[1][3]
+    x0, y0, x1, y1 = crop_rectangle(obj)
+    valid = (sx >= x0) & (sx <= x1) & (sy >= y0) & (sy <= y1)
+    col = np.clip((sx / pg.width * w / k).astype(int), 0, pw - 1)
+    row = np.clip(((pg.height - sy) / pg.height * h / k).astype(int), 0, ph - 1)
+    return (ink[row, col] & valid).astype(np.float32), valid, sx, sy
+
+
+def _dilate(mask, r):
+    """Square dilation of a bool mask by r cells."""
+    for axis in (0, 1):
+        out = mask.copy()
+        for d in range(1, r + 1):
+            if axis == 0:
+                out[d:, :] |= mask[:-d, :]
+                out[:-d, :] |= mask[d:, :]
+            else:
+                out[:, d:] |= mask[:, :-d]
+                out[:, :-d] |= mask[:, d:]
+        mask = out
+    return mask
+
+
+def _segment_shifts(obj, pooled, m, grid, ref, ref_valid, length, search, blur, min_score):
+    """Cut the plan into pieces of about length meters along its long side and match each on the
+    reference ink: [(center world (x, y), shift (dx, dy), along_deg or None, score)]. along_deg:
+    the piece shows only straight track, so its shift along that direction is not fixed."""
+    ink, valid, sx, sy = _ink_at(obj, pooled, grid, m)
+    x0, y0, x1, y1 = crop_rectangle(obj)
+    scale = (m.to_3x3() @ Vector((1.0, 0.0, 0.0))).length
+    long_x = (x1 - x0) >= (y1 - y0)
+    lo_all, hi_all, coord = (x0, x1, sx) if long_x else (y0, y1, sy)
+    n = max(1, int(round((hi_all - lo_all) * scale / length)))
+    s = int(math.ceil(search / grid.cell))
+    out = []
+    for i in range(n):
+        lo = lo_all + (hi_all - lo_all) * i / n
+        hi = lo_all + (hi_all - lo_all) * (i + 1) / n
+        part = valid & ref_valid & (coord >= lo) & (coord < hi)
+        if part.sum() * grid.cell ** 2 < 200:
+            continue
+        rows, cols = np.nonzero(part)
+        r0, r1 = max(0, rows.min() - s), min(grid.ny, rows.max() + s + 1)
+        c0, c1 = max(0, cols.min() - s), min(grid.nx, cols.max() + s + 1)
+        p = part[r0:r1, c0:c1]
+        b = _blur(np.where(p, ink[r0:r1, c0:c1], 0.0), blur)
+        a = ref[r0:r1, c0:c1] * (_blur(p.astype(np.float32), 3) > 0.01)
+        surface, off = _correlate(a, b, s)
+        peak = np.unravel_index(int(np.argmax(surface)), surface.shape)
+        score = float(surface[peak])
+        if score < min_score or max(abs(peak[0] - off), abs(peak[1] - off)) >= s - 1:
+            continue
+        along, _ = _ambiguity(surface, peak, grid.cell)
+        cu = (lo + hi) / 2
+        cv = float(np.mean((sy if long_x else sx)[part]))
+        c = m @ Vector((cu, cv, 0.0) if long_x else (cv, cu, 0.0))
+        out.append(((c.x, c.y), ((peak[1] - off) * grid.cell, (peak[0] - off) * grid.cell), along, score))
+    return out
+
+
+def _solve_rigid(pieces, pivot, tolerance, prior=0.1):
+    """Least squares shift (dx, dy) and turn (radians, about pivot) from the pieces' shifts; for a
+    piece on straight track only its shift across the track counts. A weak pull towards no change
+    keeps a direction no piece fixes as it is. Drops outliers one by one. None if too few."""
+    use = list(range(len(pieces)))
+    radius = max((math.hypot(c[0] - pivot[0], c[1] - pivot[1]) for c, *_ in pieces), default=1.0) or 1.0
+
+    def rows(i):
+        (cx, cy), (mx, my), along, _ = pieces[i]
+        rx, ry = cx - pivot[0], cy - pivot[1]
+        if along is None:
+            dirs = [(1.0, 0.0), (0.0, 1.0)]
+        else:
+            t = math.radians(along)
+            dirs = [(-math.sin(t), math.cos(t))]
+        return [([nx, ny, -nx * ry + ny * rx], nx * mx + ny * my) for nx, ny in dirs]
+
+    while len(use) >= 3:
+        eqs = [e for i in use for e in rows(i)]
+        a = np.array([e[0] for e in eqs] + [[prior, 0, 0], [0, prior, 0], [0, 0, prior * radius]])
+        b = np.array([e[1] for e in eqs] + [0.0, 0.0, 0.0])
+        sol = np.linalg.lstsq(a, b, rcond=None)[0]
+        errors = [(max(abs(np.dot(co, sol) - v) for co, v in rows(i)), i) for i in use]
+        worst = max(errors)
+        if worst[0] <= tolerance:
+            rms = math.sqrt(sum(e * e for e, _ in errors) / len(errors))
+            return sol, use, rms
+        use.remove(worst[1])
+    return None
+
+
+def _turn_about(pivot, angle, shift=(0.0, 0.0)):
+    from mathutils import Matrix
+    t = Matrix.Translation(Vector((pivot[0], pivot[1], 0.0)))
+    return Matrix.Translation(Vector((shift[0], shift[1], 0.0))) @ t @ Matrix.Rotation(angle, 4, 'Z') @ t.inverted()
+
+
+def fit_to_plans(obj, references=None, apply=True, force=False, cell=0.5, max_shift=30.0, piece=120.0,
+                 corridor=12.0, tolerance=1.0, min_score=0.25, scene=None):
+    """Fit a flat plan onto plans placed by their grid that lie under it (e.g. a Signallageplan
+    placed roughly by Kilometrierung over scanned Lagepläne): moves and turns it, never scales.
+
+    The plan is cut into pieces of about piece meters along its long side; each piece's dark,
+    uncolored ink (track lines, not the red or blue symbols) is matched on the ink of the
+    references, within corridor meters of the BII Umgebung track axes if the scene has any. The
+    pieces' shifts give one move and turn by least squares; a piece on straight track only counts
+    across the track. This is done from the plan's place and from two places moved and turned
+    away from it: only what all three agree on within tolerance meters is used.
+    - across the track (and the turn): applied when the three agree;
+    - along the track: applied only when the three agree as well (curves, switches or other
+      features fix it); else the plan keeps its place along the track (e.g. from the
+      Kilometrierung), and "along_fixed" is False.
+    references: plan objects; default: the flat plans placed by their grid that overlap it.
+    apply=False only reports. A plan placed by its grid is not moved unless force=True.
+    Returns a dict: references, applied, across_fixed, along_fixed, move (dx, dy at the plan's
+    center), turn_deg, pieces (used, of), rms, spread_across, spread_along, message."""
+    from mathutils import Matrix
+    scene = scene or bpy.context.scene
+    pg = obj.bii_plan
+    if pg.orientation != 'FLAT':
+        raise ValueError(f"{obj.name} is not a flat plan")
+    if apply:
+        _guard(obj, force)
+    quad = footprint(obj)
+    if references is None:
+        references = [o for o in plans(scene) if o is not obj and o.bii_plan.orientation == 'FLAT'
+                      and grid_placed(o) and _overlap_area(quad, footprint(o)) > 1.0]
+    if not references:
+        raise ValueError(f"{obj.name}: no plan placed by its grid lies under it")
+    start = 8.0                                   # the two other starts: moved this far and
+    start_turn = math.radians(0.3)                # turned this much
+    pad = max_shift + start + 10.0
+    box = _bounds(quad)
+    box = (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)
+    while ((box[2] - box[0]) / cell) * ((box[3] - box[1]) / cell) > MAX_CELLS:
+        cell *= 1.25
+    grid = _Grid(box, cell)
+    ref = np.zeros((grid.ny, grid.nx), np.float32)
+    ref_valid = np.zeros((grid.ny, grid.nx), bool)
+    for o in references:
+        scale_o = (o.matrix_world.to_3x3() @ Vector((1.0, 0.0, 0.0))).length
+        ink, valid, _, _ = _ink_at(o, _neutral_ink(o, cell, scale_o), grid, o.matrix_world)
+        ref = np.maximum(ref, ink)
+        ref_valid |= valid
+    if corridor and plan_place.track_polylines(scene, ""):
+        ref_valid &= _dilate(_track_ink(scene, grid, width=0.0)[0] > 0, int(corridor / cell))
+    ref = _blur(np.where(ref_valid, ref, 0.0), 2)
+    m0 = obj.matrix_world.copy()
+    scale = (m0.to_3x3() @ Vector((1.0, 0.0, 0.0))).length
+    pooled = _neutral_ink(obj, cell, scale)
+    x0, y0, x1, y1 = crop_rectangle(obj)
+    center = m0 @ Vector(((x0 + x1) / 2, (y0 + y1) / 2, 0.0))
+    pivot = (center.x, center.y)
+    long_x = (x1 - x0) >= (y1 - y0)
+    axis = (m0.to_3x3() @ Vector((1.0, 0.0, 0.0) if long_x else (0.0, 1.0, 0.0))).to_2d().normalized()
+    across_dir = Vector((-axis.y, axis.x))
+
+    def run(begin):
+        total = begin.copy()
+        info = None
+        for search in (max_shift, 8.0, 4.0):
+            pieces = _segment_shifts(obj, pooled, total @ m0, grid, ref, ref_valid, piece, search, 2, min_score)
+            got = _solve_rigid(pieces, pivot, max(tolerance, 1.5))
+            if got is None:
+                return None, (0, len(pieces), None)
+            sol, used, rms = got
+            total = _turn_about(pivot, float(sol[2]), (float(sol[0]), float(sol[1]))) @ total
+            info = (len(used), len(pieces), rms)
+        return total, info
+
+    starts = [Matrix.Identity(4),
+              _turn_about(pivot, start_turn, (axis * start + across_dir * start).to_tuple()),
+              _turn_about(pivot, -start_turn, (-axis * start - across_dir * start).to_tuple())]
+    results = [run(s) for s in starts]
+    corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+
+    def world_corners(t):
+        return [(t @ m0 @ Vector((x, y, 0.0))).to_2d() for x, y in corners]
+
+    out = {"references": [o.name for o in references], "applied": False, "across_fixed": False,
+           "along_fixed": False, "move": (0.0, 0.0), "turn_deg": 0.0, "pieces": (0, 0), "rms": None,
+           "spread_across": None, "spread_along": None}
+    first, info = results[0]
+    if info:
+        out["pieces"], out["rms"] = info[:2], info[2]
+    others = [t for t, _ in results[1:] if t is not None]
+    if first is None or not others:
+        out["message"] = (f"{obj.name}: too few pieces of the plan match the plans under it "
+                          f"(from its place: {info[0]} of {info[1]} pieces"
+                          + ("" if first is None else "; from the other starts: no match") + "); not moved")
+        return out
+    out["starts"] = 1 + len(others)
+    c0 = world_corners(first)
+    out["spread_across"] = max(abs((a - b).dot(across_dir)) for t in others for a, b in zip(c0, world_corners(t)))
+    out["spread_along"] = max(abs((a - b).dot(axis)) for t in others for a, b in zip(c0, world_corners(t)))
+    out["across_fixed"] = out["spread_across"] <= tolerance
+    out["along_fixed"] = out["across_fixed"] and out["spread_along"] <= tolerance
+    if not out["across_fixed"]:
+        out["message"] = (f"{obj.name}: the match depends on where it starts (differs by "
+                          f"{out['spread_across']:.1f} m across the track); not moved")
+        return out
+    final = first
+    moved = (first @ center).to_2d() - center.to_2d()
+    if not out["along_fixed"]:
+        # keep the place along the track: take back the move along the plan's long side
+        final = Matrix.Translation(Vector((*(-axis * moved.dot(axis)), 0.0))) @ first
+        moved = (final @ center).to_2d() - center.to_2d()
+    out["move"] = (moved.x, moved.y)
+    out["turn_deg"] = math.degrees(final.to_euler().z)
+    worst = max((a - b).length for a, b in zip(world_corners(final), world_corners(Matrix.Identity(4))))
+    out["message"] = (f"{obj.name}: moved {moved.length:.1f} m, turned {out['turn_deg']:+.2f}° "
+                      f"(corners up to {worst:.1f} m) onto {len(references)} plan(s); "
+                      + ("along the track fixed by the drawing" if out["along_fixed"] else
+                         "along the track kept as it was (straight track: not fixed by the drawing)"))
+    if apply:
+        obj.matrix_world = final @ m0
+        bpy.context.view_layer.update()
+        out["applied"] = True
+        _record(obj, "fit_to_plans", references=out["references"], move=[round(v, 2) for v in out["move"]],
+                turn_deg=round(out["turn_deg"], 3), along_fixed=out["along_fixed"], before=placement(obj))
     return out
 
 

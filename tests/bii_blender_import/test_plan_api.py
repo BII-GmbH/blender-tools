@@ -216,6 +216,81 @@ class PlanApiTest(unittest.TestCase):
         self.assertLess((got - want).xy.length, 0.01)
         self.assertEqual(b.bii_plan_place.attach_parent, self.plan)
 
+    def _plan_b(self, track=TRACK, red=True):
+        """Plan B: the drawing of plan A without its frame, with red symbols A does not have."""
+        png_b = os.path.join(self._dir.name, "Plan B.png")
+        image = Image.new("RGB", (W, H), (255, 255, 255))
+        d = ImageDraw.Draw(image)
+        d.line(track, fill=(0, 0, 0), width=3)
+        for x in range(200, 1000, 160):
+            d.rectangle((x, 330, x + 40, 345), fill=(0, 0, 0))
+        if red:
+            for x in range(260, 1000, 120):
+                d.rectangle((x, 250, x + 12, 290), fill=(230, 0, 0))
+        image.save(png_b, dpi=(DPI, DPI))
+        bpy.ops.import_image.bii_plan(filepath=png_b, massstab=1000, background=1.0)
+        return bpy.context.view_layer.objects.active
+
+    def _corner_error(self, b, want):
+        x0, y0, x1, y1 = plan_api.crop_rectangle(b)
+        return max((b.matrix_world @ Vector((x, y, 0)) - want @ Vector((x, y, 0))).length
+                   for x, y in ((x0, y0), (x1, y0), (x1, y1), (x0, y1)))
+
+    def _turn(self, obj, dx, dy, deg):
+        c = plan_api.plan_to_world(obj, W / 2, H / 2, 'IMAGE')
+        obj.matrix_world = plan_api._turn_about((c.x, c.y), math.radians(deg), (dx, dy)) @ obj.matrix_world
+        bpy.context.view_layer.update()
+
+    def test_fit_to_plans(self):
+        plan_api._record(self.plan, "grid")
+        b = self._plan_b()
+        b.matrix_world = self.plan.matrix_world.copy()
+        want = b.matrix_world.copy()
+        self._turn(b, 3.0, -2.0, 0.6)
+        self.assertGreater(self._corner_error(b, want), 3.0)
+        r = plan_api.fit_to_plans(b, piece=60.0)
+        self.assertTrue(r["applied"], r["message"])
+        self.assertTrue(r["along_fixed"])           # the track bends: both directions are fixed
+        self.assertEqual(r["references"], [self.plan.name])
+        self.assertLess(self._corner_error(b, want), 0.6)
+        self.assertEqual(plan_api.placement(b)["method"], "fit_to_plans")
+        # the grid-placed plan is not moved by it, and a plan with nothing under it is refused
+        with self.assertRaises(ValueError):
+            plan_api.fit_to_plans(self.plan)
+        b.location.x += 5000
+        bpy.context.view_layer.update()
+        with self.assertRaises(ValueError):
+            plan_api.fit_to_plans(b)
+
+    def test_fit_to_plans_straight_track(self):
+        # a straight track only fixes the place across it: along it the plan stays where it was
+        def draw(name, red):
+            png = os.path.join(self._dir.name, name)
+            image = Image.new("RGB", (W, H), (255, 255, 255))
+            d = ImageDraw.Draw(image)
+            d.line([(100, 250), (1100, 250)], fill=(0, 0, 0), width=3)      # two tracks, 9 m apart
+            d.line([(100, 285), (1100, 285)], fill=(0, 0, 0), width=3)
+            for x in range(260, 1000, 120) if red else ():
+                d.rectangle((x, 200, x + 12, 240), fill=(230, 0, 0))
+            image.save(png, dpi=(DPI, DPI))
+            bpy.ops.import_image.bii_plan(filepath=png, massstab=1000, background=1.0)
+            return bpy.context.view_layer.objects.active
+
+        a = draw("Straight A.png", False)
+        plan_api._record(a, "grid")
+        a.location.x += 1000          # away from plan A of setUp
+        bpy.context.view_layer.update()
+        b = draw("Straight B.png", True)
+        b.matrix_world = a.matrix_world.copy()
+        want = b.matrix_world.copy()
+        self._turn(b, 4.0, 2.0, 0.0)  # 4 m along the track, 2 m across it
+        r = plan_api.fit_to_plans(b, references=[a], piece=60.0)
+        self.assertTrue(r["across_fixed"], r["message"])
+        self.assertFalse(r["along_fixed"])
+        d = b.matrix_world.translation - want.translation
+        self.assertAlmostEqual(d.y, 0.0, delta=0.5)      # across: fitted
+        self.assertAlmostEqual(d.x, 4.0, delta=0.5)      # along: kept
+
     def test_operators(self):
         self.assertEqual(bpy.ops.bii_plan.auto_crop(), {'FINISHED'})
         self.assertLess(plan_api.crop_rectangle(self.plan)[2], self.plan.bii_plan.width)

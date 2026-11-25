@@ -181,6 +181,7 @@ plan_api.groups_without_signal(plan)               # red symbol groups with no p
 plan_api.align_to_scene(plan, [(u, v, (x, y, z)), ...], 'PDF')  # points onto scene points
 plan_api.attach_to_neighbor(plan, other, [(u1, v1), (u2, v2)], [(u1, v1), (u2, v2)], 'IMAGE')
 plan_api.align_by_km(plan, [(u, v, "5,3"), (u, v, "5,4")], strecke="5240")
+plan_api.fit_to_plans(plan, apply=False)            # move/turn onto the grid-placed plans under it
 plan_api.crop(plan, 63.5, 318.5, 2187, 603.5, 'PDF')
 plan_api.auto_crop(plan)
 for r in plan_api.check_placement(plan):            # dicts: shift, distance, score, reliable, along_deg
@@ -189,6 +190,8 @@ plan_api.overlay(plan, other, center_xy, "check.png")  # red: plan, blue: other 
 ```
 
 A plan placed by its grid is not moved by `align_to_scene`, `attach_to_neighbor` or `align_by_km` unless they get `force=True`. `plan_api.placement(plan)` says how a plan was placed last (method, numbers, residuals). `validate()` checks the Maßstab and residuals, that every coordinate number used lies on its own grid line, the Kilometrierung residuals, the overlaps with the other plans (a sheet that overlaps no plan while its neighbors lie close is suspicious), the drawings against plans and track axes, and that the plan lies above the terrain.
+
+`fit_to_plans(plan)` moves and turns a flat plan (never scales it) onto the plans placed by their grid that lie under it, for a plan without a grid that was placed roughly, e.g. by Kilometrierung. It cuts the plan into pieces of about 120 m, matches each piece's dark, uncolored lines (not the red or blue symbols) on the plans below, near the BII Umgebung track axes if there are any, and solves one move and turn from the pieces. On straight track a piece only counts across the track. It does this from the plan's place and from two places moved and turned away from it, and uses only what all three agree on within 1 m: across the track and the turn when they agree; along the track only when the drawing fixes it too (curves, switches), else the plan keeps its place along the track. When they do not agree, the plan is not moved. `apply=False` only reports; the result says what was fixed (`across_fixed`, `along_fixed`), the move, the turn and the spread of the three starts.
 
 Import with Turn (0°, 90° clockwise, 180°, 90° counterclockwise) for scans lying on their side or upside down; `'SOURCE'` pixels stay those of the original file.
 
