@@ -41,7 +41,7 @@ import uuid
 
 import numpy as np
 
-from . import dprob_math, ik_solver
+from . import dprob_math, ik_solver, sample_graphs
 
 ISO_OID = uuid.UUID("6ba7b812-9dad-11d1-80b4-00c04fd430c8")
 GRID = 32                     # NodeEditorUiConstants.GridSize: editor positions are pixels
@@ -79,11 +79,10 @@ FOR_EACH_INDEX = "c81b083a-0a0b-43fd-9f63-629e942f8f18"
 SELF_NAME_KEY = "BII.ScriptableTemplates.Capabilities.SelfInput"
 SELF_DESCRIPTION_KEY = "BII.ScriptableTemplates.Capabilities.SelfInputDescription"
 
-with open(__import__("os").path.join(__import__("os").path.dirname(__file__), "rotate_joint_function.json"),
-          encoding="utf-8") as _f:
-    ROTATE_JOINT = __import__("json").load(_f)       # LocalFunctionAssetModel from dProB's sample crane
-ROTATE_JOINT_JOINT, ROTATE_JOINT_ANGLE, ROTATE_JOINT_DURATION = (i["Id"]["Guid"] for i in ROTATE_JOINT["Inputs"])
-ROTATE_JOINT_PROCESS = ROTATE_JOINT["GraphData"]["Outputs"][0]["Id"]["Guid"]
+ROTATE_JOINT = sample_graphs.rotate_joint()        # LocalFunctionAssetModel from dProB's sample crane
+ROTATE_JOINT_JOINT, ROTATE_JOINT_ANGLE, ROTATE_JOINT_DURATION, ROTATE_JOINT_PROCESS = (
+    sample_graphs.ROTATE_JOINT_JOINT, sample_graphs.ROTATE_JOINT_ANGLE, sample_graphs.ROTATE_JOINT_DURATION,
+    sample_graphs.ROTATE_JOINT_PROCESS)
 
 
 def port(name):

@@ -8,8 +8,8 @@ export adds the Crane type's three capabilities:
   dProB's crane). The hook's frame has the equipment's axes at rest (rig_api.align_to_equipment),
   so the rotations Lift and Deliver pass, with dProB's up as up, are ones the hook can take: it
   turns about up (hook swivel or slewing) to the cargo's rotation.
-- Lift and Deliver: dProB's own implementations, copied from a sample crane
-  (crane_templates.json), with their attachment point replaced by the hook. They attach and
+- Lift and Deliver: dProB's own implementations from a sample crane (sample_graphs.py), with
+  their attachment point replaced by the hook. They attach and
   detach the cargo and move the arm by invoking the Crane's Move Arm, so they use the wrapper.
   Lift without a hook offset puts the hook above the cargo turned like the cargo (the sample
   used identity), so Deliver later turns the cargo as asked and Move Arm keeps the hook's heading.
@@ -18,31 +18,17 @@ Lift and Deliver keep the cargo in two equipment state variables, "Current Cargo
 "Current Cargo Hook Offset"; the export adds them (same ids as in dProB's samples).
 """
 
-import json
-import os
 import uuid
 
-from . import ik_capability
+from . import ik_capability, sample_graphs
 
 CRANE_TYPE = {"Identifier": {"Id": "Crane"}, "$case": "BuiltIn"}
-MOVE_ARM = "00000000-0000-8000-8000-000000000001"
-LIFT = "00000000-0000-8000-8000-000000000002"
-DELIVER = "00000000-0000-8000-8000-000000000003"
+MOVE_ARM, LIFT, DELIVER = sample_graphs.MOVE_ARM, sample_graphs.LIFT, sample_graphs.DELIVER
 # the Crane type's Move Arm signature (built in): inputs Self, Destination (GlobalPose), Duration;
 # output Processes
-MOVE_ARM_OUTPUT = "e11ed511-9104-51d8-be5c-fdf6acd9f01b"
+MOVE_ARM_OUTPUT = sample_graphs.PROCESSES_OUTPUT
 PROCESSES_KEY = "BII.ScriptableEquipment.EquipmentTypes.Crane.Processes"
 CRANE_ORIENTATION_WEIGHT = 0.001
-
-_TEMPLATES = os.path.join(os.path.dirname(__file__), "crane_templates.json")
-
-
-def _templates(hook_point_id, hook_name):
-    with open(_TEMPLATES, encoding="utf-8") as f:
-        text = f.read()
-    text = text.replace("{{HOOK_POINT_ID}}", hook_point_id).replace("{{HOOK_POINT_NAME}}", json.dumps(hook_name)[1:-1])
-    return json.loads(text)
-
 
 def _port(name):
     return ik_capability.port(name)
@@ -128,10 +114,10 @@ def move_arm_wrapper(equipment_id, capability):
 def apply(model, equipment_id, hook_element_id, hook_name, capability):
     """Adds the Crane type (Move Arm wrapper, Lift, Deliver) and its state variables to a model.json
     dict. capability: the hook's generated IK capability. Returns the names of the state variables."""
-    t = _templates(ik_capability.attachment_point_id(hook_element_id), hook_name)
     crane = {"EquipmentType": CRANE_TYPE, "Implementations": [
         move_arm_wrapper(equipment_id, capability),
-        t["Lift"], t["Deliver"]]}
+        sample_graphs.lift(ik_capability.attachment_point_id(hook_element_id), hook_name),
+        sample_graphs.deliver()]}
     model["EquipmentTypeImplementations"] = [crane]
-    model["StateVariables"] = list(t["StateVariables"])
+    model["StateVariables"] = sample_graphs.state_variables()
     return [v["Name"] for v in model["StateVariables"]]
