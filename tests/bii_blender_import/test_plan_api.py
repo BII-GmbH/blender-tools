@@ -291,6 +291,50 @@ class PlanApiTest(unittest.TestCase):
         self.assertAlmostEqual(d.y, 0.0, delta=0.5)      # across: fitted
         self.assertAlmostEqual(d.x, 4.0, delta=0.5)      # along: kept
 
+    def test_symbol_features(self):
+        # a Ks head 3 x 6 mm on a 6 mm leader with a chevron beyond it, drawn upright at 400 dpi,
+        # then turned by 35°; measured in every combination
+        mm = 400 / 25.4
+        red = (230, 0, 0)
+
+        def symbol(fill, chevron):
+            size = 900
+            image = Image.new("RGB", (size, size), (255, 255, 255))
+            d = ImageDraw.Draw(image)
+            cx, foot_y = size / 2, size / 2 + 10 * mm
+            d.line((cx - 1.5 * mm, foot_y, cx + 1.5 * mm, foot_y), fill=red, width=int(0.35 * mm))   # foot bar
+            d.line((cx, foot_y, cx, foot_y - 6 * mm), fill=red, width=int(0.35 * mm))                # leader
+            top, bottom = foot_y - 12 * mm, foot_y - 6 * mm
+            box = (cx - 1.5 * mm, top, cx + 1.5 * mm, bottom)
+            d.rounded_rectangle(box, radius=1.4 * mm, outline=red, width=int(0.35 * mm))
+            if fill == "stellwerk":
+                d.rounded_rectangle(box, radius=1.4 * mm, fill=red)
+            elif fill == "stellwerk_zug":
+                d.rectangle((cx - 1.5 * mm, top + 1.2 * mm, cx, bottom - 1.2 * mm), fill=red)
+            tip, arm = top - 2.5 * mm, 1.6 * mm
+            if chevron == "zs1":     # ^: tip away from the head
+                d.line((cx - arm, tip + 1.6 * mm, cx, tip, cx + arm, tip + 1.6 * mm), fill=red, width=int(0.3 * mm))
+            else:                    # V: tip towards the head
+                d.line((cx - arm, tip, cx, tip + 1.6 * mm, cx + arm, tip), fill=red, width=int(0.3 * mm))
+            image = image.rotate(35, center=(size / 2, size / 2), fillcolor=(255, 255, 255))
+            path = os.path.join(self._dir.name, f"sym_{fill}_{chevron}.png")
+            image.save(path, dpi=(400, 400))
+            a = math.radians(-35)          # PIL turns counterclockwise on screen (y down)
+
+            def turn(x, y):
+                x, y = x - size / 2, y - size / 2
+                return (size / 2 + x * math.cos(a) - y * math.sin(a), size / 2 + x * math.sin(a) + y * math.cos(a))
+            return path, turn(cx, foot_y), turn(cx, foot_y - 9 * mm)
+
+        for fill in ("stellwerk", "stellwerk_zug", "zug"):
+            for chevron in ("zs1", "zs7"):
+                path, foot, head = symbol(fill, chevron)
+                bpy.ops.import_image.bii_plan(filepath=path, massstab=1000, background=1.0)
+                plan = bpy.context.view_layer.objects.active
+                r = plan_api.symbol_features(plan, foot, head, 'IMAGE')
+                self.assertEqual((r["bedienung"], r["chevron"]), (fill, chevron), r)
+                self.assertAlmostEqual(r["length_mm"], 14.0, delta=1.5)
+
     def test_operators(self):
         self.assertEqual(bpy.ops.bii_plan.auto_crop(), {'FINISHED'})
         self.assertLess(plan_api.crop_rectangle(self.plan)[2], self.plan.bii_plan.width)

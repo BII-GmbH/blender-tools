@@ -89,6 +89,17 @@ Work on a crop turned upright (`up=`, see below): the plan draws symbols at any 
   with foot (fu, fv) and head (hu, hv) in IMAGE pixels. On a crop that is not upright a 6 and a 9
   look the same.
 
+Cross-check Bedienung and Zs1/Zs7 with a measurement on the plan's pixels (Ks signals):
+
+```python
+m = plan_api.symbol_features(plan, (fu, fv), (hu, hv), 'IMAGE')   # foot, a point towards the head
+# m["bedienung"], m["chevron"], m["rows"], m["sure"]
+```
+
+When `m["sure"]` is True and it differs from your reading, look at an upright crop of the head again
+(`scale=4`) and decide; say in the report where you went against the measurement and why. None
+means it could not measure: rely on your reading.
+
 Write down `bauform` and `config` with the values from the key, e.g.
 `("ks_mehr", {"bedienung": "stellwerk_zug", "zs3": "licht", "zs3v": "licht", "kopf": "ohne", "mast": False})`.
 Two triangles, one above and one below, means both `zs3` and `zs3v`. When a detail is unclear,

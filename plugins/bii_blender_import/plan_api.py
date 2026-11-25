@@ -367,6 +367,143 @@ def groups_without_signal(obj, color="red", points=None, margin=0.004, scene=Non
     return out
 
 
+def _symbol_frame(mask, px_per_mm, foot, head, length_mm=26.0, half_mm=5.0, step_mm=0.1):
+    """The mask sampled in the symbol's own frame: rows from the foot (row 0) towards the head and
+    beyond, columns across from -half_mm to +half_mm."""
+    ux, uy = head[0] - foot[0], head[1] - foot[1]
+    n = math.hypot(ux, uy) or 1.0
+    ux, uy = ux / n, uy / n
+    nx, ny = -uy, ux
+    s = np.arange(0.0, length_mm, step_mm) * px_per_mm
+    t = np.arange(-half_mm, half_mm + 1e-9, step_mm) * px_per_mm
+    S, T = np.meshgrid(s, t, indexing="ij")
+    X = np.round(foot[0] + S * ux + T * nx).astype(int)
+    Y = np.round(foot[1] + S * uy + T * ny).astype(int)
+    h, w = mask.shape
+    inside = (X >= 0) & (X < w) & (Y >= 0) & (Y < h)
+    out = np.zeros(S.shape, bool)
+    out[inside] = mask[Y[inside], X[inside]]
+    return out
+
+
+def _runs_of(row):
+    """(start, end) index pairs of the True runs in a 1-D bool array."""
+    d = np.diff(np.concatenate(([0], row.astype(np.int8), [0])))
+    return list(zip(np.nonzero(d == 1)[0], np.nonzero(d == -1)[0]))
+
+
+def symbol_features(obj, foot, head, unit='IMAGE', color="red", rgb=None):
+    """Measure a signal symbol on the plan instead of judging it by eye. foot: the foot bar's
+    center; head: any point further along the symbol's axis, towards its far end (both in unit).
+    Returns a dict:
+    - "bedienung": "stellwerk" (head completely filled), "stellwerk_zug" (one half filled along its
+      length), "zug" (empty) or None. Counted over the rows of the head's widest part: filled on
+      both sides, on one side only, or on neither. The rows of an Sh 1 part (bars and white fields)
+      are full or empty on both sides alike, so they do not look half filled;
+    - "rows": those counts; "sure": True when there are 15 rows or more and 80 % of them agree;
+    - "chevron": "zs1" (tip pointing away from the head), "zs7" (tip pointing towards the head) or
+      None, from how the two arms of the mark at the far end move apart;
+    - "length_mm": from the foot to the far end of the symbol.
+    A measurement, not a verdict: compare it with what you see, and look again where they differ.
+    rgb: the plan's pixels (_rgb(obj)), to measure many symbols without reading them each time."""
+    pg = obj.bii_plan
+    if rgb is None:
+        rgb = _rgb(obj)
+    mask = COLORS[color](rgb[..., 0].astype(int), rgb[..., 1].astype(int), rgb[..., 2].astype(int))
+    w = mask.shape[1]
+    px_per_mm = w / (pg.width * 1000.0)
+    f = from_sheet(obj, *to_sheet(obj, *foot, unit), 'IMAGE')
+    hd = from_sheet(obj, *to_sheet(obj, *head, unit), 'IMAGE')
+    # a foot point a little off the drawing: move it to the nearest red pixel within 1 mm
+    r = int(math.ceil(px_per_mm))
+    x0, y0 = int(round(f[0])), int(round(f[1]))
+    win = mask[max(0, y0 - r):y0 + r + 1, max(0, x0 - r):x0 + r + 1]
+    if win.any() and not mask[min(max(y0, 0), mask.shape[0] - 1), min(max(x0, 0), mask.shape[1] - 1)]:
+        ys, xs = np.nonzero(win)
+        k = int(np.argmin((ys + max(0, y0 - r) - y0) ** 2 + (xs + max(0, x0 - r) - x0) ** 2))
+        dx, dy = xs[k] + max(0, x0 - r) - x0, ys[k] + max(0, y0 - r) - y0
+        f, hd = (f[0] + dx, f[1] + dy), (hd[0] + dx, hd[1] + dy)
+    step = 0.1
+    fr = _symbol_frame(mask, px_per_mm, f, hd, step_mm=step)
+    mid = fr.shape[1] // 2
+    near = int(2.0 / step)                                   # the axis region: 2 mm each side
+    rows_with = np.nonzero(fr[:, mid - near:mid + near + 1].any(axis=1))[0]
+    out = {"bedienung": None, "rows": None, "chevron": None, "length_mm": 0.0, "sure": False}
+    if not len(rows_with):
+        return out
+    end = rows_with[0]
+    for r in rows_with[1:]:                                   # stays connected: gaps up to 1.5 mm
+        if r - end > int(1.5 / step):
+            break
+        end = r
+    sym = fr[:end + 1]
+    out["length_mm"] = round((end + 1) * step, 1)
+    extent = np.zeros(len(sym))
+    for i, row in enumerate(sym):
+        runs = [(a, b) for a, b in _runs_of(row) if b > mid - near and a < mid + near]
+        if runs:
+            extent[i] = (max(b for a, b in runs) - min(a for a, b in runs)) * step
+    if extent.max() < 1.5:
+        return out
+    # the head: the longest stretch of rows nearly as wide as the widest row, beyond the foot bar
+    skip = int(1.5 / step)
+    extent[:skip] = 0.0
+    if extent.max() < 1.5:
+        return out
+    wide = extent >= 0.8 * extent.max()
+    best, cur = (0, 0), None
+    for i, v in enumerate(np.append(wide, False)):
+        if v and cur is None:
+            cur = i
+        elif not v and cur is not None:
+            if i - cur > best[1] - best[0]:
+                best = (cur, i)
+            cur = None
+    both = one = neither = 0
+    rim = int(0.4 / step)                                      # the outline left out
+    for row in sym[best[0]:best[1]]:
+        runs = _runs_of(row)
+        if not runs:
+            continue
+        lo, hi = min(a for a, b in runs), max(b for a, b in runs)
+        inner_l = row[lo + rim:(lo + hi) // 2 - 1]
+        inner_r = row[(lo + hi) // 2 + 1:hi - rim]
+        if len(inner_l) < 3 or len(inner_r) < 3:
+            continue
+        fl, frr = float(inner_l.mean()), float(inner_r.mean())
+        if fl > 0.7 and frr > 0.7:
+            both += 1
+        elif max(fl, frr) > 0.7 and min(fl, frr) < 0.3:
+            one += 1
+        elif fl < 0.3 and frr < 0.3:
+            neither += 1
+    out["rows"] = {"both": both, "one": one, "neither": neither}
+    total = both + one + neither
+    out["sure"] = total >= 15 and max(both, one, neither) >= 0.8 * total
+    if total >= 5:
+        if one >= max(3, 0.3 * total):
+            out["bedienung"] = "stellwerk_zug"
+        elif both >= max(3, 0.3 * total):
+            out["bedienung"] = "stellwerk"
+        else:
+            out["bedienung"] = "zug"
+    # the chevron beyond the head: rows with two thin strokes; their distance grows towards the
+    # far end for a V opening outwards (Zs 7) and shrinks for a ^ (Zs 1)
+    # (only the last part, after the last empty row: not the rounded end of the head)
+    empty = [i for i in range(best[1], len(sym)) if not sym[i].any()]
+    seps = []
+    start = empty[-1] + 1 if empty else len(sym)
+    for i, row in enumerate(sym[start:]):
+        runs = [(a, b) for a, b in _runs_of(row) if b - a < int(1.5 / step)]
+        if len(runs) == 2 and len(_runs_of(row)) == 2:
+            seps.append((i * step, (runs[1][0] + runs[1][1] - runs[0][0] - runs[0][1]) / 2 * step))
+    if len(seps) >= 6:
+        slope = float(np.polyfit([a for a, _ in seps], [b for _, b in seps], 1)[0])
+        if abs(slope) > 0.3:
+            out["chevron"] = "zs7" if slope > 0 else "zs1"
+    return out
+
+
 def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0, up=None):
     """Write the part of the plan's image between two corners (in unit, plus pad image pixels) as
     PNG, e.g. one symbol for a closer look; scale > 1 enlarges it. Returns path.
