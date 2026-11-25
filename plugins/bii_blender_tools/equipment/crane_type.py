@@ -15,9 +15,7 @@ export adds the Crane type's three capabilities:
   used identity), so Deliver later turns the cargo as asked and Move Arm keeps the hook's heading.
 
 Lift and Deliver keep the cargo in two equipment state variables, "Current Cargo" and
-"Current Cargo Hook Offset"; the export adds them (same ids as in dProB's samples) when missing.
-
-The Crane type's implementations replace any the file had; other equipment types are kept.
+"Current Cargo Hook Offset"; the export adds them (same ids as in dProB's samples).
 """
 
 import json
@@ -129,15 +127,11 @@ def move_arm_wrapper(equipment_id, capability):
 
 def apply(model, equipment_id, hook_element_id, hook_name, capability):
     """Adds the Crane type (Move Arm wrapper, Lift, Deliver) and its state variables to a model.json
-    dict. capability: the hook's generated IK capability. Returns the names of the added variables."""
+    dict. capability: the hook's generated IK capability. Returns the names of the state variables."""
     t = _templates(ik_capability.attachment_point_id(hook_element_id), hook_name)
     crane = {"EquipmentType": CRANE_TYPE, "Implementations": [
         move_arm_wrapper(equipment_id, capability),
         t["Lift"], t["Deliver"]]}
-    others = [e for e in model.get("EquipmentTypeImplementations") or []
-              if e.get("EquipmentType") != CRANE_TYPE]
-    model["EquipmentTypeImplementations"] = others + [crane]
-    have = {v["Id"]["Guid"] for v in model.get("StateVariables") or []}
-    added = [v for v in t["StateVariables"] if v["Id"]["Guid"] not in have]
-    model["StateVariables"] = list(model.get("StateVariables") or []) + added
-    return [v["Name"] for v in added]
+    model["EquipmentTypeImplementations"] = [crane]
+    model["StateVariables"] = list(t["StateVariables"])
+    return [v["Name"] for v in model["StateVariables"]]

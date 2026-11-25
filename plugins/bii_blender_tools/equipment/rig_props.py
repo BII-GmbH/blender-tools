@@ -126,20 +126,19 @@ def ensure_ids(root):
         r.equipment_id = dequip_format.new_id()
     if not r.geometry_id:
         r.geometry_id = dequip_format.new_id()
-    seen = {}
+    # A duplicated object copies the id and the owner name of its original. Of the objects that
+    # share an id, the one still named as the owner keeps it (else the first); the others are
+    # copies and get new ids. Decided over all objects first, as a copy may come before its
+    # original in the hierarchy.
+    by_id = {}
     for o in rig_objects(root):
-        j = o.bii_rig
-        if j.element_id in seen or not j.element_id:
-            other = seen.get(j.element_id)
-            # the copy (the one not named as when the id was given) gets the new id
-            if other is not None and other.bii_rig.element_owner != other.name and j.element_owner == o.name:
-                other.bii_rig.element_id = dequip_format.new_id()
-                other.bii_rig.element_owner = other.name
-                seen[other.bii_rig.element_id] = other
-            else:
-                j.element_id = dequip_format.new_id()
-        j.element_owner = o.name
-        seen[j.element_id] = o
+        by_id.setdefault(o.bii_rig.element_id, []).append(o)
+    for element_id, objs in by_id.items():
+        keeper = next((o for o in objs if o.bii_rig.element_owner == o.name), objs[0]) if element_id else None
+        for o in objs:
+            if o is not keeper:
+                o.bii_rig.element_id = dequip_format.new_id()
+            o.bii_rig.element_owner = o.name
     caps = set()
     for o in rig_objects(root):
         j = o.bii_rig
@@ -520,10 +519,6 @@ class BiiRigSettings(bpy.types.PropertyGroup):
     geometry_id: bpy.props.StringProperty(name="Geometry ID")
     export_path: bpy.props.StringProperty(
         name="File", subtype="FILE_PATH", description="The .dequip file to write")
-    keep_capabilities: bpy.props.BoolProperty(
-        name="Keep Capabilities", default=True,
-        description="When the file exists, keep its capabilities, state variables and vehicle data "
-                    "(scripted in dProB) and replace only the model and joints")
     show_axes: bpy.props.BoolProperty(
         name="Show Joints", default=True, description="Draw the joint axes and limits in the viewport")
     forward: bpy.props.EnumProperty(

@@ -157,15 +157,6 @@ def ik_capabilities(root, element_ids):
     return out
 
 
-def merge_capabilities(existing, generated):
-    """Existing custom capabilities without the earlier generated ones, then the generated ones."""
-    ids = {c["Signature"]["Id"]["Guid"] for c in generated}
-    keep = [c for c in existing
-            if c.get("Signature", {}).get("Id", {}).get("Guid") not in ids
-            and ik_capability.GENERATED_MARK not in (c.get("Signature", {}).get("Description") or "")]
-    return keep + generated
-
-
 # ------------------------------------------------------------------ FBX
 
 class _PreviewStash:
@@ -295,8 +286,8 @@ def _safe_name(name):
     return keep or "equipment"
 
 
-def export(root, path=None, keep_capabilities=None):
-    """Writes the rig of root to a .dequip file; returns a summary dict."""
+def export(root, path=None):
+    """Writes the rig of root to a .dequip file (an existing file is replaced); returns a summary dict."""
     root = rig_props.rig_root(root)
     if root is None:
         raise RigError("the object is not part of a rig (no rig root above it)")
@@ -306,19 +297,10 @@ def export(root, path=None, keep_capabilities=None):
         raise RigError("no file given")
     if not path.lower().endswith(".dequip"):
         path += ".dequip"
-    keep = r.keep_capabilities if keep_capabilities is None else keep_capabilities
     errors = [t for s, t in problems(root) if s == "ERROR"]
     if errors:
         raise RigError("; ".join(errors))
 
-    base = None
-    if keep and os.path.isfile(path):
-        try:
-            base = dequip_format.read(path).model
-        except (ValueError, OSError, KeyError) as e:
-            raise RigError(f"{path} exists but cannot be read ({e}); delete it or turn off Keep Capabilities")
-        if base.get("EquipmentId"):
-            r.equipment_id = base["EquipmentId"]
     rig_props.ensure_ids(root)
     objs = rig_props.rig_objects(root)
     name = _safe_name(root.name)
@@ -336,9 +318,9 @@ def export(root, path=None, keep_capabilities=None):
         if texture_errors:
             raise RigError("; ".join(texture_errors))
     entry = dequip_format.fbx_entry_name(r.geometry_id, name)
-    model = dequip_format.equipment(r.equipment_id, r.geometry_id, entry, roots, base)
+    model = dequip_format.equipment(r.equipment_id, r.geometry_id, entry, roots)
     generated = ik_capabilities(root, {o: o.bii_rig.element_id for o in objs})
-    model["CustomCapabilities"] = merge_capabilities(model["CustomCapabilities"], generated)
+    model["CustomCapabilities"] = generated
     crane_variables = None
     hook = r.crane_hook
     if hook is not None:
@@ -346,11 +328,10 @@ def export(root, path=None, keep_capabilities=None):
         crane_variables = crane_type.apply(model, r.equipment_id, hook.bii_rig.element_id, hook.name, cap)
     dequip_format.write(path, model, fbx_bytes, entry)
     r.export_path = path
-    kept = bool(base) and bool(base.get("CustomCapabilities") or base.get("EquipmentTypeImplementations"))
     return {"path": path, "equipment_id": r.equipment_id, "elements": details["elements"],
-            "joints": details["joints"], "kept_capabilities": kept,
+            "joints": details["joints"],
             "ik_capabilities": [c["Signature"]["Name"] for c in generated],
-            "crane": None if crane_variables is None else {"hook": hook.name, "added_variables": crane_variables},
+            "crane": None if crane_variables is None else {"hook": hook.name, "state_variables": crane_variables},
             "textures_converted": staged.converted,
             "warnings": [t for s, t in problems(root) if s == "WARNING"]}
 

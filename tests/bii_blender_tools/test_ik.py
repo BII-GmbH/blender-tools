@@ -285,21 +285,15 @@ class CapabilityTest(IkTestCase):
         for name in ("Cab", "Boom", "Tele", "Reversal", "Hook"):
             self.assertAlmostEqual(moves[ids[name]], float(expected[name]), places=5, msg=name)
 
-    def test_keeps_other_capabilities(self):
+    def test_disabled_target_has_no_capability(self):
         root = truck_crane()
-        rig.export(root, self.path)
-        dq = dequip_format.read(self.path)
-        dq.model["CustomCapabilities"].append({"Signature": {"Id": {"Guid": "x"}, "Name": "Scripted"},
-                                               "Implementation": {}})
-        dequip_format.write(self.path, dq.model, b"", "x.fbx")
         rig.set_ik_target("HookPoint", name="Move Hook")
         rig.export(root, self.path)
         names = [c["Signature"]["Name"] for c in dequip_format.read(self.path).model["CustomCapabilities"]]
-        self.assertEqual(sorted(names), ["Move Hook", "Scripted"])
+        self.assertEqual(names, ["Move Hook"])
         rig.set_ik_target("HookPoint", enabled=False)
         rig.export(root, self.path)
-        names = [c["Signature"]["Name"] for c in dequip_format.read(self.path).model["CustomCapabilities"]]
-        self.assertEqual(names, ["Scripted"])
+        self.assertEqual(dequip_format.read(self.path).model["CustomCapabilities"], [])
 
 
 class SessionTest(IkTestCase):
@@ -581,19 +575,17 @@ class CraneTypeTest(IkTestCase):
         self.assertEqual(len(model["StateVariables"]), 2)
         self.assertEqual(len(model["EquipmentTypeImplementations"]), 1)
 
-    def test_other_types_kept_and_no_hook(self):
+    def test_no_crane_type_after_hook_removed(self):
         root = truck_crane()
-        rig.export(root, self.path)
-        self.assertEqual(dequip_format.read(self.path).model["EquipmentTypeImplementations"], [])
-        dq = dequip_format.read(self.path)
-        other = {"EquipmentType": {"Identifier": {"Id": "Excavator"}, "$case": "BuiltIn"}, "Implementations": []}
-        dq.model["EquipmentTypeImplementations"] = [other]
-        dequip_format.write(self.path, dq.model, b"", "x.fbx")
         rig.set_crane_hook(root, "HookPoint")
         rig.export(root, self.path)
-        types = [t["EquipmentType"]["Identifier"]["Id"] for t in
-                 dequip_format.read(self.path).model["EquipmentTypeImplementations"]]
-        self.assertEqual(types, ["Excavator", "Crane"])
+        self.assertEqual(len(dequip_format.read(self.path).model["EquipmentTypeImplementations"]), 1)
+        rig.set_crane_hook(root, None)
+        rig.set_ik_target("HookPoint", enabled=False)
+        rig.export(root, self.path)
+        model = dequip_format.read(self.path).model
+        self.assertEqual(model["EquipmentTypeImplementations"], [])
+        self.assertEqual(model["StateVariables"], [])
 
     def test_hook_without_ik_is_an_error(self):
         root = truck_crane()

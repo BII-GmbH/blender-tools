@@ -288,30 +288,35 @@ class ExportTest(RigTestCase):
         self.assertNotEqual(ids2[copy.name], ids1["Arm"])
         self.assertEqual(len(set(ids2.values())), len(ids2))
 
-    def test_keep_capabilities(self):
+    def test_renamed_copy_before_its_original_gets_a_new_id(self):
+        """The copy is visited first (its new name sorts before the original's)."""
+        crane()
+        rig.export("Crane", self.path)
+        arm = bpy.data.objects["Arm"]
+        arm_id = arm.bii_rig.element_id
+        copy = arm.copy()
+        copy.data = arm.data.copy()
+        bpy.context.scene.collection.objects.link(copy)
+        copy.parent = arm.parent
+        copy.name = "AArm"
+        rig.export("Crane", self.path)
+        self.assertEqual(arm.bii_rig.element_id, arm_id)
+        self.assertNotEqual(copy.bii_rig.element_id, arm_id)
+
+    def test_export_replaces_the_file(self):
         crane()
         rig.export("Crane", self.path)
         dq = dequip_format.read(self.path)
-        m = dq.model
-        ids = {e["Name"]: e["Id"] for e in dequip_format.walk(m["HierarchyRoots"])}
-        m["EquipmentId"] = "11111111-2222-3333-4444-555555555555"
-        m["CustomCapabilities"] = [{"Signature": {"Name": "Swing"}, "Implementation": {}}]
-        m["StateVariables"] = [{"Name": "Load"}]
-        m["RailVehicleData"] = {"FrontCoupling": {"Id": ids["Hook"]}, "BackCoupling": {"Id": "gone"},
-                                "FrontWheels": None, "BackWheels": None, "DefaultSpeed": 3.0}
-        entry = m["GeometryModels"][0]["Asset"]["FbxFile"]
-        dequip_format.write(self.path, m, dq.files[entry], entry)
-        res = rig.export("Crane", self.path)
-        self.assertTrue(res["kept_capabilities"])
-        m2 = dequip_format.read(self.path).model
-        self.assertEqual(m2["EquipmentId"], "11111111-2222-3333-4444-555555555555")
-        self.assertEqual(m2["CustomCapabilities"][0]["Signature"]["Name"], "Swing")
-        self.assertEqual(m2["StateVariables"], [{"Name": "Load"}])
-        self.assertEqual(m2["RailVehicleData"]["FrontCoupling"], {"Id": ids["Hook"]})
-        self.assertIsNone(m2["RailVehicleData"]["BackCoupling"])
-        self.assertEqual(m2["RailVehicleData"]["DefaultSpeed"], 3.0)
-        rig.export("Crane", self.path, keep_capabilities=False)
-        self.assertEqual(dequip_format.read(self.path).model["CustomCapabilities"], [])
+        dq.model["CustomCapabilities"] = [{"Signature": {"Name": "Swing"}, "Implementation": {}}]
+        dq.model["StateVariables"] = [{"Name": "Load"}]
+        entry = dq.model["GeometryModels"][0]["Asset"]["FbxFile"]
+        dequip_format.write(self.path, dq.model, dq.files[entry], entry)
+        equipment_id = dq.model["EquipmentId"]
+        rig.export("Crane", self.path)
+        m = dequip_format.read(self.path).model
+        self.assertEqual(m["EquipmentId"], equipment_id)
+        self.assertEqual(m["CustomCapabilities"], [])
+        self.assertEqual(m["StateVariables"], [])
 
     def test_errors_stop_export(self):
         crane()

@@ -173,9 +173,8 @@ check = rig.verify("Machine")
 ```
 
 - `check["max_error"]` must be below 1e-4 (meters). Otherwise report it with `check["worst"]`.
-- When the file exists, its capabilities scripted in dProB are kept (`res["kept_capabilities"]`);
-  pass `keep_capabilities=False` only if the user wants a fresh equipment. Generated IK
-  capabilities and the Crane type are replaced on every export.
+- The export replaces an existing file completely, including capabilities scripted in dProB.
+  Warn the user before you overwrite a file they edited in dProB.
 - `res["ik_capabilities"]`, `res["crane"]` list what was generated.
 - Tell the user: the file, number of parts and joints, the capabilities, warnings, what the rig
   cannot show (ropes that do not stretch, cylinders that do not extend), and that dProB should

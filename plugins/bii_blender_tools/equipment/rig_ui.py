@@ -178,8 +178,6 @@ def _export(op, root, path):
         op.report({"ERROR"}, str(e))
         return {"CANCELLED"}
     msg = f"Wrote {os.path.basename(res['path'])}: {res['elements']} parts, {len(res['joints'])} joints"
-    if res["kept_capabilities"]:
-        msg += ", capabilities kept"
     op.report({"INFO"}, msg)
     for w in res["warnings"]:
         op.report({"WARNING"}, w)
@@ -212,9 +210,6 @@ class BII_RIG_OT_export_as(bpy.types.Operator, ExportHelper):
 
     filename_ext = ".dequip"
     filter_glob: bpy.props.StringProperty(default="*.dequip", options={"HIDDEN"})
-    keep_capabilities: bpy.props.BoolProperty(
-        name="Keep Capabilities", default=True,
-        description="When the file exists, keep its capabilities, state variables and vehicle data")
 
     @classmethod
     def poll(cls, context):
@@ -223,7 +218,6 @@ class BII_RIG_OT_export_as(bpy.types.Operator, ExportHelper):
     def invoke(self, context, event):
         root = _root(context)
         r = root.bii_rig
-        self.keep_capabilities = r.keep_capabilities
         self.filepath = bpy.path.abspath(r.export_path) if r.export_path else (
             os.path.join(os.path.dirname(bpy.data.filepath), bpy.path.clean_name(root.name) + ".dequip")
             if bpy.data.filepath else bpy.path.clean_name(root.name) + ".dequip")
@@ -231,9 +225,7 @@ class BII_RIG_OT_export_as(bpy.types.Operator, ExportHelper):
         return {"RUNNING_MODAL"}
 
     def execute(self, context):
-        root = _root(context)
-        root.bii_rig.keep_capabilities = self.keep_capabilities
-        return _export(self, root, self.filepath)
+        return _export(self, _root(context), self.filepath)
 
 
 class BII_RIG_OT_check(bpy.types.Operator):
@@ -471,7 +463,6 @@ class VIEW3D_PT_bii_rig_export(bpy.types.Panel):
         root = _root(context)
         r = root.bii_rig
         layout.prop(r, "export_path", text="")
-        layout.prop(r, "keep_capabilities")
         layout.prop(r, "crane_hook", icon="CON_KINEMATIC")
         if r.crane_hook is not None:
             layout.label(text="Exports as Crane: Move Arm, Lift, Deliver", icon="INFO")

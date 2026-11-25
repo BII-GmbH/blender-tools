@@ -78,7 +78,6 @@ FOR_EACH_INDEX = "c81b083a-0a0b-43fd-9f63-629e942f8f18"
 
 SELF_NAME_KEY = "BII.ScriptableTemplates.Capabilities.SelfInput"
 SELF_DESCRIPTION_KEY = "BII.ScriptableTemplates.Capabilities.SelfInputDescription"
-GENERATED_MARK = "[BII Tools IK]"
 
 with open(__import__("os").path.join(__import__("os").path.dirname(__file__), "rotate_joint_function.json"),
           encoding="utf-8") as _f:
@@ -803,7 +802,6 @@ def build_graph(spec):
 
     frames = layout(g, start)
     description = (spec.get("description") or f"Moves {spec['target'][1]} to a pose with inverse kinematics.")
-    description = f"{description} {GENERATED_MARK}"
     meta = [{"Node": {"Guid": n.id}, "Description": None, "Xpos": float(n.x * GRID), "Ypos": float(n.y * GRID)}
             for n in g.nodes.values()]
     graph = {

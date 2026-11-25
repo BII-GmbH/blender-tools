@@ -91,10 +91,9 @@ def fbx_entry_name(geometry_id, name):
     return f"{geometry_id}/{name}.fbx"
 
 
-def equipment(equipment_id, geometry_id, fbx_entry, roots, base=None):
-    """EquipmentAssetModel. base: model.json of an earlier version whose capabilities, state
-    variables and vehicle data are kept (they refer to elements by id)."""
-    model = {
+def equipment(equipment_id, geometry_id, fbx_entry, roots):
+    """EquipmentAssetModel without capabilities, equipment types and state variables."""
+    return {
         "EquipmentId": equipment_id,
         "EquipmentTypeImplementations": [],
         "CustomCapabilities": [],
@@ -110,18 +109,6 @@ def equipment(equipment_id, geometry_id, fbx_entry, roots, base=None):
         "BulkLoadableData": None,
         "VehicleCollisionData": None,
     }
-    if base:
-        for key in ("EquipmentTypeImplementations", "CustomCapabilities", "StateVariables"):
-            model[key] = base.get(key) or []
-        ids = {e["Id"] for e in walk(model["HierarchyRoots"])}
-        for key in ("RailVehicleData", "GroundVehicleData", "BulkLoadableData", "VehicleCollisionData"):
-            data = base.get(key)
-            if isinstance(data, dict):
-                # references to elements that are gone become None
-                data = {k: (v if not (isinstance(v, dict) and set(v) == {"Id"}) or v["Id"] in ids else None)
-                        for k, v in data.items()}
-            model[key] = data
-    return model
 
 
 def walk(roots):

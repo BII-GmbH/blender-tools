@@ -61,6 +61,7 @@ def make_rig(root, export_path=None, forward=None):
     center for a crane). forward: where the model's front points in Blender, "+Y" (default),
     "-Y", "+X" or "-X"; the export turns the equipment so that this is dProB's forward (+Z),
     and Blender's +Z is dProB's up (+Y). The root's own rotation is part of the model.
+    Rig roots below the object stop being roots: their parts join this rig.
     """
     obj = _obj(root)
     if not rig_props.is_rig_object(obj):
@@ -259,7 +260,6 @@ def describe(root):
     return {"root": r.name, "equipment_id": r.bii_rig.equipment_id, "export_path": r.bii_rig.export_path,
             "forward": {"POS_Y": "+Y", "NEG_Y": "-Y", "POS_X": "+X", "NEG_X": "-X"}[r.bii_rig.forward],
             "crane_hook": r.bii_rig.crane_hook.name if r.bii_rig.crane_hook else None,
-            "keep_capabilities": r.bii_rig.keep_capabilities,
             "parts": len(rig_props.rig_objects(r)), "joints": [o.name for o in rig_props.joints(r)],
             "tree": node(r), "problems": [f"{s}: {t}" for s, t in rig_export.problems(r)]}
 
@@ -496,11 +496,12 @@ def set_crane_hook(root, hook):
     h = _obj(hook)
     if rig_props.rig_root(h) is not r:
         raise RigError(f"{h.name} is not part of the rig of {r.name}")
+    misaligned = ik_chain.misalignment_deg(h, r) > ALIGN_TOLERANCE_DEG
+    if misaligned and h.bii_rig.joint_type != "FIXED":
+        raise RigError(f"{h.name}: the crane hook's frame must have the equipment's axes, and its "
+                       "axes define its joint. Add a load point under it with add_point")
     h.bii_rig.attachment_point = True
-    if ik_chain.misalignment_deg(h, r) > ALIGN_TOLERANCE_DEG:
-        if h.bii_rig.joint_type != "FIXED":
-            raise RigError(f"{h.name}: the crane hook's frame must have the equipment's axes, and its "
-                           "axes define its joint. Add a load point under it with add_point")
+    if misaligned:
         align_to_equipment(h)
     if not h.bii_rig.ik_target:
         set_ik_target(h)
@@ -890,14 +891,13 @@ def problems(root):
     return [f"{s}: {t}" for s, t in rig_export.problems(_root(root))]
 
 
-def export(root, path=None, keep_capabilities=None):
+def export(root, path=None):
     """Writes the rig as a dProB scriptable equipment (.dequip) and returns a summary.
 
-    path: the file (default: the rig's last file). keep_capabilities: if the file exists, keep its
-    capabilities, state variables and vehicle data scripted in dProB (default: the rig's setting,
-    on). Element ids stay the same over exports, so the capabilities keep their joints.
+    path: the file (default: the rig's last file). An existing file is replaced. Element ids stay
+    the same over exports.
     """
-    return rig_export.export(_root(root), path, keep_capabilities)
+    return rig_export.export(_root(root), path)
 
 
 def verify(root, path=None, samples=3):
