@@ -110,7 +110,10 @@ crop larger (`scale=3`) and ask again; when still unclear, list it as uncertain 
 The signal belongs at the **foot of its symbol**: the end of the stem, the short bar across it (the
 red dot in the key), never the middle of the symbol or of its head. Without a mast of its own
 (`mast=False`, e.g. on a Signalbrücke) the symbol still has a leader line from the head towards
-the track or the bridge: the foot is the end of that leader. Only when there is no line at all: the
+the track or the bridge: the foot is the end of that leader at the track, the head the other end.
+Which end is which: the foot is the end nearer the track line it belongs to (on it or just beside
+it); check it with the distance of both ends to the nearest track, never by which end has more red
+around it. Missed twice for 06F/06FF (8 to 19 m off along the leader). Only when there is no line at all: the
 lower end of the symbol. The leader is not always straight (it can bend or run crooked):
 follow it to its own end and take the foot bar there, never a point found by extending the
 direction of the head or of the leader's first part. Measure the pixel position of
