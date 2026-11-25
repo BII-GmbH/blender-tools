@@ -65,10 +65,21 @@ Signs that were missed or mistaken before:
 
 ## 3. Classify each signal
 
-Compare the symbol crop with the key image of its group, attribute by attribute, not "which signal is this":
+Compare the symbol crop with the key image of its group, attribute by attribute, not "which signal is this".
+Work on a crop turned upright (`up=`, see below): the plan draws symbols at any angle, and "above",
+"below", `^` and `V` only mean something on an upright crop.
 - head shape (Ks: rounded top = Hauptsignal, rounded bottom = Vorsignal, rounded both ends =
-  Mehrabschnittssignal; H/V: circles / two dots), filled, right half filled or empty (Bedienung);
-- above the head: `^` (Zs1), `V` (Zs7), triangle (Zs3) filled or empty; below the head: triangle (Zs3v)
+  Mehrabschnittssignal; H/V: circles / two dots);
+- Bedienung, from the head alone: completely filled = `stellwerk`; one half filled along its length
+  (the other half empty, split by a line from the top to the bottom of the head) =
+  `stellwerk_zug`; empty = `zug`. The Sh1 part (two bars across an extra part of the head, see
+  below) is not part of this: a filled head with an Sh1 part is `stellwerk`, even though the Sh1
+  part shows white fields. Placing `stellwerk_zug` for a filled head was the most common mistake;
+- the chevron at the far end of the symbol: its tip points away from the head = Zs1 (`kopf="zs1"`,
+  `^` on an upright crop); its tip points towards the head, open side outwards = Zs7
+  (`kopf="zs7"`, `V` on an upright crop). Decide by the tip relative to the head, never by how the
+  chevron looks on the sheet;
+- above the head: triangle (Zs3) filled or empty; below the head: triangle (Zs3v)
   filled or empty, square with diagonal (Zs6); small circle at the head and where (Zusatzlicht);
   two bars across the head, which is longer by them (Sh1; on a half filled or empty head two empty
   fields below the fill);
@@ -89,7 +100,9 @@ The signal belongs at the **foot of its symbol**: the end of the stem, the short
 red dot in the key), never the middle of the symbol or of its head. Without a mast of its own
 (`mast=False`, e.g. on a Signalbrücke) the symbol still has a leader line from the head towards
 the track or the bridge: the foot is the end of that leader. Only when there is no line at all: the
-lower end of the symbol. Measure the pixel position of
+lower end of the symbol. The leader is not always straight (it can bend or run crooked):
+follow it to its own end and take the foot bar there, never a point found by extending the
+direction of the head or of the leader's first part. Measure the pixel position of
 the foot bar's center in the crop, then add the crop's offset (`box[0] - pad`, `box[1] - pad`, divided by
 `scale` first) to get IMAGE pixels of the plan.
 
