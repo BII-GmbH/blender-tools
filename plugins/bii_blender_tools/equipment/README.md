@@ -116,7 +116,7 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 | `solve_ik(obj, position_world=None, rotation_world=None, matrix_world=None, apply=True)`, `ik_destination(obj)` | Solve as the capability would (without a rotation: Position Only), show it; the destination as dProB gets it |
 | `problems(root)`, `export(root, path=None, keep_capabilities=None)`, `verify(root, path=None, samples=3)`, `read_dequip(path)` | Export and check |
 
-The skill `skills/bii-equipment-rig` in this repo tells Claude Code how to rig an equipment with these functions; its `rigging-patterns.md` shows how to build common mechanisms (hinges, telescopes, parts that stay level, hoists, trolleys, excavator arms) from joints.
+The skill `skills/bii-equipment-rig` in this repo tells an AI agent (Claude Code, Codex) how to rig an equipment with these functions; its `rigging-patterns.md` shows how to build common mechanisms (hinges, telescopes, parts that stay level, hoists, trolleys, excavator arms) from joints. Setup: [Skills for AI agents](../../../README.md#skills-for-ai-agents).
 
 ## The .dequip format
 

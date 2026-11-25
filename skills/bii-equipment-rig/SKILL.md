@@ -5,15 +5,22 @@ description: Rig a model in Blender as a dProB scriptable equipment with the BII
 
 # Rig a dProB equipment (BII Tools)
 
-Work in Blender through the Blender MCP (`execute_blender_code`; `result` must be a dict). Use
-the background Blender (`blender-headless`) for the work and a Blender window
-(`blender-window`) when you need viewport screenshots; both start on their own. A fresh session
-opens an empty scene: open the user's file with `bpy.ops.wm.open_mainfile(filepath=...)`, and
-save under a new name (`save_as_mainfile`) unless the user wants the file changed.
+Work in Blender through a Blender MCP server that runs Python code in Blender (for example
+Blender Lab's blender_mcp: tool `execute_blender_code`, return data by assigning a dict to
+`result`). If you have several Blender servers (for example one in the background and one with a
+window), do the work in the background one and use the window for viewport screenshots. With
+one Blender, use it; without a window, render into a file to look. If the MCP's Blender is the
+user's own open Blender, ask before you change its scene. Open the user's file with
+`bpy.ops.wm.open_mainfile(filepath=...)`, and save under a new name (`save_as_mainfile`) unless
+the user wants the file changed.
 
 ```python
 from bl_ext.user_default.bii_blender_tools.equipment import rig_api as rig
 ```
+
+`user_default` is Blender's default extension repository. If the import fails, find where BII
+Tools is installed (`[m for m in sys.modules if m.endswith("bii_blender_tools")]`) and use that
+module path.
 
 Keep each MCP call short (well under a minute): a call that runs into the MCP's timeout loses its
 result, and the Blender stays busy until it is done. Split long loops (IK tests over many
@@ -49,10 +56,10 @@ load.
 ## 1. Look at the model first
 
 Walk the hierarchy (parents, children, types, names, origins, rotations, scales) and look at it
-(screenshot from `blender-window`, or a Workbench render into a file). For big models start with
-`rig.outline(top_object, depth=3)` (a full dump overflows the MCP result). The window is a
-Blender of its own: save in the headless one and open that file in the window before
-screenshots. Change nothing yet. Find out, and ask the user where names and shape do not tell:
+(a viewport screenshot, or a Workbench render into a file). For big models start with
+`rig.outline(top_object, depth=3)` (a full dump overflows the MCP result). A window that is a
+Blender of its own does not see your changes: save in the Blender you work in and open that file
+in the window before screenshots. Change nothing yet. Find out, and ask the user where names and shape do not tell:
 
 - The top of the equipment and the equipment's origin: on the ground, where dProB places it (for
   a crane under the slewing center). If the top object's origin is elsewhere, add a new empty as
@@ -153,7 +160,7 @@ rig.set_crane_hook("Machine", "Load Point")                # anything that carri
 rig.preview("Machine", {"Slew": 90, "Boom": 60, "Section1": 5})
 ```
 
-Look at it (screenshot from `blender-window`, or a render): parts must turn about the right
+Look at it (a viewport screenshot, or a render): parts must turn about the right
 point, in the right direction, and not fly apart. Check the extremes with `rig.sweep_pose(root,
 0)` (all minimum) and `rig.sweep_pose(root, 180)` (all maximum). Then `rig.reset_preview(root)`.
 `rig.describe(root)["problems"]` lists errors and warnings; fix errors, report warnings.
