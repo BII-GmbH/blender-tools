@@ -129,7 +129,11 @@ Schnitte are `orientation='UPRIGHT'`; everything below is for flat plans.
 
 1. **The plan has a coordinate grid** (crosses with Rechtswert/Hochwert, Gauß-Krüger or UTM):
    Georeference. Most accurate (a few cm).
-2. **It overlaps a plan already placed** and has no grid: Align to Scene with points on features both
+2. **It overlaps plans placed by their grid** and has no grid of its own (e.g. a Signallageplan over
+   the Lagepläne): place it roughly first (Kilometrierung, method 3, or Align to Scene), then fit it
+   onto those plans with `plan_api.fit_to_plans(plan)` (see below). The Kilometrierung alone is not
+   good enough here: sheets placed by km were turned by up to 0.6° (5 m at their ends) against the
+   Lagepläne. Without plans placed by grid under it: Align to Scene with points on features both
    plans show (switch tips, platform ends, bridge edges, track crossings), spread over the whole
    overlap.
 3. **Kilometrierung** (hectometer labels): Align by Kilometrierung. Needs the Umgebung
@@ -193,6 +197,25 @@ other = bpy.data.objects["placed plan"]
 pairs = [(u_new, v_new, plan_api.plan_to_world(other, u_old, v_old, 'IMAGE')), ...]  # same feature on both
 residuals = plan_api.align_to_scene(plan, pairs, unit='IMAGE')   # 3+ pairs far apart
 ```
+
+### Fit onto the plans placed by grid
+
+After a rough placement (km or a few Align to Scene points; within about 25 m and 1°):
+
+```python
+r = plan_api.fit_to_plans(plan)        # moves and turns, never scales
+print(r["message"], r["residuals"])
+```
+
+It matches the plan's own track lines in pieces of 80 m on the grid-placed plans below and moves
+the plan only when the result is clear: better than one track over, most pieces agree, and the same
+result from three starts. `r["residuals"]` lists each piece's remaining offset across the track
+from one end of the sheet to the other: they should all be below 1 m, also at the ends. Along
+straight track it keeps the plan's place along the track (`along_fixed` False): that part still
+comes from the km or your points. When it does not move the plan (`applied` False), the message
+says why; then place it with Align to Scene points on features both plans show, spread over the
+whole sheet (both ends), and run it again with `apply=False` to check. Report for every sheet
+how it was placed and the residuals.
 
 ### Kilometrierung
 
