@@ -139,6 +139,17 @@ for o in bpy.data.collections["Signale"].objects:
 
 - Configuration equals the inventory table; height above ground is 0; every inventory row that is a
   signal or sign has exactly one object.
+- **Every red group is accounted for** (do not skip this, also when you read the symbols from the
+  PDF's vector data):
+
+  ```python
+  for i, g in enumerate(plan_api.groups_without_signal(plan)):     # red groups with no signal at them
+      plan_api.crop_image(plan, *g["box"], rf"{folder}\left_{i:02}.png", pad=60, scale=3)
+  ```
+  Look at each crop ("is there a signal or sign symbol in it, and which?"). Each group must be a
+  row of your table that says what it is (label or km text, GSA/GSE, INA magnet, note) or get its
+  signal placed now. Vorsignalbaken (Ne 3) were missed twice because the inventory only counted
+  symbols with a leader and foot bar; they show up here.
 - Position: mark the placed feet on the plan and compare: crop the plan around a
   group of signals, draw a small circle at each `world_to_plan` position (Pillow), ask "is each
   circle on the foot bar of its symbol?".

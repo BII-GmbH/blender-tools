@@ -84,6 +84,21 @@ class PlanApiTest(unittest.TestCase):
         plan_api.crop_image(self.plan, 100, 100, 300, 150, path, up=(0, 1))   # upside down
         self.assertEqual(Image.open(path).size, (w, h))
 
+    def test_groups_without_signal(self):
+        red = os.path.join(self._dir.name, "red.png")
+        image = Image.new("RGB", (W, H), (255, 255, 255))
+        d = ImageDraw.Draw(image)
+        d.rectangle((200, 100, 230, 110), fill=(230, 0, 0))     # two red marks far apart
+        d.rectangle((800, 300, 830, 310), fill=(230, 0, 0))
+        image.save(red, dpi=(DPI, DPI))
+        bpy.ops.import_image.bii_plan(filepath=red, massstab=1000, background=1.0)
+        plan = bpy.context.view_layer.objects.active
+        self.assertEqual(len(plan_api.groups_without_signal(plan, points=[])), 2)
+        foot = plan_api.plan_to_world(plan, 215, 112, 'IMAGE')      # a signal just below the first
+        left = plan_api.groups_without_signal(plan, points=[foot])
+        self.assertEqual(len(left), 1)
+        self.assertGreater(left[0]["box"][0], 700)
+
     def test_seat_above_terrain(self):
         self.assertIsNone(plan_api.seat_above_terrain(self.plan))      # no terrain yet
         bpy.ops.mesh.primitive_plane_add(size=2000, location=(0, 0, 10))

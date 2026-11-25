@@ -340,6 +340,31 @@ def color_clusters(obj, color="red", join=0.002, min_size=0.0005):
     return out
 
 
+def groups_without_signal(obj, color="red", points=None, margin=0.004, scene=None):
+    """color_clusters() of the plan that no placed signal stands in or next to: the red symbols
+    still to account for. points: world positions of the placed signals (default: every signal
+    object of the scene, see signal_panel.read_signal); margin: sheet meters around each group
+    (4 mm). Each group returned is either a signal or sign not placed yet, or something else
+    (label, km text, track circuit mark): say which in the inventory."""
+    from . import signal_panel
+    scene = scene or bpy.context.scene
+    if points is None:
+        points = [o.matrix_world.translation for o in scene.objects if signal_panel.read_signal(o)]
+    pg = obj.bii_plan
+    w = pg.image.size[0]
+    pad = margin / pg.width * w
+    feet = []
+    for p in points:
+        u, v = world_to_plan(obj, Vector(p).to_3d(), 'IMAGE')
+        feet.append((u, v))
+    out = []
+    for g in color_clusters(obj, color):
+        u0, v0, u1, v1 = g["box"]
+        if not any(u0 - pad <= u <= u1 + pad and v0 - pad <= v <= v1 + pad for u, v in feet):
+            out.append(g)
+    return out
+
+
 def crop_image(obj, u0, v0, u1, v1, path, unit='IMAGE', pad=0, scale=1.0, up=None):
     """Write the part of the plan's image between two corners (in unit, plus pad image pixels) as
     PNG, e.g. one symbol for a closer look; scale > 1 enlarges it. Returns path.
