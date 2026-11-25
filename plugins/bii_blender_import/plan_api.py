@@ -1463,6 +1463,29 @@ def fit_to_plans(obj, references=None, apply=True, force=False, cell=0.5, max_sh
         residuals = [None if e is None else round(abs(e), 2) for _, e in meas]
         agree = sum(e is not None and e <= tolerance for e in residuals)
         stats["agree"], stats["count"], stats["residuals"] = agree, len(meas), residuals
+        # along the track: only pieces whose own match is sharp in both directions (switches,
+        # platform ends, ends of tracks) count; when at least three agree, they fix it
+        along = []
+        for _, surface in _piece_surfaces(obj, pooled, total_m @ m0, grid, ref, ref_valid, piece, 15.0, 2):
+            s2 = (surface.shape[0] - 1) // 2
+            pk = np.unravel_index(int(np.argmax(surface)), surface.shape)
+            if surface[pk] < 0.3 or max(abs(pk[0] - s2), abs(pk[1] - s2)) >= s2 - 1:
+                continue
+            ridge, _ = _ambiguity(surface, pk, grid.cell)
+            if ridge is not None:
+                continue
+            py, px = _subcell(surface, pk)
+            d = Vector(((px - s2) * grid.cell, (py - s2) * grid.cell))
+            if abs(d.dot(across_dir)) <= tolerance:
+                along.append(d.dot(axis))
+        stats["along_pieces"] = len(along)
+        if len(along) >= 3:
+            med = float(np.median(along))
+            near = [a for a in along if abs(a - med) <= tolerance]
+            if len(near) >= 3 and len(near) >= 0.6 * len(along):
+                step = axis * float(np.mean(near))
+                total_m = Matrix.Translation(Vector((step.x, step.y, 0.0))) @ total_m
+                stats["along_fixed"] = len(near)
         return total_m, stats
 
     # from the plan's place and from two places moved and turned away from it: the result must not
@@ -1497,8 +1520,10 @@ def fit_to_plans(obj, references=None, apply=True, force=False, cell=0.5, max_sh
     clear = out["contrast"] >= CONTRAST
     steady = out["spread_across"] is not None and out["spread_across"] <= tolerance
     out["across_fixed"] = bool(not edge and clear and steady and agree >= max(3, 0.6 * len(pieces)))
-    out["along_fixed"] = bool(out["across_fixed"] and along_deg is None and out["contrast_along"] >= CONTRAST
-                              and out["spread_along"] <= tolerance)
+    by_features = stats.get("along_fixed", 0) >= 3
+    out["along_pieces"] = stats.get("along_fixed", 0)
+    out["along_fixed"] = bool(out["across_fixed"] and out["spread_along"] <= tolerance
+                              and (by_features or (along_deg is None and out["contrast_along"] >= CONTRAST)))
     if not out["across_fixed"]:
         why = ("the best match lies at the edge of the search" if edge else
                f"a match more than 2 m across is almost as good (contrast {out['contrast']:.2f})"
