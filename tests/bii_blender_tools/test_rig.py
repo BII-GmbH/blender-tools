@@ -107,6 +107,22 @@ class PreviewTest(RigTestCase):
         self.assertAlmostEqual(rig.set_preview("Slider", -9), -0.5, places=5)
         self.assertAlmostEqual(rig.set_preview("Tower", 500), 500, places=3)   # no limits
 
+    def test_slider_spans_the_limit_range(self):
+        """The panel's slider (preview_position) covers the whole limit range: 0 % = min, 100 % = max."""
+        crane()
+        arm, s = bpy.data.objects["Arm"].bii_rig, bpy.data.objects["Slider"].bii_rig
+        arm.preview_position = 50
+        self.assertAlmostEqual(math.degrees(arm.preview_angle), 15, places=4)
+        arm.preview_position = 100
+        self.assertAlmostEqual(math.degrees(arm.preview_angle), 60, places=4)
+        s.preview_length = 0.75
+        self.assertAlmostEqual(s.preview_position, 50, places=4)
+        s.preview_position = 0.0
+        self.assertAlmostEqual(s.preview_length, -0.5, places=5)
+        for o, prop in (("Arm", "preview_angle"), ("Slider", "preview_length"), ("Tower", "preview_angle")):
+            p = bpy.data.objects[o].bii_rig.bl_rna.properties[prop]
+            self.assertLess(p.soft_max, 1e3, o)       # drag sensitivity follows the soft range
+
     def test_prismatic_moves_along_world_axis(self):
         crane()
         s = bpy.data.objects["Slider"]

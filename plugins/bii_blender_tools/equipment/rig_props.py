@@ -192,6 +192,24 @@ def _set_length(self, value):
     self["_preview_length"] = _clamp(self, value) if self.joint_type == "PRISMATIC" else value
 
 
+_RAW = {"REVOLUTE": "_preview_angle", "PRISMATIC": "_preview_length"}
+
+
+def _get_position(self):
+    lim = limits(self)
+    if lim is None or lim[1] == lim[0]:
+        return 0.0
+    v = self.get(_RAW[self.joint_type], 0.0)
+    return max(0.0, min(100.0, 100.0 * (v - lim[0]) / (lim[1] - lim[0])))
+
+
+def _set_position(self, value):
+    lim = limits(self)
+    if lim is None:
+        return
+    self[_RAW[self.joint_type]] = _clamp(self, lim[0] + (lim[1] - lim[0]) * value / 100.0)
+
+
 def preview_value(j):
     if j.joint_type == "REVOLUTE":
         return j.preview_angle
@@ -543,14 +561,24 @@ class BiiRigSettings(bpy.types.PropertyGroup):
         name="Max", subtype="DISTANCE", unit="LENGTH", default=1.0, update=_joint_update)
 
     # ---- preview
+    # soft ranges: without them Blender scales dragging to the float range (thousands of degrees
+    # per pixel)
     preview_angle: bpy.props.FloatProperty(
         name="Angle", subtype="ANGLE", get=_get_angle, set=_set_angle, update=_preview_update,
+        soft_min=-2 * math.pi, soft_max=2 * math.pi, step=100,
         description="Preview angle (within the limits)")
     preview_length: bpy.props.FloatProperty(
         name="Offset", subtype="DISTANCE", unit="LENGTH", get=_get_length, set=_set_length,
+        soft_min=-100.0, soft_max=100.0, step=10,
         update=_preview_update, description="Preview offset (within the limits)")
+    preview_position: bpy.props.FloatProperty(
+        name="Position", subtype="PERCENTAGE", min=0.0, max=100.0, precision=0, get=_get_position,
+        set=_set_position,
+        update=_preview_update, options={"SKIP_SAVE"},
+        description="Preview value as a share of the limit range (0 %: min, 100 %: max)")
     preview_ball: bpy.props.FloatVectorProperty(
         name="Rotation", size=3, subtype="EULER", update=_preview_update,
+        soft_min=-math.pi, soft_max=math.pi, step=100,
         description="Preview rotation, in the object's local axes")
     preview_owned: bpy.props.BoolProperty(options={"HIDDEN"})
 
@@ -586,6 +614,11 @@ class BiiRigSettings(bpy.types.PropertyGroup):
                     "range away from its limits (joints already inside stay as they are). A joint "
                     "at a limit often stalls the solver, for example a boom lying flat that would "
                     "have to rise to reach closer. 0: start from the current values")
+    ik_global_destination: bpy.props.BoolProperty(
+        name="Global Destination", default=False,
+        description="The capability takes the Destination in the world, as the Crane's Move Arm "
+                    "does, and makes it relative to the equipment's current pose. Off: the "
+                    "Destination is relative to the equipment")
     ik_orientation_weight: bpy.props.FloatProperty(
         name="Orientation Weight", default=0.01, min=0.0, precision=4, step=0.1,
         description="How much the orientation counts against the position (0: position only). "

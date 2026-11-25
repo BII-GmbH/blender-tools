@@ -4,13 +4,15 @@ When a rig has a crane hook (an attachment point with an IK capability, set on t
 export adds the Crane type's three capabilities:
 
 - Move Arm: a wrapper that makes the global Destination relative to the equipment (Relative To
-  its current pose) and invokes the hook's IK capability with it and Position Only (orientation
-  weight 0.001 as in dProB's crane). The callers' rotations do not fit the hook (Lift passes
-  identity, Deliver the hook's rotation from the cargo offset), and a rotation the hook cannot
-  take pulls it off the position.
+  its current pose) and invokes the hook's IK capability with it (orientation weight 0.001 as in
+  dProB's crane). The hook's frame has the equipment's axes at rest (rig_api.align_to_equipment),
+  so the rotations Lift and Deliver pass, with dProB's up as up, are ones the hook can take: it
+  turns about up (hook swivel or slewing) to the cargo's rotation.
 - Lift and Deliver: dProB's own implementations, copied from a sample crane
   (crane_templates.json), with their attachment point replaced by the hook. They attach and
   detach the cargo and move the arm by invoking the Crane's Move Arm, so they use the wrapper.
+  Lift without a hook offset puts the hook above the cargo turned like the cargo (the sample
+  used identity), so Deliver later turns the cargo as asked and Move Arm keeps the hook's heading.
 
 Lift and Deliver keep the cargo in two equipment state variables, "Current Cargo" and
 "Current Cargo Hook Offset"; the export adds them (same ids as in dProB's samples) when missing.
@@ -50,12 +52,8 @@ def _port(name):
 
 def move_arm_wrapper(equipment_id, capability):
     """Move Arm: the Destination relative to the equipment's current pose, then the IK
-    capability with Position Only.
-
-    The callers' rotations do not fit the hook: Lift passes identity, Deliver the hook's rotation
-    from the cargo offset, a gizmo whatever it is turned to. A rotation the hook cannot take
-    pulls it off the position (Lift missed by meters), so the crane moves the hook to the
-    position only; it keeps its rotation, turned with the slewing."""
+    capability with it, orientation weight 0.001 as dProB's own crane. A capability with Global
+    Destination gets the Destination as it is (it makes it relative itself)."""
     sig = capability["Signature"]
     cap_id = sig["Id"]["Guid"]
     ns = uuid.uuid5(uuid.UUID(cap_id), "crane move arm")
@@ -65,39 +63,48 @@ def move_arm_wrapper(equipment_id, capability):
     inputs = {(i["Name"].get("Text") or "Self"): i for i in sig["Inputs"]}
     out_id = sig["Outputs"][0]["Id"]["Guid"]
     self_in, dest_in, dur_in = _port("Self"), _port("Destination"), _port("Duration")
+    is_global = inputs["Destination"]["Type"] == ik_capability.atomic("GlobalPose")
     link = lambda a, ap, b, bp: {"FromNode": {"Guid": a}, "OutputSlotId": {"Guid": ap},
                                  "ToNode": {"Guid": b}, "InputSlotId": {"Guid": bp}}
     data = [
         link(start, self_in, call, inputs["Self"]["Id"]["Guid"]),
-        link(start, self_in, pose, _port("Subject")),
-        link(pose, _port("Pose"), rel, _port("Reference")),
-        link(start, dest_in, rel, _port("Global")),
-        link(rel, _port("Local"), call, inputs["Destination"]["Id"]["Guid"]),
         link(start, dur_in, call, inputs["Duration"]["Id"]["Guid"]),
         link(call, out_id, end, MOVE_ARM_OUTPUT),
     ]
-    # the IK settings as in Blender (the capability's defaults), but nearly position only, as dProB's
-    # own crane (orientation weight 0.001): Lift passes identity rotations, Deliver the hook's
-    # rotation from the cargo offset, a gizmo whatever it is turned to. Not 0: the small weight
-    # keeps the hook level within each IK pass, so the pitch reversal loop converges
+    if is_global:
+        data.append(link(start, dest_in, call, inputs["Destination"]["Id"]["Guid"]))
+    else:
+        data += [
+            link(start, self_in, pose, _port("Subject")),
+            link(pose, _port("Pose"), rel, _port("Reference")),
+            link(start, dest_in, rel, _port("Global")),
+            link(rel, _port("Local"), call, inputs["Destination"]["Id"]["Guid"]),
+        ]
+    # the IK settings as in Blender (the capability's defaults), with the orientation weight of
+    # dProB's own crane (0.001): the position counts far more than the rotation. Not 0: the small
+    # weight turns the hook to the cargo's heading and keeps it level within each IK pass, so the
+    # pitch reversal loop converges
     fixed = [{"Node": {"Guid": call}, "InputSlotId": {"Guid": i["Id"]["Guid"]},
               "Value": {"Value": CRANE_ORIENTATION_WEIGHT, "$case": "Double"}
               if i["Name"].get("Text") == "Orientation Weight"
-              else {"Value": True, "$case": "Bool"} if i["Name"].get("Text") == "Position Only"
               else i["DefaultValue"]}
              for i in sig["Inputs"] if i.get("DefaultValue") is not None]
     meta = lambda n, x, y: {"Node": {"Guid": n}, "Description": None, "Xpos": float(x), "Ypos": float(y)}
+    nodes = [{"Collection": {"EquipmentId": equipment_id, "$case": "Custom"}, "CapabilityId": {"Guid": cap_id},
+              "Id": {"Guid": call}, "$case": "CapabilityInvocation"}]
+    metadata = [meta(start, 0, 128), meta(call, 992, 160), meta(end, 1408, 128)]
+    if not is_global:
+        nodes += [
+            {"Node": {"Id": {"Guid": rel}, "TGlobal": ik_capability.atomic("GlobalPose"),
+                      "TLocal": ik_capability.atomic("LocalPose"), "$case": "RelativeToNode"}, "$case": "AtomicNode"},
+            {"Node": {"Id": {"Guid": pose}, "$case": "ReadCurrentPoseNode"}, "$case": "AtomicNode"},
+        ]
+        metadata += [meta(pose, 320, 0), meta(rel, 640, 192)]
     graph = {
         "Outputs": [{"Id": {"Guid": MOVE_ARM_OUTPUT}, "Name": {"LocalizationKey": PROCESSES_KEY, "$case": "Localized"},
                      "Type": ik_capability.LIST_PROCESS, "Description": None, "IsOptional": False}],
         "LocalVariables": [],
-        "Nodes": [
-            {"Collection": {"EquipmentId": equipment_id, "$case": "Custom"}, "CapabilityId": {"Guid": cap_id},
-             "Id": {"Guid": call}, "$case": "CapabilityInvocation"},
-            {"Node": {"Id": {"Guid": rel}, "TGlobal": ik_capability.atomic("GlobalPose"),
-                      "TLocal": ik_capability.atomic("LocalPose"), "$case": "RelativeToNode"}, "$case": "AtomicNode"},
-            {"Node": {"Id": {"Guid": pose}, "$case": "ReadCurrentPoseNode"}, "$case": "AtomicNode"},
-        ],
+        "Nodes": nodes,
         "Frames": [],
         "FirstNodeId": {"Guid": start},
         "ExecutionConnections": [
@@ -106,8 +113,7 @@ def move_arm_wrapper(equipment_id, capability):
         ],
         "DataConnections": data,
         "FixedInputs": fixed,
-        "EditorMetadata": [meta(start, 0, 128), meta(pose, 320, 0), meta(rel, 640, 192), meta(call, 992, 160),
-                           meta(end, 1408, 128)],
+        "EditorMetadata": metadata,
         "InputPortTypeConstraints": [],
         "OutputPortTypeConstraints": [],
         "InvalidExecutionConnections": [],

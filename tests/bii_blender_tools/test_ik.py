@@ -437,7 +437,13 @@ class GraphFormTest(IkTestCase):
         self.assertEqual(doubles, [1.0])
 
     def test_layout_has_no_overlaps(self):
-        g, cap = ik_capability.build_graph(self.spec())
+        spec = self.spec()
+        for global_destination in (False, True):
+            with self.subTest(global_destination=global_destination):
+                self._check_layout({**spec, "global_destination": global_destination})
+
+    def _check_layout(self, spec):
+        g, cap = ik_capability.build_graph(spec)
         self.assertEqual(ik_capability.overlaps(g), [])
         meta = cap["Implementation"]["GraphData"]["EditorMetadata"]
         self.assertEqual(len(meta), len(g.nodes))
@@ -552,10 +558,21 @@ class CraneTypeTest(IkTestCase):
         for c in g["DataConnections"]:
             if c["ToNode"]["Guid"] == call["Id"]["Guid"]:
                 self.assertIn(c["InputSlotId"]["Guid"], cap_inputs)
-        self.assertEqual(len(g["FixedInputs"]), 5)       # the IK settings, Position Only
+        self.assertEqual(len(g["FixedInputs"]), 5)       # the IK settings (the capability's defaults)
         fixed = {f["InputSlotId"]["Guid"]: f["Value"]["Value"] for f in g["FixedInputs"]}
         names = {i["Id"]["Guid"]: i["Name"].get("Text") for i in cap["Signature"]["Inputs"]}
-        self.assertIs({names[k]: v for k, v in fixed.items()}["Position Only"], True)
+        self.assertIs({names[k]: v for k, v in fixed.items()}["Position Only"], False)
+        # Lift puts the hook above the cargo turned like the cargo (not identity)
+        lift = impls[crane_type.LIFT]["GraphData"]
+        cases = {(n.get("Node", n))["Id"]["Guid"]: (n.get("Node", n))["$case"] for n in lift["Nodes"]}
+        into_pack = [c for c in lift["DataConnections"] if cases.get(c["ToNode"]["Guid"]) == "PackPoseNode"
+                     and c["InputSlotId"]["Guid"] == ik_capability.port("Rotation")]
+        self.assertEqual(len(into_pack), 1)
+        self.assertEqual(cases[into_pack[0]["FromNode"]["Guid"]], "ReadCurrentPoseNode")
+        self.assertEqual(into_pack[0]["OutputSlotId"]["Guid"], ik_capability.port("Rotation"))
+        self.assertNotIn("IdentityNode", json.dumps(into_pack))
+        # the hook point has the equipment's axes
+        self.assertLess(ik_chain.misalignment_deg(bpy.data.objects["HookPoint"], root), 1e-3)
         names = [v["Name"] for v in model["StateVariables"]]
         self.assertEqual(sorted(names), ["Current Cargo", "Current Cargo Hook Offset"])
         # again: nothing doubles
@@ -630,9 +647,9 @@ class CraneRotationTest(IkTestCase):
 
 class CraneMoveArmTest(IkTestCase):
     def test_lift_identity_rotation_reaches_position(self):
-        """Lift calls Move Arm with identity rotation, which the hook cannot take. The wrapper keeps
-        the hook's current rotation, so the hook reaches the position. Regression: it missed by
-        meters, the IK pulled towards the rotation."""
+        """An upright rotation the hook cannot turn to (no swivel) costs the position almost
+        nothing: the hook point has the equipment's axes, so it is no tilt. Regression: Lift missed
+        by meters, the rotation asked for a tilt (the point's frame was dProB's, Z up)."""
         from bii_blender_tools.equipment import crane_type
         root = truck_crane()
         rig.set_crane_hook(root, "HookPoint")
@@ -656,6 +673,87 @@ class CraneMoveArmTest(IkTestCase):
         sim = ik_capability._Sim(model, {**state, **moves}, place)
         hook = place @ sim.point_pose(ids["HookPoint"])
         self.assertLess(float(np.linalg.norm(hook[:3, 3] - target[:3, 3])), 0.02)
+
+
+    def test_deliver_turns_cargo(self):
+        """Move Arm with an upright rotation, as Deliver passes it for a turned cargo: a hook with a
+        swivel reaches the position turned like that."""
+        self._deliver_turns_cargo(False)
+
+    def test_deliver_turns_cargo_global_hook(self):
+        """The same with a hook capability that takes global destinations: Move Arm passes the
+        Destination as it is, the capability makes it relative."""
+        nodes = self._deliver_turns_cargo(True)
+        self.assertNotIn("RelativeToNode", nodes)
+
+    def _deliver_turns_cargo(self, global_destination):
+        root = truck_crane()
+        swivel = rig.insert_joint("Swivel", "Hook", ["HookPoint"], (0, -6, 2.8), axes_from=root)
+        rig.set_joint(swivel, "REVOLUTE", axis="Z", limits=None)
+        rig.set_crane_hook(root, "HookPoint")
+        rig.set_ik_target("HookPoint", global_destination=global_destination)
+        rig.preview(root, {"Boom": 20, "Tele": 3, "Hook": 4})
+        rig.export(root, self.path)
+        from bii_blender_tools.equipment import crane_type
+        model = dequip_format.read(self.path).model
+        ids = {e["Name"]: e["Id"] for e in dequip_format.walk(model["HierarchyRoots"])}
+        move_arm = next(i for i in model["EquipmentTypeImplementations"][0]["Implementations"]
+                        if i["CapabilityId"]["Guid"] == crane_type.MOVE_ARM)
+        nodes = [n.get("Node", n)["$case"] for n in move_arm["Implementation"]["GraphData"]["Nodes"]]
+        setup = ik_chain.Setup("HookPoint")
+        state = {k: 0.0 for k in ik_solver.rig_from_model(model["HierarchyRoots"])[0]}
+        for name, v in setup.start_values.items():
+            state[ids[name]] = v
+        place = np.eye(4)
+        place[:3, 3] = (100.0, 0.0, -20.0)
+        place[:3, :3] = ik_solver.axis_angle(np.array([0, 1.0, 0]), math.radians(30))
+        for heading, pos in ((70, (4.0, 2.0, -5.0)), (-120, (-3.0, 1.0, 6.0)), (180, (5.0, 3.0, 2.0))):
+            target = np.eye(4)
+            target[:3, :3] = ik_solver.axis_angle(np.array([0, 1.0, 0]), math.radians(heading))
+            target[:3, 3] = pos
+            target = place @ target
+            moves = ik_capability.simulate_type_capability(
+                move_arm, model, {ik_capability.port("Self"): "self", ik_capability.port("Destination"): target,
+                                  ik_capability.port("Duration"): 10.0}, state, place)
+            sim = ik_capability._Sim(model, {**state, **moves}, place)
+            reached = place @ sim.point_pose(ids["HookPoint"])
+            self.assertLess(float(np.linalg.norm(reached[:3, 3] - target[:3, 3])), 0.005, msg=heading)
+            turn = reached[:3, :3].T @ target[:3, :3]
+            self.assertLess(math.degrees(math.acos(min(1.0, (np.trace(turn) - 1) / 2))), 1.0, msg=heading)
+        return nodes
+
+
+class AlignTest(IkTestCase):
+    def test_align_point_with_equipment(self):
+        root = truck_crane()
+        rig.set_forward(root, "-X")
+        child = cube("Shackle", (0, -6, 2.4), bpy.data.objects["HookPoint"], size=0.05)
+        before = child.matrix_world.copy()
+        rig.set_preview("Boom", 30)
+        point = bpy.data.objects["HookPoint"]
+        self.assertGreater(ik_chain.misalignment_deg(point, root), 45)
+        rig.set_ik_target(point)
+        self.assertTrue(any("equipment's axes" in p for p in rig.problems(root)))
+        rig.align_to_equipment(point)
+        self.assertLess(ik_chain.misalignment_deg(point, root), 1e-3)
+        self.assertFalse(any("equipment's axes" in p for p in rig.problems(root)))
+        rig.reset_preview(root)
+        self.assertLess(max(abs(a - b) for ra, rb in zip(child.matrix_world, before) for a, b in zip(ra, rb)), 1e-5)
+        # dProB's identity rotation: up as up, forward to the model's front (Blender -X here)
+        setup = ik_chain.Setup(point)
+        self.assertLess(float(np.abs(setup.current_pose()[:3, :3] - np.eye(3)).max()), 1e-5)
+        name = rig.add_point("Saddle", "Hook", (0, -6, 2.3))
+        self.assertLess(ik_chain.misalignment_deg(bpy.data.objects[name], root), 1e-3)
+        with self.assertRaises(RigError):
+            rig.align_to_equipment("Hook")
+
+    def test_crane_hook_on_turned_joint_is_an_error(self):
+        root = truck_crane()
+        hook = bpy.data.objects["Hook"]
+        hook.rotation_euler = (0, 0, 0.5)
+        bpy.context.view_layer.update()
+        with self.assertRaises(RigError):
+            rig.set_crane_hook(root, hook)
 
 
 class InsertJointTest(IkTestCase):
@@ -857,6 +955,26 @@ class TrialHelpersTest(IkTestCase):
         root = truck_crane()
         rig.set_ik_target("HookPoint", orientation_weight=0.001)
         rig.export(root, self.path)
+        res = rig.verify_ik("HookPoint", [(0, -3, 4), (0, 8, 2), (5, 0, 6)])
+        for r in res:
+            self.assertLess(r["position_error_m"], 0.01, r)
+            self.assertLess(r["max_joint_difference"], 1e-4, r)
+
+    def test_global_destination(self):
+        """Global Destination: the Destination is a GlobalPose, made relative to the equipment's
+        current pose in the graph; verify_ik runs it with the equipment turned and moved."""
+        root = truck_crane()
+        rig.set_ik_target("HookPoint", orientation_weight=0.001, global_destination=True)
+        self.assertTrue(rig.describe_joint("HookPoint")["ik"]["global_destination"])
+        rig.export(root, self.path)
+        model = dequip_format.read(self.path).model
+        cap = next(c for c in model["CustomCapabilities"]
+                   if c["Signature"]["Id"]["Guid"] == bpy.data.objects["HookPoint"].bii_rig.ik_capability_id)
+        dest = next(i for i in cap["Signature"]["Inputs"] if i["Name"].get("Text") == "Destination")
+        self.assertEqual(dest["Type"], ik_capability.atomic("GlobalPose"))
+        cases = [n.get("Node", n)["$case"] for n in cap["Implementation"]["GraphData"]["Nodes"]]
+        self.assertEqual(cases.count("RelativeToNode"), 1)
+        self.assertEqual(cases.count("ReadCurrentPoseNode"), 1)
         res = rig.verify_ik("HookPoint", [(0, -3, 4), (0, 8, 2), (5, 0, 6)])
         for r in res:
             self.assertLess(r["position_error_m"], 0.01, r)

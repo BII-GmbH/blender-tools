@@ -25,6 +25,9 @@ from mathutils import Euler, Matrix, Vector
 from . import crane_type, dequip_format, dprob_math, fbx_binary, ik_capability, ik_chain, rig_props, textures
 from .rig_props import RigError
 
+# an IK target's rest frame may differ this much from the equipment's axes
+ALIGN_TOLERANCE_DEG = 0.5
+
 FBX_TYPES = {"EMPTY", "MESH", "OTHER"}
 
 
@@ -84,7 +87,13 @@ def problems(root):
             out.append(("ERROR", f"the crane hook {hook.name} is not part of this rig"))
         elif not (hook.bii_rig.attachment_point and hook.bii_rig.ik_target):
             out.append(("ERROR", f"the crane hook {hook.name} must be an attachment point with an IK capability"))
+        elif ik_chain.misalignment_deg(hook, root) > ALIGN_TOLERANCE_DEG:
+            out.append(("ERROR", f"the crane hook {hook.name} is turned {ik_chain.misalignment_deg(hook, root):.0f} "
+                                 "degrees from the equipment's axes: Lift and Deliver pass rotations with "
+                                 "dProB's up as up. Align it with the equipment (fixed point), or add a "
+                                 "load point under it"))
     names = {}
+    space = None
     for o in objs:
         j = o.bii_rig
         if not j.ik_target:
@@ -98,6 +107,15 @@ def problems(root):
         elif j.joint_type == "FIXED" and not j.attachment_point:
             out.append(("ERROR", f"IK capability of {o.name}: a fixed part must be an attachment point "
                                  "(dProB reads its pose from there)"))
+        elif o is not hook:
+            if space is None:
+                space = ik_chain.Space(root)
+            angle = ik_chain.misalignment_deg(o, root, space)
+            if angle > ALIGN_TOLERANCE_DEG:
+                out.append(("WARNING", f"IK capability of {o.name}: its frame is turned {angle:.0f} degrees "
+                                       "from the equipment's axes, so its Destination's rotation is too "
+                                       "(identity is not upright). Align it with the equipment if it is a "
+                                       "load point"))
         elif j.ik_root is not None and j.ik_root is not o and j.ik_root not in rig_props.ancestors(o):
             out.append(("ERROR", f"IK capability of {o.name}: its root joint {j.ik_root.name} is not above it"))
     return out

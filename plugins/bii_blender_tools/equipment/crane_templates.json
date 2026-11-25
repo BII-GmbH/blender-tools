@@ -45,19 +45,6 @@
       "$case": "InputGetter"
      },
      {
-      "Node": {
-       "Id": {
-        "Guid": "090321c4-6f89-4c01-bc54-163cfba2c9f2"
-       },
-       "T": {
-        "Type": "GlobalRotation",
-        "$case": "Atomic"
-       },
-       "$case": "IdentityNode"
-      },
-      "$case": "AtomicNode"
-     },
-     {
       "AttachmentPointId": "{{HOOK_POINT_ID}}",
       "CachedPointName": "{{HOOK_POINT_NAME}}",
       "Id": {
@@ -1308,10 +1295,10 @@
      },
      {
       "FromNode": {
-       "Guid": "090321c4-6f89-4c01-bc54-163cfba2c9f2"
+       "Guid": "5a90167f-7b1d-46f5-95eb-294396e19971"
       },
       "OutputSlotId": {
-       "Guid": "383f9e33-9903-5871-ad03-207c041783ab"
+       "Guid": "4d672809-d13b-5359-ab2e-7e1f7b019494"
       },
       "ToNode": {
        "Guid": "c1935d2a-2b36-41a7-9a16-4b74ac3c43bb"
@@ -1626,14 +1613,6 @@
       "Description": null,
       "Xpos": 1184.0,
       "Ypos": 128.0
-     },
-     {
-      "Node": {
-       "Guid": "090321c4-6f89-4c01-bc54-163cfba2c9f2"
-      },
-      "Description": null,
-      "Xpos": 224.0,
-      "Ypos": 736.0
      },
      {
       "Node": {

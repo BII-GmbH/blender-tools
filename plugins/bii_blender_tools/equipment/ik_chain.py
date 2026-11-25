@@ -125,6 +125,22 @@ class Space:
         return float(value)
 
 
+def equipment_rotation(root):
+    """Blender world rotation (3x3) of a part whose dProB frame has the equipment's axes. dProB
+    takes an object's local Z as forward and its local Y as up: such a part shows Y up, Z to the
+    model's front and X to the model's left in Blender (dProB mirrors X)."""
+    f = _np(rig_props.forward_turn(root))
+    r0 = np.array([[-1.0, 0, 0], [0, 0, 1.0], [0, 1.0, 0]])     # columns: X, Y, Z in Blender
+    return f.T @ r0
+
+
+def misalignment_deg(obj, root, space=None):
+    """Angle (degrees) between the rest frame of a part in dProB and the equipment's axes."""
+    space = space or Space(root)
+    r = space.rest_pose(obj)[:3, :3]
+    return math.degrees(math.acos(max(-1.0, min(1.0, (np.trace(r) - 1) / 2))))
+
+
 def parent_joint(obj, root):
     """Nearest jointed ancestor of obj inside the rig, or None."""
     p = obj.parent
@@ -369,6 +385,7 @@ class Setup:
             "loops": self.loops,
             "orientation_weight": self.weight,
             "seed_margin": self.seed_margin,
+            "global_destination": bool(r.ik_global_destination),
             "seeds": [eid[by_name[k]] for k in self.seed_ranges()],
             "end_path": [eid[o] for o in self.above + self.chain_objs],
             "aim": None if self.aim is None else {

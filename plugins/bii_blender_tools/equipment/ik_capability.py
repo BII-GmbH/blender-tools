@@ -3,7 +3,9 @@
 For every rig object marked as IK target the export writes one custom capability:
 
     inputs:  Self (the equipment), Destination (LocalPose of the part, relative to the
-             equipment), Duration, and the IK settings with the values from Blender as defaults:
+             equipment; with Global Destination a GlobalPose in the world, which the graph makes
+             relative to the equipment's current pose as the Crane's Move Arm does), Duration,
+             and the IK settings with the values from Blender as defaults:
              Iterations, Orientation Weight, Start Away from Limits, Passes (with couplings)
     output:  Processes (one Move Revolute/Prismatic/Ball Joint process per moved joint, all with
              the full duration, so they run together)
@@ -313,6 +315,7 @@ def build_graph(spec):
       attachment_point: True when the target is a fixed attachment point on the end joint
       root: (element id, name) of the IK root joint or None
       iterations, loops, orientation_weight, seed_margin: defaults of the capability's inputs
+      global_destination: the Destination is a GlobalPose (made relative to Self's current pose)
       joints: {element id: (name, kind)} of every joint involved
       chain: [element id] of the IK chain (root first)
       seeds: [element id] of the chain joints that start away from their limits
@@ -337,6 +340,9 @@ def build_graph(spec):
            "Position Only": g.id("input Position Only")}
     inputs = [
         _input_port(port("Self"), SELF_NAME_KEY, atomic("Subject"), SELF_DESCRIPTION_KEY, localized=True),
+        _input_port(ins["Destination"], "Destination", atomic("GlobalPose"),
+                    f"Pose of {spec['target'][1]} in the world")
+        if spec.get("global_destination") else
         _input_port(ins["Destination"], "Destination", atomic("LocalPose"),
                     f"Pose of {spec['target'][1]} relative to the equipment"),
         _input_port(ins["Duration"], "Duration", atomic("Duration"), "Duration of the movement"),
@@ -417,6 +423,23 @@ def build_graph(spec):
 
     memo = {}
 
+    def destination():
+        """The Destination relative to the equipment: the input, or with Global Destination the
+        input relative to the equipment's current pose (one Relative To node for all uses)."""
+        if not spec.get("global_destination"):
+            return g.input(ins["Destination"], "Destination")
+        if "destination" not in memo:
+            pose = g.add("current pose", {"$case": "ReadCurrentPoseNode"}, "Get Current Pose",
+                         ins=[port("Subject")], outs=[port("Pose"), port("Position"), port("Rotation")])
+            g.link(*g.input(port("Self"), "Self"), pose, port("Subject"))
+            rel = g.add("relative to", {"TGlobal": atomic("GlobalPose"), "TLocal": atomic("LocalPose"),
+                                        "$case": "RelativeToNode"}, "Relative To",
+                        ins=[port("Global"), port("Reference")], outs=[port("Local")])
+            g.link(*g.input(ins["Destination"], "Destination"), rel, port("Global"))
+            g.link(pose, port("Pose"), rel, port("Reference"))
+            memo["destination"] = (rel, port("Local"))
+        return memo["destination"]
+
     def local_pose_of_target():
         lp = g.add(g.unique("local pose"), {"$case": "AttachmentPointGetLocalPoseNode"}, "Get Local Pose",
                    ins=[port("Attachment Point")], outs=[port("Pose"), port("Joint")])
@@ -447,7 +470,7 @@ def build_graph(spec):
             name = joints[eid][0]
             lpos, loff, ldir = atomic("LocalPosition"), atomic("LocalOffset"), atomic("LocalDirection")
             joint_frame = unpack_local(frame_of(aim["path"], name), "unpack aim joint")
-            dest = unpack_local(g.input(ins["Destination"], "Destination"), "unpack aim destination")
+            dest = unpack_local(destination(), "unpack aim destination")
             cons = g.add(g.unique(f"aim axis {eid}"), {"$case": CONSTRAINTS["REVOLUTE"][0]},
                          CONSTRAINTS["REVOLUTE"][1], ins=[port("Joint")],
                          outs=[port(o) for o in CONSTRAINTS["REVOLUTE"][2]])
@@ -569,7 +592,7 @@ def build_graph(spec):
             g.link(*if_false, n, port("B"))
             return n, port("Result")
 
-        dest_pose = g.input(ins["Destination"], "Destination")
+        dest_pose = destination()
         dest = unpack_local(dest_pose, "unpack destination")
         turned = (current_part(), port("Rotation"))
         if spec.get("aim"):
@@ -824,8 +847,9 @@ def layout(g, start):
     Execution nodes sit on rows, left to right in execution order; a Loop Range's Body continues
     its row, its Done starts a new row below everything above. Each execution node's data
     providers form a tree to its left: a provider's own inputs go further left, stacked top-down
-    in port order from the row of the input they feed. A provider used by several nodes is placed
-    with the first; getters are made per use, so they sit next to their consumer.
+    from the row of the input they feed, deeper subtrees first, else in port order. A provider
+    used by several nodes is placed with the first; getters are made per use, so they sit next to
+    their consumer.
     """
     nodes = g.nodes
     succ = {}
@@ -834,10 +858,22 @@ def layout(g, start):
     providers = {}
     for c in g.data:
         providers.setdefault(c["ToNode"]["Guid"], []).append((c["InputSlotId"]["Guid"], c["FromNode"]["Guid"]))
+    is_exec = {nid for nid, n in nodes.items() if n.exec_in or n.exec_outs}
+    depth = {}
+
+    def chain_depth(nid):
+        """Longest provider chain below a data node."""
+        if nid not in depth:
+            depth[nid] = 0
+            depth[nid] = 1 + max([chain_depth(s) for _, s in providers.get(nid, ()) if s not in is_exec] + [-1])
+        return depth[nid]
+
+    # deeper subtrees first (else port order): a provider used by several nodes is placed with the
+    # first that reaches it, and so lands left of the deepest one too
     for k, lst in providers.items():
         n = nodes[k]
-        lst.sort(key=lambda p: n.ins.index(p[0]) if p[0] in n.ins else 99)
-    is_exec = {nid for nid, n in nodes.items() if n.exec_in or n.exec_outs}
+        lst.sort(key=lambda p: (-chain_depth(p[1]) if p[1] not in is_exec else 0,
+                                n.ins.index(p[0]) if p[0] in n.ins else 99))
     placed = set()
 
     def tree(nid, right, top, out):

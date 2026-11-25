@@ -25,6 +25,8 @@ from mathutils import Euler, Matrix, Vector
 from . import dequip_format, ik_chain, rig_export, rig_preview, rig_props
 from .rig_props import RigError
 
+ALIGN_TOLERANCE_DEG = rig_export.ALIGN_TOLERANCE_DEG
+
 JOINT_TYPES = dequip_format.JOINT_TYPES
 
 
@@ -235,7 +237,7 @@ def describe_joint(obj, _worlds=None):
         d["ik"] = {"name": j.ik_name or f"Move {o.name}", "root_joint": j.ik_root.name if j.ik_root else None,
                    "iterations": j.ik_iterations, "passes": j.ik_loops,
                    "orientation_weight": j.ik_orientation_weight, "seed_margin": j.ik_seed_margin,
-                   "capability_id": j.ik_capability_id}
+                   "global_destination": j.ik_global_destination, "capability_id": j.ik_capability_id}
     return d
 
 
@@ -433,7 +435,7 @@ def set_free(obj):
 # ------------------------------------------------------------------ IK
 
 def set_ik_target(obj, enabled=True, name=None, root_joint="keep", iterations=None, loops=None,
-                  orientation_weight=None, description=None, seed_margin=None):
+                  orientation_weight=None, description=None, seed_margin=None, global_destination=None):
     """Exports an IK capability for the part: "move it to a pose" with dProB's IK node.
 
     name: capability name (default "Move <object>"). root_joint: lowest joint the IK may move
@@ -444,6 +446,9 @@ def set_ik_target(obj, enabled=True, name=None, root_joint="keep", iterations=No
     overshoots and does not settle).
     seed_margin: the IK starts with limited joints at least this share of their range inside
     their limits (default 0.1); joints resting at a limit often stall the solver.
+    global_destination: True: the capability takes the Destination in the world (GlobalPose) and
+    makes it relative to the equipment's current pose, as the Crane's Move Arm does; False
+    (default): relative to the equipment (LocalPose).
     """
     o = _obj(obj)
     if rig_props.rig_root(o) is None:
@@ -464,6 +469,8 @@ def set_ik_target(obj, enabled=True, name=None, root_joint="keep", iterations=No
         j.ik_orientation_weight = float(orientation_weight)
     if seed_margin is not None:
         j.ik_seed_margin = float(seed_margin)
+    if global_destination is not None:
+        j.ik_global_destination = bool(global_destination)
     if enabled:
         if j.joint_type == "FIXED":
             j.attachment_point = True       # dProB reads a fixed target's pose from its attachment point
@@ -478,7 +485,9 @@ def set_crane_hook(root, hook):
     The hook becomes an attachment point with an IK capability (see set_ik_target). The export
     then adds the Crane type: Move Arm invokes the hook's IK capability with the destination
     relative to the equipment, Lift and Deliver are dProB's own implementations on this hook,
-    and the state variables Current Cargo and Current Cargo Hook Offset are added.
+    and the state variables Current Cargo and Current Cargo Hook Offset are added. A fixed hook
+    point is turned to the equipment's axes (align_to_equipment), so the rotations Lift and Deliver
+    pass (up is up) are ones it can take.
     """
     r = _root(root)
     if hook is None:
@@ -488,6 +497,11 @@ def set_crane_hook(root, hook):
     if rig_props.rig_root(h) is not r:
         raise RigError(f"{h.name} is not part of the rig of {r.name}")
     h.bii_rig.attachment_point = True
+    if ik_chain.misalignment_deg(h, r) > ALIGN_TOLERANCE_DEG:
+        if h.bii_rig.joint_type != "FIXED":
+            raise RigError(f"{h.name}: the crane hook's frame must have the equipment's axes, and its "
+                           "axes define its joint. Add a load point under it with add_point")
+        align_to_equipment(h)
     if not h.bii_rig.ik_target:
         set_ik_target(h)
     r.bii_rig.crane_hook = h
@@ -661,12 +675,28 @@ def to_dprob(root, point_world):
     return tuple(round(float(v), 6) for v in space.pose(rig_export._np(m))[:3, 3])
 
 
+def _verify_placement():
+    """dProB pose of the equipment for verify_ik of a Global Destination: turned 37 degrees about
+    up (+Y) and moved."""
+    import numpy as np
+    a = math.radians(37)
+    m = np.eye(4)
+    m[:3, :3] = [[math.cos(a), 0, math.sin(a)], [0, 1, 0], [-math.sin(a), 0, math.cos(a)]]
+    m[:3, 3] = (12.0, 0.5, -7.0)
+    return m
+
+
 def verify_ik(obj, targets_world, path=None, position_only=True):
     """Runs the IK capability of a part as exported (the graph in the .dequip, with a port of
     dProB's IK node) for world targets, and compares it with the Blender preview's solve.
 
+    targets_world: points (x, y, z), the part keeping its current rotation, or 4x4 world
+    matrices (the rotation counts with position_only=False).
+
     Returns per target: the position error of the exported graph's result (meters, the target
     part's distance from the target) and the largest joint difference to the preview.
+    A capability with Global Destination runs with the equipment placed somewhere in the world
+    (turned and moved), the target given in the world there.
     """
     import numpy as np
     from . import ik_capability, ik_solver
@@ -688,10 +718,19 @@ def verify_ik(obj, targets_world, path=None, position_only=True):
     out = []
     cur = setup.current_world()
     for t in targets_world:
-        world = np.array(cur)
-        world[:3, 3] = t
+        t = np.array(t, dtype=float)
+        if t.shape == (4, 4):
+            world = t
+        else:
+            world = np.array(cur)
+            world[:3, 3] = t
         dest = setup.destination(world)
-        moves = ik_capability.simulate(cap, model, dest, state, inputs={"Position Only": position_only})
+        if o.bii_rig.ik_global_destination:
+            placed = _verify_placement()
+            moves = ik_capability.simulate(cap, model, placed @ dest, state,
+                                           inputs={"Position Only": position_only}, subject_pose=placed)
+        else:
+            moves = ik_capability.simulate(cap, model, dest, state, inputs={"Position Only": position_only})
         values, _, _ = setup.solve(dest, position_only=position_only)
         sim = ik_capability._Sim(model, {**state, **moves}, None)
         reached = sim.point_pose(by_name[o.name])[:3, 3]
@@ -703,7 +742,7 @@ def verify_ik(obj, targets_world, path=None, position_only=True):
                 if joints[k].kind == "REVOLUTE" and joints[k].limits is None:
                     d = (d + math.pi) % (2 * math.pi) - math.pi
                 diff = max(diff, abs(d))
-        out.append({"target": tuple(t), "position_error_m": float(np.linalg.norm(reached - dest[:3, 3])),
+        out.append({"target": tuple(world[:3, 3]), "position_error_m": float(np.linalg.norm(reached - dest[:3, 3])),
                     "max_joint_difference": diff})
     return out
 
@@ -711,13 +750,49 @@ def verify_ik(obj, targets_world, path=None, position_only=True):
 def add_point(name, parent, point_world, axes_from=None, attachment_point=True, size=0.2):
     """Adds a fixed empty at a world point under `parent` and returns its name: the load point of
     a hook or a tool (attachment_point=True), the exact point an IK capability moves and cargo
-    hangs from. axes_from: the object whose world rotation it takes (default the parent's); the
-    cargo hangs in these axes. Nothing else moves."""
+    hangs from. Its axes are the equipment's (see align_to_equipment), so a rotation with dProB's
+    up as up is one the hook can take; axes_from: an object whose world rotation it takes
+    instead. Nothing else moves."""
     name = insert_joint(name, parent, [], point_world, axes_from=axes_from, size=size)
     o = bpy.data.objects[name]
     o.bii_rig.joint_type = "FIXED"
     o.bii_rig.attachment_point = bool(attachment_point)
+    if axes_from is None:
+        align_to_equipment(o)
     return name
+
+
+def align_to_equipment(obj):
+    """Turns a fixed part (an IK target's load point) so its frame in dProB has the equipment's
+    axes at rest: dProB's up (+Y) up, forward (+Z) to the model's front. In Blender it then shows
+    Y up, Z to the front, X to the left. Children keep their world transforms.
+
+    An IK capability's Destination is the target's frame: with this, a rotation whose up is dProB's
+    up (what users and Lift and Deliver give) is one a hanging hook can take, and turning it about
+    up turns the hook. Returns the angle it turned (degrees)."""
+    o = _obj(obj)
+    root = rig_props.rig_root(o)
+    if root is None:
+        raise RigError(f"{o.name} is not part of a rig")
+    if o.bii_rig.joint_type != "FIXED":
+        raise RigError(f"{o.name} has a joint; its axes define the joint. Add a load point under it "
+                       "with add_point instead")
+    saved = {j: rig_props.preview_value(j.bii_rig) for j in rig_props.joints(root)}
+    rig_preview.reset(root)
+    bpy.context.view_layer.update()
+    angle = ik_chain.misalignment_deg(o, root)
+    kids = [c for c in o.children]
+    worlds = {c: c.matrix_world.copy() for c in kids}
+    rot = Matrix([list(r) for r in ik_chain.equipment_rotation(root)])
+    loc, _, scale = o.matrix_world.decompose()
+    o.matrix_world = Matrix.LocRotScale(loc, rot.to_quaternion(), scale)
+    bpy.context.view_layer.update()
+    for c in kids:
+        c.matrix_world = worlds[c]
+    for j, v in saved.items():
+        rig_props.set_preview_value(j, v)
+    bpy.context.view_layer.update()
+    return angle
 
 
 def insert_joint(name, parent, children, pivot_world, axes_from=None, size=0.3):

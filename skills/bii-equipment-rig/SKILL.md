@@ -94,7 +94,7 @@ rig.set_pivot("Boom", (0, 1.5, 3.2))                              # hinge pin, w
 name = rig.insert_joint("Hook Level", "Section1", ["Hook Block"], (0, -12, 4), axes_from="Machine")
 rig.set_joint(name, "REVOLUTE", axis="-X", limits=(-5, 75))
 rig.set_follow(name, [("Boom", 1)])                               # keeps the hook block level
-point = rig.add_point("Load Point", "Hook", (0, -12, 0.9), axes_from="Machine")
+point = rig.add_point("Load Point", "Hook", (0, -12, 0.9))         # equipment's axes
 ```
 
 - Check every joint: `describe_joint(obj)` gives `axis_world` and `pivot_world`. The pivot must lie
@@ -127,15 +127,23 @@ rig.set_crane_hook("Machine", "Load Point")                # anything that carri
   only when the target must also turn (a gripper), and then the target needs joints to turn it.
   dProB measures the orientation error in degrees, so above about 0.03 it overshoots. Do not use
   0 with a Follow joint in the chain: the passes then converge slowly.
+- `global_destination=True`: the capability takes the Destination in the world, like the Crane's
+  Move Arm, and makes it relative to the equipment's current pose. Default: relative to the
+  equipment. Ask the user which one scripts in dProB will pass.
 - The capability first turns the top-most unlimited joint (slewing) so that the target part points
   at the destination, and starts limited joints away from their limits. Its input Position Only
-  ignores the destination's rotation (the Crane's Move Arm uses it).
+  ignores the destination's rotation.
+- A load point's frame should have the equipment's axes (`add_point` does that,
+  `align_to_equipment` fixes an existing one): then a destination rotation with dProB's up as up
+  is one a hanging hook can take. `problems` warns otherwise.
 - Test targets all around: near and far, high and low, left, right, behind, and in front of the
   machine. `position_error_m` must be small for reachable targets. Off for a reachable target:
   raise `seed_margin` (start away from limits), the iterations or the passes; check the joints'
   limits and directions. Look at the results. `rig.reset_preview(root)` afterwards.
-- `set_crane_hook` makes the equipment a dProB Crane: Move Arm (on the hook's IK capability,
-  position only), Lift and Deliver (attach and detach cargo at the hook's attachment point).
+- `set_crane_hook` makes the equipment a dProB Crane: Move Arm (on the hook's IK capability),
+  Lift and Deliver (attach and detach cargo at the hook's attachment point; the cargo keeps the
+  rotation the user gives it if the hook can turn: give it a swivel). It aligns a fixed hook
+  point with the equipment's axes.
   dProB treats anything as a crane that moves cargo with IK: mobile and tower cranes, excavators,
   loader arms, gantries. Ask the user whether they want it.
 

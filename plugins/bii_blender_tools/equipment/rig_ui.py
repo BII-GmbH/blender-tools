@@ -1,5 +1,6 @@
 """Sidebar panels (View3D > Sidebar > BII Equipment), operators and File > Export entry."""
 
+import math
 import os
 
 import bpy
@@ -84,6 +85,30 @@ class BII_RIG_OT_pivot_to_cursor(bpy.types.Operator):
 
     def execute(self, context):
         rig_api.set_pivot(context.object, context.scene.cursor.location)
+        return {"FINISHED"}
+
+
+class BII_RIG_OT_align_to_equipment(bpy.types.Operator):
+    bl_idname = "bii_rig.align_to_equipment"
+    bl_label = "Align with Equipment Axes"
+    bl_description = ("Turns this fixed part so its frame in dProB has the equipment's axes at rest (up as "
+                      "up, forward to the model's front): rotations given to its IK capability, as Lift and "
+                      "Deliver give them, then have up as up. Children stay in place")
+    bl_options = {"REGISTER", "UNDO"}
+
+    @classmethod
+    def poll(cls, context):
+        o = context.object
+        return (o is not None and context.mode == "OBJECT" and o.bii_rig.joint_type == "FIXED"
+                and rig_props.rig_root(o) is not None)
+
+    def execute(self, context):
+        try:
+            angle = rig_api.align_to_equipment(context.object)
+        except RigError as e:
+            self.report({"ERROR"}, str(e))
+            return {"CANCELLED"}
+        self.report({"INFO"}, f"Turned {angle:.1f} degrees")
         return {"FINISHED"}
 
 
@@ -242,6 +267,24 @@ def _value_prop(j):
     return {"REVOLUTE": "preview_angle", "PRISMATIC": "preview_length", "BALL": "preview_ball"}.get(j.joint_type)
 
 
+def _value_text(j):
+    """The joint's preview value as text, in the scene's units."""
+    if j.joint_type == "REVOLUTE":
+        return f"{math.degrees(j.preview_angle):.1f}°"
+    us = bpy.context.scene.unit_settings
+    return bpy.utils.units.to_string(us.system, "LENGTH", j.preview_length * us.scale_length, precision=3)
+
+
+def _draw_value(layout, j, text=None):
+    """A limited joint: a slider over its whole limit range, labeled with the value. Otherwise
+    the value field."""
+    if rig_props.limits(j) is not None:
+        layout.prop(j, "preview_position", text=_value_text(j) if text is None else f"{text}: {_value_text(j)}",
+                    slider=True)
+    else:
+        layout.prop(j, _value_prop(j), text="" if text is None else text)
+
+
 class VIEW3D_PT_bii_rig(bpy.types.Panel):
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -281,7 +324,7 @@ class VIEW3D_PT_bii_rig(bpy.types.Panel):
             else:
                 sub = row.row(align=True)
                 sub.enabled = j.drive != "FOLLOW"
-                sub.prop(j, prop, text="", slider=rig_props.limits(j) is not None)
+                _draw_value(sub, j)
                 if j.drive != "FREE":
                     row.label(text="", icon="LINKED" if j.drive == "FOLLOW" else "LOCKED")
         row = layout.row(align=True)
@@ -322,9 +365,14 @@ class VIEW3D_PT_bii_rig_joint(bpy.types.Panel):
             row.prop(j, "length_max")
         prop = _value_prop(j)
         if prop:
-            row = layout.row()
-            row.enabled = j.drive != "FOLLOW" or j.joint_type == "BALL"
-            row.prop(j, prop, text="Preview", slider=rig_props.limits(j) is not None)
+            col = layout.column(align=True)
+            col.enabled = j.drive != "FOLLOW" or j.joint_type == "BALL"
+            if j.joint_type == "BALL":
+                col.prop(j, prop, text="Preview")
+            else:
+                if rig_props.limits(j) is not None:
+                    _draw_value(col, j, text="Preview")
+                col.prop(j, prop, text="Value")
         if j.joint_type in ("REVOLUTE", "PRISMATIC"):
             box = layout.box()
             box.prop(j, "drive")
@@ -387,6 +435,9 @@ class VIEW3D_PT_bii_rig_ik(bpy.types.Panel):
         row.prop(j, "ik_loops")
         col.prop(j, "ik_orientation_weight")
         col.prop(j, "ik_seed_margin")
+        col.prop(j, "ik_global_destination")
+        if j.joint_type == "FIXED":
+            col.operator("bii_rig.align_to_equipment", icon="ORIENTATION_GLOBAL")
         row = layout.row()
         row.scale_y = 1.3
         row.operator("bii_rig.ik_preview", text="End IK Preview" if active else "IK Preview",
@@ -438,7 +489,7 @@ def menu_export(self, context):
 
 classes = (
     BII_RIG_OT_make_root, BII_RIG_OT_remove_root, BII_RIG_OT_select, BII_RIG_OT_pivot_to_cursor,
-    BII_RIG_OT_copy_joint, BII_RIG_OT_follow_add, BII_RIG_OT_follow_remove,
+    BII_RIG_OT_align_to_equipment, BII_RIG_OT_copy_joint, BII_RIG_OT_follow_add, BII_RIG_OT_follow_remove,
     BII_RIG_OT_export, BII_RIG_OT_export_as, BII_RIG_OT_check,
     VIEW3D_PT_bii_rig, VIEW3D_PT_bii_rig_joint, VIEW3D_PT_bii_rig_ik, VIEW3D_PT_bii_rig_export,
 )

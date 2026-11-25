@@ -54,12 +54,13 @@ leader moves.
   only points down when everything above keeps it level: below a luffing boom it needs the level
   joint above (previous pattern); below a trolley on a horizontal jib it is level anyway.
 - Hook spin: a revolute joint about the rope axis, unlimited, so the IK can turn a load.
-- Load point: `rig.add_point(name, hook, saddle_point, axes_from=root)`, a fixed empty at the exact
+- Load point: `rig.add_point(name, hook, saddle_point)`, a fixed empty at the exact
   point a load hangs from (the hook's saddle, not the hook's origin), marked as attachment point.
   Finding the saddle: for a hook made of a curve with a bevel, the lowest point of the curve's
   centerline inside the hook's mouth plus the bevel radius; for a mesh, the lowest vertices of
   the inner surface of the mouth.
-  That is the IK target and the crane hook; cargo hangs in its axes, so give it the root's axes.
+  That is the IK target and the crane hook. It gets the equipment's axes (dProB up as up), so
+  rotations users give (up is up) are ones the hook can take; do not pass `axes_from`.
 - Typical chain: tip/trolley -> level joint (if luffing) -> rope (prismatic down) -> hook spin
   (revolute) -> hook block and hook -> load point (fixed, attachment point).
 - Rope length is free for the IK: for a position it may lengthen the rope instead of luffing or
@@ -123,4 +124,5 @@ Wheels and tracks are not driven by the rig.
 Move Arm, Lift, Deliver. It fits every machine that lifts and sets down cargo at one point:
 mobile and tower cranes, excavators with a hook or a gripper, loader arms, gantries. Lift and
 Deliver attach the cargo to the load point, so the load point's frame is the frame the cargo
-hangs in.
+hangs in. Lift turns the hook like the cargo; Deliver then sets the cargo down turned as asked,
+if the hook has a swivel (or only by slewing, if not).
