@@ -102,7 +102,7 @@ never take the facing from the side of the track or the km direction.
 ## 5. Place
 
 ```python
-sig = sp.place_signal("ks_haupt", {"zs3": "tafel", "kennziffer": 6},
+sig = sp.place_signal("ks_haupt", {"zs3": "tafel"},
                       location=plan_api.plan_to_world(plan, u, v, 'IMAGE'),          # foot
                       head=plan_api.plan_to_world(plan, u_head, v_head, 'IMAGE'),    # top end
                       align_to_track=True, on_terrain=True,
@@ -116,6 +116,9 @@ sig["plan_label"] = "06N601"
   symbol's. Leave it off for a signal whose symbol is drawn across the track or far from any track.
 - Keep the name `place_signal` gives ("<Name> <Tag>", e.g. "Vorsignal Ks1/Ks2/Zs3v"); put the plan
   label into the custom property `plan_label`.
+- `kennziffer` exists only on the Bauformen `zs3`, `zs3v`, `lf6` and `lf7` (standalone plates).
+  For the Zs3/Zs3v of a Ks or H/V signal, put the number into the custom property
+  `sig["kennziffer"]` and into the report.
 - A `ValueError` lists the allowed values: fix the configuration, do not work around it.
 - Change a placed signal with `sp.configure_signal(sig, {"zs3v": "licht"})` (another Bauform:
   `bauform="ks_mehr"`, which returns a new object).
