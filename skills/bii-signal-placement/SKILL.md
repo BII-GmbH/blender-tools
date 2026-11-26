@@ -180,6 +180,13 @@ for o in bpy.data.collections["Signale"].objects:
   row of your table that says what it is (label or km text, GSA/GSE, INA magnet, note) or get its
   signal placed now. Vorsignalbaken (Ne 3) were missed twice because the inventory only counted
   symbols with a leader and foot bar; they show up here.
+- **Vorsignalbaken before every Vorsignal**: a Vorsignal (`ks_vor`, `hv_vor`, also the distant
+  signal part of a `ks_mehr`) usually has 1 to 3 Ne 3 boards on its approach side, about 75, 150
+  and 225 m before it, the nearest with 1 stripe. For each placed Vorsignal, crop the plan along
+  its track 50 to 300 m before it (`world_to_plan`, then `crop_image`, `scale=3`) and ask "is
+  there a small plate with diagonal stripes, and how many stripes?". Place every board found.
+  A Vorsignal without any board is possible (short distances, boards on another sheet), but say
+  so in the report. Ne 3 boards were missed in four of seven runs.
 - Position: mark the placed feet on the plan and compare: crop the plan around a
   group of signals, draw a small circle at each `world_to_plan` position (Pillow), ask "is each
   circle on the foot bar of its symbol?".
