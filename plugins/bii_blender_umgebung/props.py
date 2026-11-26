@@ -393,6 +393,11 @@ class RC_Props(PropertyGroup):
         default='SHRINKWRAP',
     )
 
+    terrain_under_plans: BoolProperty(
+        name="Nur unter Plänen", default=False,
+        description="Gelände nur dort laden, wo Lagepläne liegen (BII Import, flach), plus einen "
+                    "Korridorradius davor und dahinter. Wo zwei Kilometrierungslinien nebeneinander "
+                    "laufen, nur einmal. Ohne Pläne in der Szene: entlang der ganzen Linie")
     terrain_segment_length: FloatProperty(
         name="Abschnittslänge", default=5000.0, min=0.0, max=100000.0, subtype='DISTANCE',
         description="Das Gelände wird in Abschnitte dieser Länge unterteilt. Jeder Abschnitt "

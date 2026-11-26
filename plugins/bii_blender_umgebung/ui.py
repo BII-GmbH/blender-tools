@@ -387,6 +387,7 @@ class RC_PT_ground(_Base, Panel):
                     col.prop(props, "dem_fallback_zoom")
             col.prop(props, "dem_zero_level")
             col.prop(props, "dem_use_blosm_offset")
+        col.prop(props, "terrain_under_plans")
         col.prop(props, "terrain_segment_length")
         col.prop(props, "drape_mode")
         box.operator("railway_chainage.import_terrain", icon='IMPORT')

@@ -222,7 +222,8 @@ class SignalDraft(bpy.types.PropertyGroup):
                             f"{LIBRARY_FILE}). Empty: the first one that has the signal")
     align_to_track: BoolProperty(
         name="Align to Track", default=True,
-        description="Turn the signal to the nearest Umgebung track axis (Gleisachse), lamps facing along it")
+        description="Turn the signal along the nearest Umgebung track axis (Gleisachse). Check that it "
+                    "faces the way its symbol is drawn (from the symbol's top to its foot); Turn 180° if not")
     on_terrain: BoolProperty(
         name="On Terrain", default=True,
         description="Put the signal on the BII Umgebung terrain under the 3D cursor (the cursor's height "
@@ -501,20 +502,49 @@ def load_signal_object(path, asset, method):
 
 def track_direction(context, point):
     """Unit XY tangent of the nearest Umgebung track axis at point (x, y), or None."""
+    hit = nearest_track(context, point)
+    return hit[1] if hit else None
+
+
+def nearest_track(context, point):
+    """(distance, tangent, nearest point) of the nearest Umgebung track axis at point (x, y), or None."""
     best = None
     for pts in plan_place.track_polylines(context.scene, ""):
-        d, _q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point[0], point[1])
+        d, q, tangent, _i, _t = plan_km.nearest_on_polyline(pts, point[0], point[1])
         if best is None or d < best[0]:
-            best = (d, tangent)
-    return best[1] if best else None
+            best = (d, tangent, q)
+    return best
 
 
-def track_rotation(context, point):
-    """Z rotation that turns a signal at point (x, y) along the nearest Umgebung track axis, or None.
-    Local +Y runs along the track, the lamps (-Y) face the trains coming along -tangent; Turn 180°
-    (rotation + pi) faces the other direction."""
-    t = track_direction(context, point)
-    return None if t is None else math.atan2(t[1], t[0]) - math.pi / 2
+def facing_rotation(facing):
+    """Z rotation that turns a signal's lamps (local -Y) towards the world direction facing (x, y)."""
+    # local +Y points against the lamps, along the direction of travel of the trains it applies to
+    return math.atan2(-facing[1], -facing[0]) - math.pi / 2
+
+
+def symbol_facing(foot, head):
+    """World direction (x, y) a signal faces, from its symbol on the plan: from the symbol's head
+    (its top end) to its foot. A symbol drawn with its top to the west and its foot to the east
+    looks upright when seen from the east, so the signal faces east."""
+    return (foot[0] - head[0], foot[1] - head[1])
+
+
+def track_rotation(context, point, facing=None):
+    """Z rotation that turns a signal at point (x, y) along the nearest Umgebung track axis, or None
+    without tracks.
+
+    facing: world direction (x, y) the signal faces, e.g. symbol_facing(foot, head) of its plan
+    symbol; of the two directions along the track, the one closer to it is used. Without facing
+    the signal faces against the direction the track line is drawn in; Turn 180° (rotation + pi)
+    turns it."""
+    hit = nearest_track(context, point)
+    if hit is None:
+        return None
+    _d, t, _q = hit
+    tx, ty = t[0], t[1]
+    if facing is not None and tx * facing[0] + ty * facing[1] < 0:
+        tx, ty = -tx, -ty
+    return facing_rotation((tx, ty))
 
 
 def terrain_height(context, x, y):
@@ -577,15 +607,18 @@ def read_signal(obj):
 
 
 def place_signal(bauform, config=None, location=(0.0, 0.0, 0.0), rotation=None, aspect="Aus", *,
-                 align_to_track=False, on_terrain=False, library="", collection=None, name=None,
-                 context=None):
+                 head=None, align_to_track=False, on_terrain=False, library="", collection=None,
+                 name=None, context=None):
     """Place a new signal and return its object.
 
     bauform: a key of spec.BY_KEY ("ks_haupt", "lf7", ...). config: {element: value}, e.g.
     {"zs3": "licht", "kennziffer": 8}; missing elements keep their defaults. location: world
     (x, y, z) of the foot of the mast, which is the bottom of the symbol on the plan (the red dot of
-    the symbol key). rotation: Z angle in radians; None turns it along the nearest track with
-    align_to_track, else 0. on_terrain: z from the BII Umgebung terrain under (x, y), if any.
+    the symbol key). head: world (x, y[, z]) of the top end of the symbol on the plan; the signal
+    then faces the way its symbol is drawn, from the head towards the foot (symbol_facing).
+    rotation: Z angle in radians; None turns it by head, along the nearest track with
+    align_to_track (facing the head's way along the track), else 0. on_terrain: z from the BII
+    Umgebung terrain under (x, y), if any.
     library: name of the asset library, "" for the first one with the signal. collection: default
     the active collection. name: default "<Name> <Tag>" from the configuration.
     Raises ValueError for a configuration or aspect that does not exist or fit, RuntimeError when
@@ -604,8 +637,11 @@ def place_signal(bauform, config=None, location=(0.0, 0.0, 0.0), rotation=None, 
     if on_terrain:
         h = terrain_height(context, x, y)
         z = z if h is None else h
+    facing = symbol_facing((x, y), head) if head is not None else None
     if rotation is None and align_to_track:
-        rotation = track_rotation(context, (x, y))
+        rotation = track_rotation(context, (x, y), facing)
+    if rotation is None and facing is not None:
+        rotation = facing_rotation(facing)
     obj.location = (x, y, z)
     obj.rotation_euler = (0.0, 0.0, rotation or 0.0)
     write_signal(signal_modifier(obj), bauform, cfg, aspect)

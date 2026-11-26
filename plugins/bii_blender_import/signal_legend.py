@@ -24,11 +24,14 @@ NOTE = ("Red dot: the signal's origin (foot of the mast). Place the signal where
         "Mast is not in the symbol: mast=False for signals on a Signalbrücke or on another signal's mast.")
 
 
-def entries():
+def entries(bauformen=None):
     """[(bauform, [(label, code, elements)])]: per Bauform its default symbol, then each other option
-    of each element on top of the default configuration."""
+    of each element on top of the default configuration. bauformen: keys or groups to include
+    (e.g. ["ks_haupt", "Nebensignale"]); None for all."""
     out = []
     for b in spec.BAUFORMEN:
+        if bauformen and b.key not in bauformen and b.group not in bauformen:
+            continue
         base = spec.config(b.key)
         tiles = [("Standard", f'bauform="{b.key}"', spec.symbol_elements(b.key, base))]
         for e in spec.elements(b.key):
@@ -100,11 +103,15 @@ def _bands(rows, columns):
     return bands + ([band] if band else [])
 
 
-def render(tile=TILE, columns=COLUMNS):
-    """The key as a Pillow RGB image."""
+def render(tile=TILE, columns=COLUMNS, bauformen=None):
+    """The key as a Pillow RGB image (bauformen: see entries)."""
     from PIL import Image, ImageDraw
 
-    bands = _bands(entries(), columns)
+    rows = entries(bauformen)
+    if not rows:
+        raise ValueError(f"no Bauform matches {bauformen}; keys: {[b.key for b in spec.BAUFORMEN]}, "
+                         f"groups: {spec.GROUPS}")
+    bands = _bands(rows, columns)
     cell_w, cell_h = tile + 8, tile + TEXT_H
     width = MARGIN * 2 + columns * cell_w
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
@@ -145,8 +152,9 @@ def render(tile=TILE, columns=COLUMNS):
     return img
 
 
-def write(path, tile=TILE, columns=COLUMNS):
-    """Write the key as PNG; returns (width, height)."""
-    img = render(tile, columns)
+def write(path, tile=TILE, columns=COLUMNS, bauformen=None):
+    """Write the key as PNG; returns (width, height). bauformen: keys or groups to include (see
+    entries), e.g. ["Ks"] for a smaller image."""
+    img = render(tile, columns, bauformen)
     img.save(path)
     return img.size

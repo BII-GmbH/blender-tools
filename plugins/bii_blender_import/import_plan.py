@@ -337,6 +337,8 @@ class PlanSettings(bpy.types.PropertyGroup):
         "on tracing paper (white vanishes, colors tint what is below). 1: the plan as "
         "printed. Solid view shows the paper from 0.5 on")
     page: IntProperty(default=1, min=1, description="PDF page of the plan")
+    rotation: IntProperty(default=0, description="Clockwise turn (0, 90, 180, 270) applied to the "
+                          "original file at import")
     full_png: StringProperty(
         subtype='FILE_PATH', options=RELATIVE_PATH, description="The plan's PNG at its import resolution, kept when "
         "the resolution was lowered: the source for going back up if the original file is "
@@ -797,7 +799,8 @@ def rebuild_texture(obj):
         raise OSError(f"the original {source or '(none)'} is missing")
     long_side = max(1, round(max(pg.width, pg.height) / 0.0254 * pg.dpi))
     is_pdf = os.path.splitext(source)[1].lower() in plan_raster.PDF_EXTENSIONS
-    sheet = plan_raster.load(source, pg.page - 1, pg.dpi if is_pdf else 0.0)
+    sheet = plan_raster.rotate(plan_raster.load(source, pg.page - 1, pg.dpi if is_pdf else 0.0),
+                               pg.rotation)
     sheet = plan_raster.with_sheet_size(sheet, pg.width, pg.height)
     sheet = plan_raster.downscale(sheet, long_side)
     path = absolute_path(pg.image.filepath)
@@ -839,7 +842,7 @@ def change_resolution(obj, long_side):
         raise OSError("neither the original file nor the plan's image can be read")
     label, path, is_source = candidates[0]
     if is_source:
-        sheet = plan_raster.load(path, pg.page - 1)
+        sheet = plan_raster.rotate(plan_raster.load(path, pg.page - 1), pg.rotation)
     else:
         import io
         from PIL import Image
@@ -903,7 +906,7 @@ def plan_output_path(source, page_index, page_count):
 
 
 def create_plan_object(context, sheet, png_path, source, massstab, orientation, page_index=0,
-                       page_count=1, background=0.0):
+                       page_count=1, background=0.0, rotation=0):
     name = os.path.splitext(os.path.basename(source))[0]
     if page_count > 1:
         name += f" p{page_index + 1}"
@@ -920,6 +923,7 @@ def create_plan_object(context, sheet, png_path, source, massstab, orientation, 
     pg.height = sheet.height_m
     pg.dpi = (sheet.dpi_x + sheet.dpi_y) / 2
     pg.page = page_index + 1
+    pg.rotation = int(rotation)
     set_sheet_rectangle(obj, 0, 0, sheet.width_m, sheet.height_m)
 
     mat = plan_material(name, image)
@@ -979,6 +983,18 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
                        "of the scan in the PDF, 300 for vector drawings")
     check_gpu: BoolProperty(name="Check GPU Memory", default=True, options={'SKIP_SAVE'},
                             description=CHECK_GPU_DESCRIPTION)
+    rotation: EnumProperty(
+        name="Turn", options={'SKIP_SAVE'},
+        items=[('0', "0°", "As in the file"), ('90', "90° Clockwise", "Turn the plan clockwise"),
+               ('180', "180°", "Turn the plan upside down"),
+               ('270', "90° Counterclockwise", "Turn the plan counterclockwise")],
+        description="Turn a scan that lies on its side or upside down, so the text reads upright. "
+        "Coordinates in the original file (SOURCE) stay valid")
+    find_grid: BoolProperty(
+        name="Find Grid", default=False, options={'SKIP_SAVE'},
+        description="Look for grid crosses (Gitterkreuze) after the import and add them as "
+        "georeference points: then enter the values of 2 or 3 crosses and Fill from Grid. "
+        "Takes a few seconds per plan")
 
     def draw(self, context):
         layout = self.layout
@@ -987,10 +1003,12 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
         layout.prop(self, "orientation")
         layout.prop(self, "background")
         layout.prop(self, "resolution")
+        layout.prop(self, "rotation")
         col = layout.column(heading="PDF")
         col.prop(self, "page")
         col.prop(self, "dpi")
         layout.prop(self, "check_gpu")
+        layout.prop(self, "find_grid")
 
     def invoke(self, context, event):
         # A dropped file has its path set: show the options, not the file browser.
@@ -1014,8 +1032,9 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
                     return {'CANCELLED'}
             if context.window:
                 context.window.cursor_set('WAIT')
-            sheet = plan_raster.downscale(plan_raster.load(path, page_index, self.dpi),
-                                          int(self.resolution))
+            sheet = plan_raster.downscale(
+                plan_raster.rotate(plan_raster.load(path, page_index, self.dpi), int(self.rotation)),
+                int(self.resolution))
             png = plan_output_path(path, page_index, page_count)
             kind = plan_raster.write_png(sheet, png)
         except ImportError as e:
@@ -1030,7 +1049,7 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
             if context.window:
                 context.window.cursor_set('DEFAULT')
         obj = create_plan_object(context, sheet, png, path, self.massstab, self.orientation,
-                                 page_index, page_count, self.background)
+                                 page_index, page_count, self.background, int(self.rotation))
         w, h = sheet.image.size
         text = (f"{obj.name}: {w} x {h} px, {sheet.width_m * 1000:.0f} x "
                 f"{sheet.height_m * 1000:.0f} mm, {kind}")
@@ -1038,6 +1057,13 @@ class ImportPlanOperator(bpy.types.Operator, ImportHelper):
             text += f"; {sheet.note}"
         if max(w, h) > 16384:
             text += "; larger than most GPUs can show, the viewport shows it scaled down"
+        if self.find_grid:
+            from . import plan_api
+            try:
+                found = plan_api.find_grid(obj)
+            except (ValueError, OSError) as e:
+                found, text = None, text + f"; Find Grid: {e}"
+            text += f"; {found['crosses']} grid crosses found" if found else "; no grid crosses found"
         self.report({'WARNING'} if sheet.warning else {'INFO'}, text)
         return {'FINISHED'}
 

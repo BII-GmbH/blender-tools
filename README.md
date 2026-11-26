@@ -17,6 +17,15 @@ The release notes list the commits that changed that plugin's folder since its p
 The release [all-plugins](https://github.com/BII-GmbH/blender-tools/releases/latest) always holds the latest version of every plugin: each release workflow replaces its plugin's zips there.
 It is the release marked Latest, so `/releases/latest` leads to it. Pre-releases do not go into it.
 
+## Skills for Claude Code
+
+`skills/` holds instructions for Claude Code agents that work in Blender through the Blender MCP:
+
+- `bii-plan-placement`: import, place, crop and check plans (BII Import).
+- `bii-signal-placement`: place configured DB signals from the plans (needs the plans placed first).
+
+They describe the functions of the BII Import version in the same commit, so install that version. To use them, link each folder into `~/.claude/skills` (Windows: `New-Item -ItemType Junction -Path $HOME\.claude\skills\bii-plan-placement -Target <repo>\skills\bii-plan-placement`, the same for `bii-signal-placement`); Claude Code then finds them.
+
 ## Pipelines
 
 Pipelines automate workflows that a) take time and b) are tedious.

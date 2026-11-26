@@ -381,6 +381,109 @@ def corridor_segment_count(length, segment_length):
     return 1
 
 
+def station_ranges(length, segment_length):
+    """Gleich lange Stationsbereiche [(von, bis)] über die ganze Achse."""
+    count = corridor_segment_count(length, segment_length)
+    span = length / count
+    return [(i * span, (i + 1) * span) for i in range(count)]
+
+
+def split_ranges(ranges, segment_length):
+    """Bereiche länger als segment_length in gleich lange Stücke teilen."""
+    out = []
+    for s0, s1 in ranges:
+        count = corridor_segment_count(s1 - s0, segment_length)
+        span = (s1 - s0) / count
+        out += [(s0 + i * span, s0 + (i + 1) * span) for i in range(count)]
+    return out
+
+
+def merge_ranges(ranges, gap=0.0):
+    """Überlappende (oder höchstens gap auseinander liegende) Bereiche vereinen."""
+    out = []
+    for s0, s1 in sorted(ranges):
+        if out and s0 <= out[-1][1] + gap:
+            out[-1] = (out[-1][0], max(out[-1][1], s1))
+        else:
+            out.append((s0, s1))
+    return out
+
+
+def wanted_ranges(area, samples, margin):
+    """Stationsbereiche der Achse, die Punkte aus ``samples`` (Listen von UTM-Punkten, je
+    eine Liste pro Plan) im Korridor treffen, je um margin verlängert."""
+    ranges = []
+    for points in samples:
+        stations = [hit[0] for hit in (area.locate(x, y) for x, y in points) if hit]
+        if stations:
+            ranges.append((max(0.0, min(stations) - margin), min(area.length, max(stations) + margin)))
+    return merge_ranges(ranges)
+
+
+def drop_covered(area, ranges, others, share=0.6, step=10.0):
+    """Bereiche ohne die Stellen, an denen die Achse näher als share * Radius an einer der
+    Achsen in ``others`` (Corridor-Objekte) liegt: dort gibt es schon Gelände."""
+    if not others:
+        return ranges
+    from .railgeom import slice_by_stations
+    out = []
+    for s0, s1 in ranges:
+        start = None
+        s = s0
+        while s <= s1:
+            p = slice_by_stations(area.points, area.stations, s, s + 1e-3)
+            x, y = p[0] if p else area.points[0]
+            covered = any(o.index.nearest(x, y, share * o.radius) is not None for o in others)
+            if not covered and start is None:
+                start = s
+            if covered and start is not None:
+                if s - start > step:
+                    out.append((start, s))
+                start = None
+            s += step
+        if start is not None and s1 - start > step:
+            out.append((start, s1))
+    return out
+
+
+def corridor_range(area, spacing, s0, s1):
+    """Gitter des Korridors zwischen den Stationen s0 und s1 der Achse; wie
+    corridor_segment, nur mit freien Stationsgrenzen."""
+    from .railgeom import slice_by_stations
+    rand = area.radius + 2.0 * spacing
+    stueck = slice_by_stations(area.points, area.stations, s0 - rand, s1 + rand)
+    if len(stueck) < 2:
+        return None
+    kandidaten = grid_points(Corridor(stueck, area.radius), spacing)
+    if not kandidaten:
+        return None
+    schluessel = sorted(kandidaten)
+    nummer = {key: i for i, key in enumerate(schluessel)}
+    coords = np.zeros((len(schluessel), 2))
+    for i, key in enumerate(schluessel):
+        located = area.locate(*kandidaten[key])
+        if located:
+            coords[i] = located
+    quads = []
+    for (col, row), i in nummer.items():
+        right = nummer.get((col + 1, row))
+        up = nummer.get((col, row + 1))
+        diagonal = nummer.get((col + 1, row + 1))
+        if right is not None and up is not None and diagonal is not None:
+            quads.append((i, right, diagonal, up))
+    if not quads:
+        return None
+    quads = np.array(quads, dtype=np.int64)
+    middle = coords[quads, 0].mean(axis=1)
+    last = s1 >= area.length - 1e-6
+    quads = quads[(middle >= s0) & ((middle <= s1) if last else (middle < s1))]
+    if not len(quads):
+        return None
+    east = np.array([kandidaten[k][0] for k in schluessel])
+    north = np.array([kandidaten[k][1] for k in schluessel])
+    return east, north, coords, quads
+
+
 def corridor_segment(area, spacing, index, count):
     """Gitter eines Korridorabschnitts (Stationen ``index``/``count`` der Achse).
 

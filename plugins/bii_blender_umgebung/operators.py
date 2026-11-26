@@ -679,6 +679,31 @@ def _terrain_objects(context):
             if o.type == 'MESH' and o.get("corridor_radius_m")]
 
 
+def _plan_samples(context, projection, zone):
+    """Punkte (UTM) auf jedem flachen Lageplan der Szene (BII Import), einer Liste je Plan:
+    Ecken und ein Raster über die sichtbare Fläche."""
+    from mathutils import Vector
+    out = []
+    for obj in context.scene.objects:
+        pg = getattr(obj, "bii_plan", None)
+        if pg is None or not getattr(pg, "is_plan", False) or getattr(pg, "orientation", "FLAT") != 'FLAT':
+            continue
+        if obj.type != 'MESH' or not obj.data.vertices:
+            continue
+        xs = [v.co.x for v in obj.data.vertices]
+        ys = [v.co.y for v in obj.data.vertices]
+        x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
+        m = obj.matrix_world
+        pts = []
+        for i in range(11):
+            for j in range(11):
+                w = m @ Vector((x0 + (x1 - x0) * i / 10, y0 + (y1 - y0) * j / 10, 0.0))
+                lat, lon = projection.to_geographic(w.x, w.y)
+                pts.append(dgm.wgs84_to_utm(lat, lon, zone))
+        out.append(pts)
+    return out
+
+
 def _corridor_from_lines(context, radius):
     """Baut den Korridor aus allen Kilometrierungslinien (lokale Koordinaten)."""
     points = []
@@ -951,6 +976,8 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
         model, zone, spacing, label = gewaehlt
 
         jobs, punkte = [], 0.0
+        plaene = _plan_samples(context, projection, zone) if props.terrain_under_plans else []
+        fertig = []
         for line in _chainage_lines(context):
             matrix = line.matrix_world
             points = [(float((matrix @ p.co.to_3d()).x), float((matrix @ p.co.to_3d()).y))
@@ -959,12 +986,20 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
                 continue
             area = corridor_mod.Corridor(corridor_mod.to_utm(points, projection, zone),
                                          props.corridor_radius)
-            count = corridor_mod.corridor_segment_count(area.length,
-                                                        props.terrain_segment_length)
-            jobs.append({"line": line.name, "area": area, "count": count})
-            punkte += area.length * 2.0 * props.corridor_radius / (spacing * spacing)
+            if plaene:
+                ranges = corridor_mod.wanted_ranges(area, plaene, props.corridor_radius)
+                ranges = corridor_mod.drop_covered(area, ranges, fertig)
+                ranges = corridor_mod.split_ranges(ranges, props.terrain_segment_length)
+            else:
+                ranges = corridor_mod.station_ranges(area.length, props.terrain_segment_length)
+            fertig.append(area)
+            if not ranges:
+                continue
+            jobs.append({"line": line.name, "area": area, "ranges": ranges, "count": len(ranges)})
+            punkte += sum(s1 - s0 for s0, s1 in ranges) * 2.0 * props.corridor_radius / (spacing * spacing)
         if not jobs:
-            return None, "Keine Kilometrierungslinie mit Punkten gefunden"
+            return None, ("Keine Kilometrierungslinie läuft unter einem Plan" if plaene else
+                          "Keine Kilometrierungslinie mit Punkten gefunden")
         total = sum(job["count"] for job in jobs)
         return {"model": model, "jobs": jobs, "projection": projection, "zone": zone,
                 "label": label, "spacing": spacing, "total": total, "offset": None,
@@ -991,8 +1026,8 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
                 nummer += 1
                 fortschritt("Gelände: Abschnitt %d von %d" % (nummer, plan["total"]),
                             (nummer - 1) / float(plan["total"]))
-                teil = corridor_mod.corridor_segment(job["area"], plan["spacing"],
-                                                     index, job["count"])
+                s0, s1 = job["ranges"][index]
+                teil = corridor_mod.corridor_range(job["area"], plan["spacing"], s0, s1)
                 if teil is None:
                     continue
                 east, north, coords, quads = teil
@@ -1001,7 +1036,7 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
                 lat, lon = dgm.utm_to_wgs84_array(east, north, zone)
                 x, y = projection.from_geographic_array(lat, lon)
                 yield {"line": job["line"], "index": index, "count": job["count"],
-                       "span": job["area"].length / job["count"],
+                       "start": s0, "span": s1 - s0,
                        "length": job["area"].length, "x": x, "y": y, "z": heights,
                        "coords": coords, "quads": quads}
             yield {"line": job["line"], "fertig": True}
@@ -1037,7 +1072,7 @@ class RC_OT_import_terrain(_Stueckweise, Operator):
         if stueck["count"] > 1:
             name = "%s %02d" % (name, stueck["index"] + 1)
         obj = builder.mesh_from_arrays(name, verts, quads, top)
-        start = stueck["index"] * stueck["span"]
+        start = stueck["start"]
         builder.apply_corridor_uv(obj, stueck["coords"][used], props.corridor_radius,
                                   stueck["span"], station_offset=start)
         obj["height_offset"] = plan["offset"]

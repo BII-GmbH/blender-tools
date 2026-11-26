@@ -73,6 +73,32 @@ class DraftTest(unittest.TestCase):
                     for v in e.values():
                         self.assertEqual(signal_panel._parse(e.key, str(v)), v)
 
+    def test_faces_the_way_its_symbol_is_drawn(self):
+        # symbol top to the west, foot to the east: seen upright from the east, so it faces east
+        import math
+        east = signal_panel.symbol_facing((10.0, 0.0), (6.0, 0.5))
+        self.assertGreater(east[0], 0)
+        r = signal_panel.facing_rotation((1.0, 0.0))
+        lamps = (math.sin(r), -math.cos(r))        # local -Y in world
+        self.assertAlmostEqual(lamps[0], 1.0, places=6)
+        self.assertAlmostEqual(lamps[1], 0.0, places=6)
+        # along a track drawn towards -x, the symbol's way wins over the drawing direction
+        coll = bpy.data.collections.new("Gleise 5102")
+        bpy.context.scene.collection.children.link(coll)
+        curve = bpy.data.curves.new("Gleis", 'CURVE')
+        spline = curve.splines.new('POLY')
+        spline.points.add(1)
+        spline.points[0].co = (100.0, 0.0, 0.0, 1.0)
+        spline.points[1].co = (-100.0, 0.0, 0.0, 1.0)
+        obj = bpy.data.objects.new("Gleis 1", curve)
+        obj["track_number"] = 1
+        coll.objects.link(obj)
+        for side in (-3.0, 3.0):                   # the side of the track does not matter
+            r = signal_panel.track_rotation(bpy.context, (0.0, side), east)
+            self.assertAlmostEqual(math.sin(r), 1.0, places=6)
+            r = signal_panel.track_rotation(bpy.context, (0.0, side), (-1.0, 0.2))
+            self.assertAlmostEqual(math.sin(r), -1.0, places=6)
+
     def test_aspect_falls_back_when_its_lights_go(self):
         bpy.ops.bii_signal.set_bauform(bauform="ks_haupt")
         bpy.ops.bii_signal.set_option(element="sh1", value="True")
@@ -242,6 +268,13 @@ class PlaceTest(unittest.TestCase):
         new = signal_panel.configure_signal(obj, bauform="ks_haupt")
         self.assertEqual(signal_panel.read_signal(new)[0], "ks_haupt")
         self.assertEqual(tuple(new.location), (5.0, 6.0, 1.5))
+
+        # head given: faces from the symbol's head towards its foot (here north: lamps to +y)
+        import math
+        north = signal_panel.place_signal("lf7", {}, (0.0, 0.0, 0.0), head=(0.0, -4.0), library="test signals")
+        r = north.rotation_euler.z
+        self.assertAlmostEqual(math.sin(r), 0.0, places=6)
+        self.assertAlmostEqual(-math.cos(r), 1.0, places=6)
 
         with self.assertRaisesRegex(ValueError, "no element"):
             signal_panel.place_signal("ks_vor", {"sh1": True})

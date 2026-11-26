@@ -117,6 +117,25 @@ class SymbolsTest(unittest.TestCase):
                 if els:
                     symbols.draw(els, 32)
 
+    def test_sh1_part_below_the_fill(self):
+        # plan symbol (signal ZU8): half filled Ks head, then the Sh 1 part with two empty fields
+        # inside the same, longer outline; the fill stays above it
+        plain = symbols.build([("ks_head", "bell", "half", False)])
+        sh = symbols.build([("ks_head", "bell", "half", True)])
+        self.assertAlmostEqual(sh.bounds()[3] - plain.bounds()[3], symbols.SH_PART, places=3)
+        g = sh.gray(200, 1)                                   # rows from the bottom
+        col = sh.pixel(2.5, 0, 200)[0]                             # right half, where the fill is
+        rows = [sh.pixel(0, y, 200)[1] for y in (symbols.SH_PART * 0.25, symbols.SH_PART * 0.75, 8.0)]
+        fields = [g[200 - int(round(r)), int(round(col))] for r in rows]
+        self.assertGreater(fields[0], 0.5)                     # Sh 1 fields empty
+        self.assertGreater(fields[1], 0.5)
+        self.assertLess(fields[2], 0.5)                        # head above: filled
+
+    def test_zs2_and_ne2(self):
+        self.assertEqual(spec.symbol_elements("zs2", spec.config("zs2")), [("square", True)])
+        self.assertEqual(spec.symbol_elements("ne2", spec.config("ne2"))[-1], ("ne2",))
+        self.assertEqual(spec.symbol_elements("ne2", spec.config("ne2"))[0], ("foot",))
+
     def test_deterministic(self):
         els = spec.symbol_elements("hv_mehr", spec.config("hv_mehr", zs3="licht", kopf="zs7"))
         self.assertTrue((symbols.draw(els, 64) == symbols.draw(els, 64)).all())
