@@ -43,7 +43,7 @@ def move_arm_wrapper(equipment_id, capability):
     ns = uuid.uuid5(uuid.UUID(cap_id), "crane move arm")
     nid = lambda name: str(uuid.uuid5(ns, name))
     start, end = nid("start"), nid("end")
-    call, rel, pose = nid("invoke"), nid("relative to"), nid("current pose")
+    call, rel, pose, dur = nid("invoke"), nid("relative to"), nid("current pose"), nid("duration")
     inputs = {(i["Name"].get("Text") or "Self"): i for i in sig["Inputs"]}
     out_id = sig["Outputs"][0]["Id"]["Guid"]
     self_in, dest_in, dur_in = _port("Self"), _port("Destination"), _port("Duration")
@@ -52,7 +52,7 @@ def move_arm_wrapper(equipment_id, capability):
                                  "ToNode": {"Guid": b}, "InputSlotId": {"Guid": bp}}
     data = [
         link(start, self_in, call, inputs["Self"]["Id"]["Guid"]),
-        link(start, dur_in, call, inputs["Duration"]["Id"]["Guid"]),
+        link(dur, ik_capability.port("Value"), call, inputs["Duration"]["Id"]["Guid"]),
         link(call, out_id, end, MOVE_ARM_OUTPUT),
     ]
     if is_global:
@@ -73,17 +73,20 @@ def move_arm_wrapper(equipment_id, capability):
               if i["Name"].get("Text") == "Orientation Weight"
               else i["DefaultValue"]}
              for i in sig["Inputs"] if i.get("DefaultValue") is not None]
-    meta = lambda n, x, y: {"Node": {"Guid": n}, "Description": None, "Xpos": float(x), "Ypos": float(y)}
+    meta = lambda n, x, y: {"Node": {"Guid": n}, "Description": None, "Xpos": 32.0 * x, "Ypos": 32.0 * y}
     nodes = [{"Collection": {"EquipmentId": equipment_id, "$case": "Custom"}, "CapabilityId": {"Guid": cap_id},
-              "Id": {"Guid": call}, "$case": "CapabilityInvocation"}]
-    metadata = [meta(start, 0, 128), meta(call, 992, 160), meta(end, 1408, 128)]
+              "Id": {"Guid": call}, "$case": "CapabilityInvocation"},
+             {"InputSlotId": {"Guid": dur_in}, "DisplayName": "Duration", "FromOuterContext": False,
+              "IsOptional": False, "Id": {"Guid": dur}, "$case": "InputGetter"}]
+    # positions in cells as the user arranged them in dProB; a getter's x is its right edge
+    metadata = [meta(start, 0, 4), meta(call, 30, 4), meta(dur, 29, 8), meta(end, 43, 4)]
     if not is_global:
         nodes += [
             {"Node": {"Id": {"Guid": rel}, "TGlobal": ik_capability.atomic("GlobalPose"),
                       "TLocal": ik_capability.atomic("LocalPose"), "$case": "RelativeToNode"}, "$case": "AtomicNode"},
             {"Node": {"Id": {"Guid": pose}, "$case": "ReadCurrentPoseNode"}, "$case": "AtomicNode"},
         ]
-        metadata += [meta(pose, 320, 0), meta(rel, 640, 192)]
+        metadata += [meta(pose, 9, 8), meta(rel, 18, 6)]
     graph = {
         "Outputs": [{"Id": {"Guid": MOVE_ARM_OUTPUT}, "Name": {"LocalizationKey": PROCESSES_KEY, "$case": "Localized"},
                      "Type": ik_capability.LIST_PROCESS, "Description": None, "IsOptional": False}],

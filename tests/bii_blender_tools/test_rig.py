@@ -180,7 +180,8 @@ class ExportTest(RigTestCase):
             meta = json.loads(z.read("dProB_asset_metadata.json"))
             model = json.loads(z.read("model.json"))
             guid = z.read("asset_guid.txt").decode()
-        self.assertEqual(meta, {"Format": "ScriptableEquipment_v2", "ProductVersion": dequip_format.PRODUCT_VERSION})
+        self.assertEqual(meta, {"Format": "ScriptableEquipment_v2", "ProductVersion": dequip_format.PRODUCT_VERSION,
+                                "Description": "Crane"})                # default: the name
         self.assertEqual(len(guid), 36)
         geo = model["GeometryModels"][0]
         self.assertEqual(geo["$case"], "Fbx")
@@ -317,6 +318,15 @@ class ExportTest(RigTestCase):
         self.assertEqual(m["EquipmentId"], equipment_id)
         self.assertEqual(m["CustomCapabilities"], [])
         self.assertEqual(m["StateVariables"], [])
+
+    def test_description(self):
+        crane()
+        rig.set_description("Crane", "Kran\nFähigkeiten:\n- Bodenfahrzeug")
+        rig.export("Crane", self.path)
+        self.assertEqual(dequip_format.read(self.path).metadata["Description"], "Kran\nFähigkeiten:\n- Bodenfahrzeug")
+        bpy.data.objects["Crane"].bii_rig.asset_description = "A\\nB"       # typed in the panel
+        rig.export("Crane", self.path)
+        self.assertEqual(dequip_format.read(self.path).metadata["Description"], "A\nB")
 
     def test_errors_stop_export(self):
         crane()

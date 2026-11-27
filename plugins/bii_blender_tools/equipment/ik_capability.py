@@ -148,33 +148,28 @@ class Node:
         self.id, self.json, self.title = nid, json_, title
         self.ins, self.outs = list(ins), list(outs)          # port ids in drawn row order
         self.exec_in, self.exec_outs = exec_in, list(exec_outs)
-        self.style = style                                      # "node", "collapsed", "getter"
+        self.style = style              # "node" (with a header), "unnamed", "collapsed", "getter", "reroute"
         self.section = section
         self.x = self.y = None
 
     @property
     def width(self):
-        """Estimated size in grid cells (layout spacing absorbs the error)."""
+        """Size in grid cells as dProB draws it (header nodes 7, getters by their text)."""
         if self.style == "getter":
-            return max(4, math.ceil(len(self.title) * 0.33) + 2)
-        if self.style == "collapsed":
-            return 4
-        return max(7, math.ceil(len(self.title) * 0.36) + 3)
+            return max(3, math.ceil(len(self.title) * 0.25) + 1)
+        return {"reroute": 3, "collapsed": 4, "unnamed": 6}.get(self.style, 7)
 
     @property
     def height(self):
         rows = max(len(self.ins) + (1 if self.exec_in else 0), len(self.outs) + len(self.exec_outs), 1)
-        if self.style == "getter":
+        if self.style in ("getter", "reroute"):
             return 1
-        if self.style == "collapsed":
-            return rows
-        return rows + 2
+        return rows + (2 if self.style == "node" else 0)
 
     def in_row(self, port_id):
-        """Row offset (cells from the node's top) of an input port."""
+        """Row (cells from the node's top) of an input port."""
         i = self.ins.index(port_id) if port_id in self.ins else 0
-        top = 0 if self.style != "node" else 1.5
-        return top + i + (1 if self.exec_in else 0)
+        return (1 if self.style == "node" else 0) + i + (1 if self.exec_in else 0)
 
 
 class Graph:
@@ -254,25 +249,24 @@ class Graph:
         return self.add(self.unique(case), {"TA": ta, "TB": tb, "TRes": tres, "$case": case}, title,
                         ins=[port("A"), port("B")], outs=[port(out)], style="collapsed")
 
-    def macro(self, macro_id, title, ins, out, type_):
+    def macro(self, macro_id, title, ins, out, type_, style="node"):
         return self.add(self.unique(title), {"MacroId": macro_id, "Name": title,
                                              "ResolvedInputTypes": [{"InputId": {"Guid": i}, "Type": type_} for i in ins],
                                              "ResolvedOutputTypes": [{"OutputId": {"Guid": out}, "Type": type_}],
                                              "$case": "GlobalMacro"},
-                        title, ins=ins, outs=[out], style="collapsed", atomic_node=False)
+                        title, ins=ins, outs=[out], style=style, atomic_node=False)
 
     def get_entry(self, kind):
         vt = atomic(VALUE_TYPE[kind])
         return self.add(self.unique("get entry"), {"TKey": atomic("RigJoint"), "TValue": vt,
                                                    "$case": "GetDictEntryNode"},
-                        "Get Value", ins=[port("Dictionary"), port("Key")], outs=[port("Value")], style="collapsed")
+                        "Get Value", ins=[port("Dictionary"), port("Key")], outs=[port("Value")])
 
     def set_entry(self, kind):
         vt = atomic(VALUE_TYPE[kind])
         return self.add(self.unique("set entry"), {"TKey": atomic("RigJoint"), "TValue": vt,
                                                    "$case": "SetDictEntryNode"},
-                        "Set Value", ins=[port("Dictionary"), port("Key"), port("Value")], outs=[port("Result")],
-                        style="collapsed")
+                        "Set Value", ins=[port("Dictionary"), port("Key"), port("Value")], outs=[port("Result")])
 
     def empty_dict(self, kind):
         return self.add(self.unique("empty dict"), {"TKey": atomic("RigJoint"), "TValue": atomic(VALUE_TYPE[kind]),
@@ -399,7 +393,6 @@ def build_graph(spec):
                          EFFECTIVE_POSE_RESULT, atomic("LocalPose"))
             g.nodes[ep].json["ResolvedInputTypes"] = []
             g.nodes[ep].json["ResolvedOutputTypes"] = []
-            g.nodes[ep].style = "node"
             g.link(*g.joint(eid, joints[eid][0]), ep, EFFECTIVE_POSE_JOINT)
             if pose is None:
                 pose = (ep, EFFECTIVE_POSE_RESULT)
@@ -415,7 +408,7 @@ def build_graph(spec):
         n = g.add(g.unique(name), {"TPos": atomic("LocalPosition"), "TRot": atomic("LocalRotation"),
                                    "TDir": atomic("LocalDirection"), "TPose": atomic("LocalPose"),
                                    "$case": "UnpackPoseNode"}, "Unpack Pose", ins=[port("Pose")],
-                  outs=[port("Position"), port("Rotation"), port("Forward")], style="collapsed")
+                  outs=[port("Position"), port("Rotation"), port("Forward")], style="unnamed")
         g.link(*src, n, port("Pose"))
         return n
 
@@ -490,7 +483,7 @@ def build_graph(spec):
                 "ResolvedOutputTypes": [{"OutputId": {"Guid": SIGNED_ANGLE_RESULT}, "Type": atomic("Angle")}],
                 "$case": "GlobalMacro"}, "Signed Angle on Plane",
                 ins=[SIGNED_ANGLE_A, SIGNED_ANGLE_B, SIGNED_ANGLE_AXIS], outs=[SIGNED_ANGLE_RESULT],
-                style="collapsed", atomic_node=False)
+                atomic_node=False)
             g.link(offsets[0], port("Difference"), angle, SIGNED_ANGLE_A)
             g.link(offsets[1], port("Difference"), angle, SIGNED_ANGLE_B)
             g.link(axis, port("Result"), angle, SIGNED_ANGLE_AXIS)
@@ -519,6 +512,11 @@ def build_graph(spec):
         g.section = "Start away from limits"
         for kind in ("REVOLUTE", "PRISMATIC"):
             d = None
+            if kind == "REVOLUTE" and spec.get("aim"):
+                g.section = "Turn towards the target"
+                aim_parts()
+                g.section = "Start away from limits"
+                d = aim_entry(None)
             for eid in spec["seeds"]:
                 name, k = joints[eid]
                 if k != kind:
@@ -537,7 +535,8 @@ def build_graph(spec):
                 g.link(cons, hi_port, hi, LERP_FROM)
                 g.link(cons, lo_port, hi, LERP_TO)
                 g.link(*g.input(ins["Start Away from Limits"], "Start Away from Limits"), hi, LERP_T)
-                clamp = g.macro(CLAMP_MACRO, "Clamp", [CLAMP_VALUE, CLAMP_MIN, CLAMP_MAX], MACRO_RESULT, vt)
+                clamp = g.macro(CLAMP_MACRO, "Clamp", [CLAMP_VALUE, CLAMP_MIN, CLAMP_MAX], MACRO_RESULT, vt,
+                                "collapsed")
                 g.link(*g.read_current(eid, name, kind), clamp, CLAMP_VALUE)
                 g.link(lo, MACRO_RESULT, clamp, CLAMP_MIN)
                 g.link(hi, MACRO_RESULT, clamp, CLAMP_MAX)
@@ -546,10 +545,6 @@ def build_graph(spec):
                 g.link(*g.joint(eid, name), s, port("Key"))
                 g.link(clamp, MACRO_RESULT, s, port("Value"))
                 d = (s, port("Result"))
-            if kind == "REVOLUTE" and spec.get("aim"):
-                g.section = "Turn towards the target"
-                d = aim_entry(d)
-                g.section = "Start away from limits"
             if d is not None:
                 seed[kind] = d
         g.section = None
@@ -571,7 +566,7 @@ def build_graph(spec):
 
         def pack(position, rotation, name):
             n = g.add(g.unique(name), {"TPos": lpos, "TRot": rot, "TPose": lpt, "$case": "PackPoseNode"},
-                      "Pack Pose", ins=[port("Position"), port("Rotation")], outs=[port("Pose")], style="collapsed")
+                      "Pack Pose", ins=[port("Position"), port("Rotation")], outs=[port("Pose")], style="unnamed")
             g.link(*position, n, port("Position"))
             g.link(*rotation, n, port("Rotation"))
             return n, port("Pose")
@@ -584,7 +579,7 @@ def build_graph(spec):
 
         def branch(if_true, if_false):
             n = g.add(g.unique("position only"), {"T": rot, "$case": "DeferredBranchNode"}, "Branch",
-                      ins=[port("Pick A"), port("A"), port("B")], outs=[port("Result")], style="collapsed")
+                      ins=[port("Pick A"), port("A"), port("B")], outs=[port("Result")])
             g.link(*g.input(ins["Position Only"], "Position Only"), n, port("Pick A"))
             g.link(*if_true, n, port("A"))
             g.link(*if_false, n, port("B"))
@@ -592,18 +587,6 @@ def build_graph(spec):
 
         dest_pose = destination()
         dest = unpack_local(dest_pose, "unpack destination")
-        turned = (current_part(), port("Rotation"))
-        if spec.get("aim"):
-            angle, axis = aim_parts()
-            r = g.add(g.unique("aim rotation"), {"TRot": rot, "TDir": atomic("LocalDirection"),
-                                                 "$case": "PackRotationAngleAxisNode"}, "Pack Rotation (Angle, Axis)",
-                      ins=[port("Angle"), port("Axis")], outs=[port("Rotation")], style="collapsed")
-            g.link(*angle, r, port("Angle"))
-            g.link(*axis, r, port("Axis"))
-            m = g.binary("MulNode", "Multiply", rot, rot, rot)
-            g.link(r, port("Rotation"), m, port("A"))
-            g.link(*turned, m, port("B"))
-            turned = (m, port("Result"))
         if not spec["attachment_point"]:
             return pack((dest, port("Position")), branch(turned, (dest, port("Rotation"))), "pack joint target")
         inv = g.add(g.unique("invert"), {"T": lpt, "$case": "InvertNode"}, "Invert",
@@ -614,6 +597,32 @@ def build_graph(spec):
         given = unpack_local(mul(dest_pose, (inv, port("Result"))), "unpack joint rotation")
         rotation = branch((where, port("Rotation")), (given, port("Rotation")))
         return pack((where, port("Position")), rotation, "pack joint target")
+
+    def turned_rotation():
+        """Compute node (an execution node): the part's current rotation, turned with the aim
+        joint towards the Destination; computed once, not in every IK pass."""
+        rot = atomic("LocalRotation")
+        turned = (current_part(), port("Rotation"))
+        if spec.get("aim"):
+            angle, axis = aim_parts()
+            r = g.add("aim rotation", {"TRot": rot, "TDir": atomic("LocalDirection"),
+                                       "$case": "PackRotationAngleAxisNode"}, "Pack Rotation (Angle, Axis)",
+                      ins=[port("Angle"), port("Axis")], outs=[port("Rotation")], style="unnamed")
+            g.link(*angle, r, port("Angle"))
+            g.link(*axis, r, port("Axis"))
+            m = g.binary("MulNode", "Multiply", rot, rot, rot)
+            g.link(r, port("Rotation"), m, port("A"))
+            g.link(*turned, m, port("B"))
+            turned = (m, port("Result"))
+        c = g.add("compute turned", {"T": rot, "$case": "ComputeNode"}, "Compute", ins=[port("Input")],
+                  outs=[port("Output")], exec_in=True, exec_outs=[SUCCESSOR])
+        g.link(*turned, c, port("Input"))
+        then(c)
+        return c, port("Output")
+
+    g.section = "Turn towards the target" if spec.get("aim") else None
+    turned = turned_rotation()
+    g.section = None
 
     def ik_node():
         n = g.add("ik", {"$case": "InverseKinematicsNode"}, "Inverse Kinematics",
@@ -630,7 +639,7 @@ def build_graph(spec):
     if coupled:
         # ---- loop: IK, then the followers; the next pass starts from the result
         g.section = "Start away from limits" if seeded else None
-        for kind in ("REVOLUTE", "PRISMATIC", "BALL"):
+        for kind in ("PRISMATIC", "REVOLUTE", "BALL"):
             if kind not in var_ids:
                 continue
             vid, vname = var_ids[kind]
@@ -665,10 +674,12 @@ def build_graph(spec):
                 return made[eid]
             if eid in chain:
                 get = g.get_entry(kind)
-                g.link(*dicts[kind], get, port("Dictionary"))
+                g.link(ik, port(DICT_VAR[kind]), get, port("Dictionary"))
                 g.link(*g.joint(eid, name), get, port("Key"))
-                return get, port("Value")
-            return g.read_current(eid, name, kind)
+                made[eid] = (get, port("Value"))
+            else:
+                made[eid] = g.read_current(eid, name, kind)
+            return made[eid]
 
         for eid, mode, terms, offset in spec["couplings"]:
             name, kind = joints[eid]
@@ -751,8 +762,7 @@ def build_graph(spec):
                 continue
             rm = g.add(g.unique("remove held"), {"TKey": atomic("RigJoint"), "TValue": vt,
                                                   "$case": "RemoveDictEntryNode"}, "Remove Value",
-                       ins=[port("Dictionary"), port("Key")], outs=[port("Result"), port("RemovedValue")],
-                       style="collapsed")
+                       ins=[port("Dictionary"), port("Key")], outs=[port("Result"), port("RemovedValue")])
             g.link(*d, rm, port("Dictionary"))
             g.link(*g.joint(e, joints[e][0]), rm, port("Key"))
             d = (rm, port("Result"))
@@ -801,8 +811,8 @@ def build_graph(spec):
 
     frames = layout(g, start)
     description = (spec.get("description") or f"Moves {spec['target'][1]} to a pose with inverse kinematics.")
-    meta = [{"Node": {"Guid": n.id}, "Description": None, "Xpos": float(n.x * GRID), "Ypos": float(n.y * GRID)}
-            for n in g.nodes.values()]
+    meta = [{"Node": {"Guid": n.id}, "Description": None, "Ypos": float(n.y * GRID),
+             "Xpos": float((n.x + (n.width if n.style == "getter" else 0)) * GRID)} for n in g.nodes.values()]
     graph = {
         "Outputs": outputs,
         "LocalVariables": variables,
@@ -874,34 +884,35 @@ def layout(g, start):
     placed = set()
 
     def tree(nid, right, top, out):
-        """Places nid with its right edge at `right`, top at `top` (relative); returns height."""
+        """Places nid with its right edge at `right`, top at `top` (relative), and its providers to
+        its left; returns the height. An execution node is placed at (0, 0) by row()."""
         n = nodes[nid]
-        n.x, n.y = right - n.width, top
+        if nid not in is_exec:
+            n.x, n.y = right - n.width, top
+            out.append(nid)
         placed.add(nid)
-        out.append(nid)
-        y = top
-        bottom = top + n.height
-        for in_port, src in providers.get(nid, ()):
-            if src in placed or src in is_exec:
+        todo = [(p, s_) for p, s_ in providers.get(nid, ()) if s_ not in placed and s_ not in is_exec]
+        getters = [s_ for p, s_ in todo if nodes[s_].style == "getter"]
+        for p, s_ in todo:
+            if s_ in getters:
+                tree(s_, n.x - 1, top + n.in_row(p), out)
+        gw = max([nodes[s_].width + 1 for s_ in getters] + [0])
+        y, bottom = top, max([top + n.height] + [nodes[s_].y + 1 for s_ in getters])
+        chained = []            # the previous Set Value of a chain: below, in the same column
+        for p, s_ in todo:
+            if s_ in getters or s_ in placed:
                 continue
-            y = max(y, top + n.in_row(in_port) - (0 if nodes[src].style != "node" else 1.5))
-            h = tree(src, n.x - GAP_X, y, out)
-            y += h + GAP_Y
+            if nodes[s_].style == "node" and nodes[s_].title == n.title:
+                chained.append(s_)
+                continue
+            y = max(y, top + n.in_row(p) - (1 if nodes[s_].style == "node" else 0))
+            h = nodes[s_].height
+            hit = any(y - 1 < nodes[o].y < y + h for o in getters)
+            y += tree(s_, n.x - GAP_X - (gw if hit else 0), y, out) + GAP_Y
             bottom = max(bottom, y - GAP_Y)
+        for s_ in chained:
+            bottom += GAP_Y + tree(s_, n.x + n.width, bottom + GAP_Y, out)
         return bottom - top
-
-    def block(nid):
-        """Providers of an execution node, placed relative to it at (0, 0); returns their ids."""
-        out = []
-        n = nodes[nid]
-        y = 0
-        for in_port, src in providers.get(nid, ()):
-            if src in placed or src in is_exec:
-                continue
-            y = max(y, n.in_row(in_port) - (0 if nodes[src].style != "node" else 1.5))
-            h = tree(src, -GAP_X, y, out)
-            y += h + GAP_Y
-        return out
 
     bottom = [0.0]
 
@@ -909,8 +920,9 @@ def layout(g, start):
         """Places an execution row from nid at (x, y); returns the row's right end."""
         while nid is not None:
             n = nodes[nid]
-            placed.add(nid)
-            members = block(nid)
+            n.x = n.y = 0
+            members = []
+            tree(nid, 0, 0, members)
             left = min([nodes[m].x for m in members] + [0])
             nx = x - left
             n.x, n.y = nx, y
@@ -933,9 +945,28 @@ def layout(g, start):
         return x
 
     row(start, 0, 0)
-    for n in nodes.values():            # anything unreachable (should not happen)
-        if n.x is None:
-            n.x, n.y = 0, bottom[0] + LANE_GAP
+
+    # long wires out of an execution node's output: over a lane above the rows, through a reroute
+    # after the node and one before the first far consumer
+    far = {}
+    for c in g.data:
+        a, b = nodes[c["FromNode"]["Guid"]], nodes[c["ToNode"]["Guid"]]
+        if a.id in is_exec and b.x - (a.x + a.width) >= 12:
+            far.setdefault((a.id, c["OutputSlotId"]["Guid"]), []).append(c)
+    lane = -FRAME_PAD - 3
+    for (src, out_port), cs in far.items():
+        a = nodes[src]
+        ids = []
+        for i, x in enumerate((a.x + a.width + 1, min(nodes[c["ToNode"]["Guid"]].x for c in cs) - 4)):
+            r = g.add(f"reroute {src} {out_port} {i}", {"Exec": False, "$case": "Reroute"}, "", ins=[port("Input")],
+                      outs=[port("Output")], style="reroute", atomic_node=False)
+            nodes[r].x, nodes[r].y = x, lane
+            ids.append(r)
+        g.link(src, out_port, ids[0], port("Input"))
+        g.link(ids[0], port("Output"), ids[1], port("Input"))
+        for c in cs:
+            c["FromNode"]["Guid"], c["OutputSlotId"]["Guid"] = ids[1], port("Output")
+        lane -= 2
 
     frames = []
     sections = {}
@@ -1120,6 +1151,8 @@ class _Run:
             slot = SUCCESSOR
             if case == "VarSetter":
                 self.variables[n["VarId"]["Guid"]] = inp(node_id, "ValueIn")
+            elif case == "ComputeNode":
+                self.outputs[(node_id, port("Output"))] = inp(node_id, "Input")
             elif case == "InverseKinematicsNode":
                 self._ik(node_id)
             elif case == "GlobalMacro" and n["MacroId"] == LOOP_RANGE_MACRO:

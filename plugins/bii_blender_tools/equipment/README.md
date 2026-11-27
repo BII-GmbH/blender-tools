@@ -96,6 +96,7 @@ rig.read_dequip(r"C:\work\crane.dequip")      # what a .dequip contains
 | Function | Does |
 |---|---|
 | `make_rig(obj, export_path=None, forward=None)`, `set_forward(root, "+Y"/"-Y"/"+X"/"-X")`, `remove_rig(root)`, `rigs()`, `rig_of(obj)` | Rig roots and where the model's front points |
+| `set_description(root, text)` | Description of the asset in dProB's library (several lines; in the Export panel `\n` starts a new line) |
 | `set_joint(obj, type, axis=None, limits="keep", visible=None, attachment_point=None, axis_world=None)` | Joint of a part; `limits=None` makes a revolute joint unlimited; `axis_world` for an axis given in world space |
 | `fit_follow_aim(part, leader, target, samples=9, value_range=None, exact_at="rest")` | Fits a Follow so a revolute part (a hydraulic cylinder) keeps pointing at a target that moves with the leader, exact at rest; returns the worst error |
 | `rotate_parts(objects, pivot_world, axis_world, degrees)` | Turns parts with their children about a world axis (re-posing a hook block modeled for transport) |

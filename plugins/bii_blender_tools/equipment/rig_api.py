@@ -90,6 +90,12 @@ def set_forward(root, forward):
     return forward
 
 
+def set_description(root, text):
+    """Description of the asset in dProB's library (several lines)."""
+    _root(root).bii_rig.asset_description = text
+    return text
+
+
 def remove_rig(root):
     """The object is no rig root any more; the joint settings stay on the objects."""
     obj = _root(root)
@@ -259,6 +265,7 @@ def describe(root):
 
     return {"root": r.name, "equipment_id": r.bii_rig.equipment_id, "export_path": r.bii_rig.export_path,
             "forward": {"POS_Y": "+Y", "NEG_Y": "-Y", "POS_X": "+X", "NEG_X": "-X"}[r.bii_rig.forward],
+            "description": r.bii_rig.asset_description,
             "crane_hook": r.bii_rig.crane_hook.name if r.bii_rig.crane_hook else None,
             "parts": len(rig_props.rig_objects(r)), "joints": [o.name for o in rig_props.joints(r)],
             "tree": node(r), "problems": [f"{s}: {t}" for s, t in rig_export.problems(r)]}

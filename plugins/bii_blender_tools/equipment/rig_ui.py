@@ -463,6 +463,7 @@ class VIEW3D_PT_bii_rig_export(bpy.types.Panel):
         root = _root(context)
         r = root.bii_rig
         layout.prop(r, "export_path", text="")
+        layout.prop(r, "asset_description")
         layout.prop(r, "crane_hook", icon="CON_KINEMATIC")
         if r.crane_hook is not None:
             layout.label(text="Exports as Crane: Move Arm, Lift, Deliver", icon="INFO")

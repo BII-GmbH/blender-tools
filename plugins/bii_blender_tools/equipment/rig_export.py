@@ -326,7 +326,12 @@ def export(root, path=None):
     if hook is not None:
         cap = next(c for c in generated if c["Signature"]["Id"]["Guid"] == hook.bii_rig.ik_capability_id)
         crane_variables = crane_type.apply(model, r.equipment_id, hook.bii_rig.element_id, hook.name, cap)
-    dequip_format.write(path, model, fbx_bytes, entry)
+    # without a description: the name and what the equipment can do
+    abilities = (["Geskripteter Kran"] if hook is not None else []) + [
+        c["Signature"]["Name"] for c in generated if hook is None or c["Signature"]["Id"]["Guid"] != hook.bii_rig.ik_capability_id]
+    description = r.asset_description.replace("\\n", "\n") or "\n".join(
+        [root.name] + (["Fähigkeiten:"] + [f"- {a}" for a in abilities] if abilities else []))
+    dequip_format.write(path, model, fbx_bytes, entry, {"Description": description})
     r.export_path = path
     return {"path": path, "equipment_id": r.equipment_id, "elements": details["elements"],
             "joints": details["joints"],

@@ -519,6 +519,8 @@ class BiiRigSettings(bpy.types.PropertyGroup):
     geometry_id: bpy.props.StringProperty(name="Geometry ID")
     export_path: bpy.props.StringProperty(
         name="File", subtype="FILE_PATH", description="The .dequip file to write")
+    asset_description: bpy.props.StringProperty(
+        name="Description", description="Description of the asset in dProB's library; \\n for a new line")
     show_axes: bpy.props.BoolProperty(
         name="Show Joints", default=True, description="Draw the joint axes and limits in the viewport")
     forward: bpy.props.EnumProperty(

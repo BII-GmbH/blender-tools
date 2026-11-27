@@ -168,9 +168,15 @@ point, in the right direction, and not fly apart. Check the extremes with `rig.s
 ## 5. Export and verify
 
 ```python
+rig.set_description("Machine", "Mobiler Teleskopkran\nFähigkeiten:\n- Geskripteter Kran (Max. Reichweite: 50 m)\n"
+                               "- Bodenfahrzeug\n- Ausfahrbare Stützen")
 res = rig.export("Machine", r"C:\path\machine.dequip")   # ask the user where, if unknown
 check = rig.verify("Machine")
 ```
+
+- Description (dProB's asset library): in German, the kind of machine in the first line, then
+  "Fähigkeiten:" and one line per thing it can do (scripted crane with its reach from the data
+  sheet or the model, vehicle, outriggers, other IK capabilities). Show it to the user.
 
 - `check["max_error"]` must be below 1e-4 (meters). Otherwise report it with `check["worst"]`.
 - The export replaces an existing file completely, including capabilities scripted in dProB.
