@@ -1272,7 +1272,9 @@ def _piece_surfaces(obj, pooled, m, grid, ref, ref_valid, length, search, blur):
         b = _blur(np.where(p, ink[r0:r1, c0:c1], 0.0), blur)
         if not b.any():
             continue
-        a = ref[r0:r1, c0:c1] * (_blur(p.astype(np.float32), 3) > 0.01)
+        # the reference around the piece, grown by the search radius: cut to the piece itself, every
+        # shift away from 0 would lose overlap and the match would lean towards no shift
+        a = ref[r0:r1, c0:c1] * _dilate(p, s)
         surface, _ = _correlate(a, b, s)
         cu = (lo + hi) / 2
         cv = float(np.mean((sy if long_x else sx)[part]))
@@ -1463,26 +1465,33 @@ def fit_to_plans(obj, references=None, apply=True, force=False, cell=0.5, max_sh
         residuals = [None if e is None else round(abs(e), 2) for _, e in meas]
         agree = sum(e is not None and e <= tolerance for e in residuals)
         stats["agree"], stats["count"], stats["residuals"] = agree, len(meas), residuals
-        # along the track: only pieces whose own match is sharp in both directions (switches,
-        # platform ends, ends of tracks) count; when at least three agree, they fix it
+        # along the track: pieces of 40 m each vote for the shift along the plan's long side with
+        # the best match (allowing 2 m across); a vote counts only when that best match clearly
+        # beats every shift more than 2 m away along (switches, platform ends, signals). When at
+        # least four agree within tolerance, they fix the place along the track.
         along = []
-        for _, surface in _piece_surfaces(obj, pooled, total_m @ m0, grid, ref, ref_valid, piece, 15.0, 2):
+        for _, surface in _piece_surfaces(obj, pooled, total_m @ m0, grid, ref, ref_valid, 40.0, 15.0, 2):
             s2 = (surface.shape[0] - 1) // 2
-            pk = np.unravel_index(int(np.argmax(surface)), surface.shape)
-            if surface[pk] < 0.3 or max(abs(pk[0] - s2), abs(pk[1] - s2)) >= s2 - 1:
-                continue
-            ridge, _ = _ambiguity(surface, pk, grid.cell)
-            if ridge is not None:
-                continue
-            py, px = _subcell(surface, pk)
-            d = Vector(((px - s2) * grid.cell, (py - s2) * grid.cell))
-            if abs(d.dot(across_dir)) <= tolerance:
-                along.append(d.dot(axis))
-        stats["along_pieces"] = len(along)
-        if len(along) >= 3:
+            prof = []
+            for a in np.arange(-14.0, 14.01, grid.cell):
+                best = 0.0
+                for c in np.arange(-2.0, 2.01, grid.cell):
+                    d = axis * float(a) + across_dir * float(c)
+                    j, i = int(round(s2 + d.x / grid.cell)), int(round(s2 + d.y / grid.cell))
+                    if 0 <= i < surface.shape[0] and 0 <= j < surface.shape[1]:
+                        best = max(best, float(surface[i, j]))
+                prof.append(best)
+            prof = np.array(prof)
+            k = int(np.argmax(prof))
+            r = int(round(2.0 / grid.cell))
+            far = np.r_[prof[:max(0, k - r)], prof[k + r + 1:]]
+            if prof[k] > 0.3 and len(far) and prof[k] > 1.05 * far.max() and 0 < k < len(prof) - 1:
+                along.append(-14.0 + k * grid.cell)
+        stats["along_votes"] = sorted(along)
+        if len(along) >= 4:
             med = float(np.median(along))
             near = [a for a in along if abs(a - med) <= tolerance]
-            if len(near) >= 3 and len(near) >= 0.6 * len(along):
+            if len(near) >= 4 and len(near) >= 0.6 * len(along):
                 step = axis * float(np.mean(near))
                 total_m = Matrix.Translation(Vector((step.x, step.y, 0.0))) @ total_m
                 stats["along_fixed"] = len(near)
@@ -1522,6 +1531,7 @@ def fit_to_plans(obj, references=None, apply=True, force=False, cell=0.5, max_sh
     out["across_fixed"] = bool(not edge and clear and steady and agree >= max(3, 0.6 * len(pieces)))
     by_features = stats.get("along_fixed", 0) >= 3
     out["along_pieces"] = stats.get("along_fixed", 0)
+    out["along_votes"] = stats.get("along_votes", [])
     out["along_fixed"] = bool(out["across_fixed"] and out["spread_along"] <= tolerance
                               and (by_features or (along_deg is None and out["contrast_along"] >= CONTRAST)))
     if not out["across_fixed"]:
