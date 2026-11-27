@@ -1,21 +1,21 @@
 schema_version = "1.0.0"
 
 id = "bii_blender_tools"
-version = "0.1.0"
+version = "0.2.0"
 name = "BII Tools"
-tagline = "IFC cleanup tools and dProB rail asset export"
+tagline = "IFC cleanup, dProB rail asset export, equipment rigs"
 maintainer = "BII GmbH"
 type = "add-on"
 
 website = "https://github.com/BII-GmbH/blender-tools"
 
-tags = ["Import-Export", "Mesh"]
+tags = ["Import-Export", "Mesh", "Rigging"]
 
 blender_version_min = "4.2.0"
 license = ["SPDX:GPL-3.0-or-later"]
 
 [permissions]
-files = "Export rail assets and write the FBX export preset"
+files = "Export rail assets and .dequip equipment, write FBX preset"
 
 [build]
 paths_exclude_pattern = [

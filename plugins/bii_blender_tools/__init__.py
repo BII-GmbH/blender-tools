@@ -23,6 +23,7 @@ from . import clean_reduce_ifc
 from . import upgrade_to_IFC4
 from . import export_rail_asset
 from . import fbx_export_preset
+from . import equipment
 
 def register():
     close_mesh_holes.register()
@@ -34,8 +35,10 @@ def register():
     # upgrade_to_IFC4.register()
     export_rail_asset.register()
     fbx_export_preset.register()
+    equipment.register()
 
 def unregister():
+    equipment.unregister()
     close_mesh_holes.unregister()
     bii_functions_panel.unregister()
     bulk_assign_ifc_class.unregister()
