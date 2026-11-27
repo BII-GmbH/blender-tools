@@ -393,6 +393,20 @@ def groups_without_signal(obj, color="red", points=None, margin=0.004, scene=Non
     return out
 
 
+def symbols_without_signal(obj, color="red", points=None, tolerance=1.0, scene=None):
+    """vector_symbols() of a PDF plan with no placed signal within tolerance meters of their foot:
+    each is a signal or sign still to place, or something else (a dimension arrow, a note
+    leader) to name in the report. points: world positions of the placed signals (default: every
+    signal object of the scene)."""
+    from . import signal_panel
+    scene = scene or bpy.context.scene
+    if points is None:
+        points = [o.matrix_world.translation for o in scene.objects if signal_panel.read_signal(o)]
+    pts = [Vector(p).to_3d().xy for p in points]
+    return [s for s in vector_symbols(obj, color)
+            if not any((p - s["foot_world"].xy).length <= tolerance for p in pts)]
+
+
 def _symbol_frame(mask, px_per_mm, foot, head, length_mm=26.0, half_mm=5.0, step_mm=0.1):
     """The mask sampled in the symbol's own frame: rows from the foot (row 0) towards the head and
     beyond, columns across from -half_mm to +half_mm."""

@@ -199,6 +199,11 @@ for o in bpy.data.collections["Signale"].objects:
   row of your table that says what it is (label or km text, GSA/GSE, INA magnet, note) or get its
   signal placed now. Vorsignalbaken (Ne 3) were missed twice because the inventory only counted
   symbols with a leader and foot bar; they show up here.
+- **Every vector symbol is accounted for** (PDF plans): `plan_api.symbols_without_signal(plan)`
+  lists the symbols on a mast and Ne 3 boards with no signal within 1 m of their foot. Place each
+  one now, or name it in the report as not a signal (dimension arrow, note leader). Also: a placed
+  signal more than 1 m from every vector foot (and not on a Signalbrücke) is in the wrong place;
+  move it to the foot.
 - **Vorsignalbaken before every Vorsignal**: a Vorsignal (`ks_vor`, `hv_vor`, also the distant
   signal part of a `ks_mehr`) usually has 1 to 3 Ne 3 boards on its approach side, about 75, 150
   and 225 m before it, the nearest with 1 stripe. For each placed Vorsignal, crop the plan along
