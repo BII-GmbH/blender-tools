@@ -40,7 +40,26 @@ the symbol: a symbol drawn without a stem stands on a Signalbrücke or another m
 
 ## 2. Inventory: every symbol, nothing left out
 
-New signals are drawn in red on a Signallageplan (ask the user if another color is used):
+New signals are drawn in red on a Signallageplan (ask the user if another color is used).
+
+**PDF plans: start from the vector drawing.** It gives the exact foot of every symbol on a mast
+and every Vorsignalbake, without reading pixels:
+
+```python
+for s in plan_api.vector_symbols(plan, "red"):
+    s["kind"]      # "mast": a symbol on a leader with a foot bar (signal, Lf 6/Lf 7 plate, Zs 6 ...)
+                   # "ne3": a Vorsignalbake, s["stripes"] = its number of stripes
+    s["foot"], s["head"]                # IMAGE pixels; head-to-foot is the drawing direction
+    s["foot_world"], s["head_world"]    # for place_signal(location=..., head=...)
+```
+
+Use `foot` and `head` as they are (do not measure them again) and classify each "mast" symbol
+on a crop turned upright with `up=(head - foot)`. A mast can carry two plates (Lf 6 and Lf 7):
+then place both at the same foot. Some "mast" hits are not signals (dimension arrows, note
+leaders): leave them out after looking. Place every "ne3" board with its `stripes`
+(`sp.place_signal("ne3", {"streifen": s["stripes"]}, location=s["foot_world"], head=s["head_world"], ...)`).
+The vector search misses symbols drawn without a foot bar (e.g. signals on a Signalbrücke):
+the red groups below catch those.
 
 ```python
 groups = plan_api.color_clusters(plan, "red")   # [{"box": IMAGE pixels, "center": world, "pixels"}]

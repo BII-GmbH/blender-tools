@@ -177,6 +177,7 @@ plan_api.georeference(plan, [(u, v, easting, northing), ...], 'IMAGE', crs='DB_R
 plan_api.find_grid(plan)                            # grid crosses found on the original file
 plan_api.place_from_grid(plan, [(box_id, 3589300), ...])  # numbers read on grid_labels() images
 plan_api.validate(plan)                             # ok, problems, notes: all checks in one call
+plan_api.vector_symbols(plan)                       # PDF: feet of red symbols on a mast and Ne 3 boards, exact
 plan_api.groups_without_signal(plan)               # red symbol groups with no placed signal at them
 plan_api.align_to_scene(plan, [(u, v, (x, y, z)), ...], 'PDF')  # points onto scene points
 plan_api.attach_to_neighbor(plan, other, [(u1, v1), (u2, v2)], [(u1, v1), (u2, v2)], 'IMAGE')
