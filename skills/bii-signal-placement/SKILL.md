@@ -42,24 +42,29 @@ the symbol: a symbol drawn without a stem stands on a Signalbrücke or another m
 
 New signals are drawn in red on a Signallageplan (ask the user if another color is used).
 
-**PDF plans: start from the vector drawing.** It gives the exact foot of every symbol on a mast
-and every Vorsignalbake, without reading pixels:
+**PDF plans: the plugin reads and places the symbols itself.** The vector drawing gives the
+exact foot, the drawing direction and the configuration of every symbol on a mast and of every
+Vorsignalbake, without reading pixels. On a checked project this was right for 47 of 49 found
+signals, better than reading the symbols by eye, so place these first and spend your time on
+the checks and on what it cannot read:
 
 ```python
+coll = bpy.data.collections["Signale"]
 for s in plan_api.vector_symbols(plan, "red"):
-    s["kind"]      # "mast": a symbol on a leader with a foot bar (signal, Lf 6/Lf 7 plate, Zs 6 ...)
-                   # "ne3": a Vorsignalbake, s["stripes"] = its number of stripes
-    s["foot"], s["head"]                # IMAGE pixels; head-to-foot is the drawing direction
-    s["foot_world"], s["head_world"]    # for place_signal(location=..., head=...)
+    # s["kind"]: "mast" or "ne3"; s["signals"]: [(bauform, config)] read from the drawing
+    # (empty: not a signal, s["reason"] says why); s["foot"], s["head"] in IMAGE pixels
+    for bauform, cfg in s["signals"]:
+        sig = sp.place_signal(bauform, cfg, location=s["foot_world"], head=s["head_world"],
+                              align_to_track=True, on_terrain=True, collection=coll)
+        sig["plan_sheet"] = plan.name
 ```
 
-Use `foot` and `head` as they are (do not measure them again) and classify each "mast" symbol
-on a crop turned upright with `up=(head - foot)`. A mast can carry two plates (Lf 6 and Lf 7):
-then place both at the same foot. Some "mast" hits are not signals (dimension arrows, note
-leaders): leave them out after looking. Place every "ne3" board with its `stripes`
-(`sp.place_signal("ne3", {"streifen": s["stripes"]}, location=s["foot_world"], head=s["head_world"], ...)`).
-The vector search misses symbols drawn without a foot bar (e.g. signals on a Signalbrücke):
-the red groups below catch those.
+Sheets overlap: place a symbol shown on two sheets once (same Bauform within 1 m). Then
+continue with the inventory below, which now only has to find what is left: symbols drawn
+without a foot bar (a signal on a Signalbrücke or on another signal's mast, `mast=False`, its
+foot is the end of its leader at the track), Ne 4 boards, and anything the vector search
+missed. Plan labels and km come from the text beside the symbol. Spot-check the placed signals
+in step 7 like your own.
 
 ```python
 groups = plan_api.color_clusters(plan, "red")   # [{"box": IMAGE pixels, "center": world, "pixels"}]
