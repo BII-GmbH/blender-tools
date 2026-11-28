@@ -272,9 +272,12 @@ def km_marks(path, massstab=1000.0, km_range=None, page_index=0):
             groups[-1].append(k)
         else:
             groups.append([k])
-    if km_range is None:  # the longest run is the sheet's own Strecke
-        best = max(groups, key=len)
-        km_range = (best[0], best[-1])
+    # the longest run (within km_range, if given) is the sheet's own Strecke
+    inside = [[k for k in g if km_range is None or km_range[0] <= k <= km_range[1]] for g in groups]
+    best = max(inside, key=len)
+    if not best:
+        return []
+    km_range = (best[0], best[-1])
     # a circle belongs to the label nearest to it, of all Strecken (one label per km)
     first = {}
     for label in sorted(labels, key=lambda label: label[2][0][0]):

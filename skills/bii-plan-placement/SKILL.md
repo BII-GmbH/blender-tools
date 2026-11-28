@@ -219,6 +219,19 @@ how it was placed and the residuals.
 
 ### Kilometrierung
 
+**PDF plans:** read the hectometer marks from the PDF itself, exact and in seconds (no image
+reading):
+
+```python
+marks = plan_api.km_marks(plan, km_range=(50.0, 70.0))   # [(u, v, "55,3")] PDF points; km_range picks the Strecke
+lines = plan_api.align_by_km(plan, marks, strecke="5102", unit='PDF')
+r = plan_api.fit_to_plans(plan)                            # then onto the plans placed by grid
+```
+
+Give `km_range` when the sheet shows the km of more than one Strecke (look at the labels found).
+Check the report lines of `align_by_km`: residuals above 2 m mean wrong marks. Scans (raster
+plans): read the marks as below.
+
 ```python
 lines = plan_api.align_by_km(plan, [(u, v, "53,9"), (u, v, "54,2"), (u, v, "")], strecke="5102", unit='SOURCE')
 ```
