@@ -344,10 +344,12 @@ def color_clusters(obj, color="red", join=0.002, min_size=0.0005):
 
 def vector_symbols(obj, color="red", head_mm=8.0):
     """Signal symbols found in the vector drawing of a PDF plan (exact, no image reading):
-    [{"kind": "mast" | "ne3", "foot": (u, v), "head": (u, v), "foot_world", "head_world",
+    [{"kind": "mast" | "free" | "ne3", "foot": (u, v), "head": (u, v), "foot_world", "head_world",
     "stripes" (ne3)}], foot and head in IMAGE pixels. "mast": a short bar across the end of a
     leader (signals, Lf 6/Lf 7 plates, Zs 6 ...): the foot is where the signal stands, the head
     lies head_mm along the leader, so head-to-foot is the direction the symbol is drawn.
+    "free": a head without foot bar and mast (e.g. on a signal bridge, mast=False), the foot at
+    the start of its leader.
     "ne3": a Vorsignalbake with its stripe count. "signals": [(bauform, config)] read from the
     drawing (plan_vector.classify; empty: not a signal, "reason" says why). Raises ValueError for
     raster plans."""
@@ -356,7 +358,8 @@ def vector_symbols(obj, color="red", head_mm=8.0):
     out = []
     for s in plan_vector.symbols(path, color):
         fx, fy = s["foot"]
-        hx, hy = fx + s["axis"][0] * head_mm * plan_vector.MM, fy + s["axis"][1] * head_mm * plan_vector.MM
+        bx, by = s.get("base") or s["foot"]
+        hx, hy = bx + s["axis"][0] * head_mm * plan_vector.MM, by + s["axis"][1] * head_mm * plan_vector.MM
         foot = from_sheet(obj, *to_sheet(obj, fx, fy, 'PDF'), 'IMAGE')
         head = from_sheet(obj, *to_sheet(obj, hx, hy, 'PDF'), 'IMAGE')
         item = {"kind": s["kind"], "foot": foot, "head": head,
@@ -366,7 +369,9 @@ def vector_symbols(obj, color="red", head_mm=8.0):
             item["signals"], item["reason"] = [("ne3", {"streifen": s["stripes"]})], "Vorsignalbake"
         else:
             item["signals"], item["reason"] = plan_vector.classify(path, s["foot"], s["axis"], color,
-                                                                   obj.bii_plan.page - 1)
+                                                                   obj.bii_plan.page - 1, s.get("base"))
+            if s["kind"] == "free":     # a head without mast, e.g. on a signal bridge
+                item["signals"] = [(b, dict(cfg, mast=False)) for b, cfg in item["signals"]]
         out.append(item)
     return out
 

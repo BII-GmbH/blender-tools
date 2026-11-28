@@ -51,7 +51,7 @@ the checks and on what it cannot read:
 ```python
 coll = bpy.data.collections["Signale"]
 for s in plan_api.vector_symbols(plan, "red"):
-    # s["kind"]: "mast" or "ne3"; s["signals"]: [(bauform, config)] read from the drawing
+    # s["kind"]: "mast", "free" (head without mast, mast=False) or "ne3"; s["signals"]: [(bauform, config)]
     # (empty: not a signal, s["reason"] says why); s["foot"], s["head"] in IMAGE pixels
     for bauform, cfg in s["signals"]:
         sig = sp.place_signal(bauform, cfg, location=s["foot_world"], head=s["head_world"],
@@ -61,9 +61,9 @@ for s in plan_api.vector_symbols(plan, "red"):
 
 Sheets overlap: place a symbol shown on two sheets once (same Bauform within 1 m). Then
 continue with the inventory below, which now only has to find what is left: symbols drawn
-without a foot bar (a signal on a Signalbrücke or on another signal's mast, `mast=False`, its
-foot is the end of its leader at the track), Ne 4 boards, and anything the vector search
-missed. Plan labels and km come from the text beside the symbol. Spot-check the placed signals
+without a foot bar that the vector search did not find (a signal on a Signalbrücke or on another
+signal's mast, `mast=False`, its foot is the end of its leader at the track), and anything else
+it missed. Plan labels and km come from the text beside the symbol. Spot-check the placed signals
 in step 7 like your own.
 
 ```python

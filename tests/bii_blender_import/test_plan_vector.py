@@ -111,21 +111,30 @@ class PlanVectorTest(unittest.TestCase):
         import signal_spec
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "slp.pdf")
-            ks, lf = make_signals_pdf(path)
+            ks, lf, bent, free = make_signals_pdf(path)
             found = {}
             for s in plan_vector.symbols(path, "red"):
-                if s["kind"] == "mast":
-                    signals, reason = plan_vector.classify(path, s["foot"], s["axis"])
+                if s["kind"] in ("mast", "free"):
+                    signals, reason = plan_vector.classify(path, s["foot"], s["axis"], base=s.get("base"))
                     self.assertTrue(reason)
                     if signals:
-                        found[min((ks, lf), key=lambda p: math.dist(p, s["foot"]))] = signals
+                        near = min((ks, lf, bent, free), key=lambda p: math.dist(p, s["foot"]))
+                        self.assertLess(math.dist(near, s["foot"]), 0.5)
+                        found[near] = s["kind"], signals
             # the head edge of the Ks signal (found as a foot too) and the long line with a wide bar: no signals
-            self.assertEqual(len(found), 2)
-            self.assertEqual(found[ks], [("ks_haupt", {"bedienung": "stellwerk_zug", "kopf": "zs1", "zs3": "ohne",
-                                                       "zs6": False, "sh1": False, "licht": "oben"})])
-            self.assertEqual(found[lf], [("lf6", {"kennziffer": 9}), ("lf7", {"kennziffer": 16})])
-            for bauform, cfg in found[ks] + found[lf]:
-                self.assertTrue(signal_spec.valid(bauform, signal_spec.config(bauform, **cfg)))
+            self.assertEqual(len(found), 4)
+            self.assertEqual(found[ks], ("mast", [("ks_haupt", {"bedienung": "stellwerk_zug", "kopf": "zs1",
+                                                                "zs3": "ohne", "zs6": False, "sh1": False,
+                                                                "licht": "oben"})]))
+            self.assertEqual(found[lf], ("mast", [("lf6", {"kennziffer": 9}), ("lf7", {"kennziffer": 16})]))
+            self.assertEqual(found[bent], ("mast", [("ks_vor", {"bedienung": "stellwerk_zug", "zs3v": "ohne",
+                                                                "licht": "ohne"})]))
+            self.assertEqual(found[free], ("free", [("ks_mehr", {"bedienung": "stellwerk_zug", "kopf": "ohne",
+                                                                 "zs3": "ohne", "zs6": False, "sh1": False,
+                                                                 "zs3v": "licht", "licht": "ohne"})]))
+            for _kind, signals in found.values():
+                for bauform, cfg in signals:
+                    self.assertTrue(signal_spec.valid(bauform, signal_spec.config(bauform, **cfg)))
 
 
 def make_signals_pdf(path):
@@ -180,9 +189,32 @@ def make_signals_pdf(path):
     other = (400.0, 300.0)
     poly(other, [(0, -1.5), (0, 1.5)])
     poly(other, [(0, 0), (20, 0)])
+    # a bent mast: foot bar, a short stub, a slanted piece, then the straight mast 2 mm to the side with a
+    # Ks-Vorsignal (cup: rounded towards the foot, half filled)
+    bent = (480.0, 300.0)
+    poly(bent, [(0, -1), (0, 1)])
+    poly(bent, [(0, 0), (0.5, 0)])
+    poly(bent, [(0.5, 0), (3, 2)])
+    poly(bent, [(3, 2), (8, 2)])
+    arc(bent, 9.5, 2, 1.5, 90, 180)
+    arc(bent, 9.5, 2, 1.5, 180, 270)
+    poly(bent, [(9.5, 0.5), (11, 0.5), (11, 3.5), (9.5, 3.5)])
+    poly(bent, [(9.5, 2), (11, 2), (11, 3.5), (9.5, 3.5)], fill=True, close=True)
+    # a head without foot bar and mast (on a signal bridge): leader, bracket, Zs 3v light, capsule half filled
+    free = (550.0, 330.0)
+    poly(free, [(0, 0), (3.6, 0)])
+    poly(free, [(1, -1.5), (3.6, 0), (1, 1.5)])
+    poly(free, [(6.7, -1.5), (4.1, 0), (6.7, 1.5)], fill=True, close=True)
+    poly(free, [(8.7, -1.5), (12.7, -1.5)])
+    poly(free, [(8.7, 1.5), (12.7, 1.5)])
+    poly(free, [(8.7, 0), (12.7, 0), (12.7, 1.5), (8.7, 1.5)], fill=True, close=True)
+    for a0 in (90, 180):
+        arc(free, 8.7, 0, 1.5, a0, a0 + 90)
+    for a0 in (-90, 0):
+        arc(free, 12.7, 0, 1.5, a0, a0 + 90)
     raw.FPDFPage_GenerateContent(page)
     pdfium.PdfDocument(doc).save(path)
-    return ks, lf
+    return ks, lf, bent, free
 
 
 TROUGH_GAP = 0.5 * MM   # two parallel lines 0.5 mm apart

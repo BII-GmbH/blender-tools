@@ -164,6 +164,37 @@ def mast_symbols(segs, bar=(1.0, 3.2), min_leader=2.8, gap=0.3):
     return out
 
 
+def bent_masts(segs, bar=(1.0, 3.2), gap=0.3, last=1.5, steps=3):
+    """[{"foot", "axis", "leader", "base"}]: masts drawn with a bend near the foot (the symbol set aside
+    from where the signal stands): a foot bar, a chain of up to `steps` lines from its middle, the last one
+    (at least `last` mm) square to the bar; base: where that last line starts, axis: along it"""
+    segs = [(a, b) for a, b in segs if math.dist(a, b) > 0.2 * MM]
+    out = []
+    for i, (a, b) in enumerate(segs):
+        if not bar[0] * MM <= math.dist(a, b) <= bar[1] * MM:
+            continue
+        mid = ((a[0] + b[0]) / 2, (a[1] + b[1]) / 2)
+        u = _unit(a, b)
+        point, used, length, tol = mid, {i}, 0.0, gap * MM
+        for step in range(steps):
+            nxt = [(j, d) for j, (c, d) in enumerate(segs) if j not in used and math.dist(c, point) <= tol] + \
+                  [(j, c) for j, (c, d) in enumerate(segs) if j not in used and math.dist(d, point) <= tol]
+            if len(nxt) != 1:
+                break                                   # a branch or nothing: not a leader
+            j, end = nxt[0]
+            v = _unit(point, end)
+            square = abs(u[0] * v[0] + u[1] * v[1]) < 0.15
+            if step and square and math.dist(point, end) >= last * MM:
+                out.append({"foot": mid, "axis": v, "leader": (length + math.dist(point, end)) / MM, "base": point})
+                break
+            if step == 0 and square and math.dist(point, end) >= 2.8 * MM:
+                break                                   # a straight mast (mast_symbols)
+            used.add(j)
+            length += math.dist(point, end)
+            point, tol = end, 0.05 * MM
+    return out
+
+
 def ne3_boards(segs, length=(7.0, 9.0), width=(1.6, 3.2)):
     """[{"foot", "axis", "stripes", "center"}]: Vorsignalbaken, plates of two parallel lines (length
     and width in mm) with diagonal stripes inside; the foot is the far end of the support bar"""
@@ -209,11 +240,48 @@ def ne3_boards(segs, length=(7.0, 9.0), width=(1.6, 3.2)):
     return out
 
 
+def free_heads(path, segs, known, color="red", page_index=0, leader=(2.8, 12.0)):
+    """[{"foot", "axis", "leader", "base"}]: signal heads without a foot bar (no mast, e.g. on a signal
+    bridge): a line (leader, length in mm) with a Ks head or H/V lamps right at its far end; a bracket (a
+    V from the bridge to the leader's end) may lie along it. The foot is the other end of the leader.
+    known: feet (or bases) found already, left out."""
+    out = []
+    for a, b in segs:
+        ln = math.dist(a, b) / MM
+        if not leader[0] <= ln <= leader[1]:
+            continue
+        for foot, end in ((a, b), (b, a)):
+            if any(math.dist(k, foot) < MM or math.dist(k, end) < MM for k in known + [f["foot"] for f in out]):
+                continue
+            axis = _unit(foot, end)
+            stack = [s for s in mast_shapes(path, foot, axis, color, page_index)[0]
+                     if not (s["kind"] in ("chevron", "other") and s["s0"] < ln - 0.3 and abs(s["s1"] - ln) < 0.3)]
+            # (left out: a bracket along the leader, a V from the bridge to its end)
+            if not stack or not ln - 0.3 <= stack[0]["s0"] <= ln + 1.0:
+                continue
+            # a Ks head (filled or half filled: an empty one is too much like other plates) or two H/V lamps
+            heads = [i for i, s in enumerate(stack) if s["kind"] == "ks_head" and s["form"] != "other"
+                     and s["fill"] != "none"]
+            lamps = [i for i, s in enumerate(stack) if s["kind"] == "circle" and abs(s["tc"]) < 0.4 and s["d"] > 0.9]
+            first = heads[0] if heads else lamps[1] if len(lamps) >= 2 else None
+            # up to the head, every shape is a part of a signal
+            if first is not None and all(s["kind"] != "other" for s in stack[:first + 1]):
+                out.append({"foot": foot, "axis": axis, "leader": ln, "base": foot})
+    return out
+
+
 def symbols(path, color="red", page_index=0):
-    """mast symbols and Ne 3 boards of one colour: [{"kind": "mast" | "ne3", "foot", "axis", ...}]"""
+    """mast symbols and Ne 3 boards of one colour: [{"kind": "mast" | "free" | "ne3", "foot", "axis", ...}].
+    "mast": a symbol on a mast with a foot bar; bent masts have a "base" where the straight mast starts.
+    "free": a head without foot bar and mast (e.g. on a signal bridge), "base" = foot. Pass base on to
+    classify()."""
     test = COLORS[color]
     segs = [(a, b) for a, b, col in strokes(path, page_index) if test(*col)]
-    return [{"kind": "mast", **m} for m in mast_symbols(segs)] + [{"kind": "ne3", **n} for n in ne3_boards(segs)]
+    masts = mast_symbols(segs)
+    masts += [m for m in bent_masts(segs) if all(math.dist(m["foot"], o["foot"]) > 0.5 * MM for o in masts)]
+    free = free_heads(path, segs, [m.get("base") or m["foot"] for m in masts], color, page_index)
+    return ([{"kind": "mast", **m} for m in masts] + [{"kind": "free", **f} for f in free]
+            + [{"kind": "ne3", **n} for n in ne3_boards(segs)])
 
 
 # ---------------------------------------------------------------- what a mast symbol shows
@@ -303,12 +371,42 @@ def _split(pieces, fills):
     return [shape]
 
 
+@functools.lru_cache(maxsize=8)
+def _colour_grid(path, page_index, mtime, color, cell=30.0):
+    """{(i, j): [(item, stroke, fill)]}: the paths of one colour by the grid cells (cell points) they touch"""
+    test = COLORS[color]
+    grid = {}
+    for item in _read(path, page_index, mtime)[2]:
+        stroke, fill = bool(item["stroke"] and test(*item["stroke"])), bool(item["fill"] and test(*item["fill"]))
+        if not (stroke or fill) or not item["segs"]:
+            continue
+        xs = [p[k][0] for p in item["segs"] for k in (0, 1)]
+        ys = [p[k][1] for p in item["segs"] for k in (0, 1)]
+        for i in range(int(min(xs) // cell), int(max(xs) // cell) + 1):
+            for j in range(int(min(ys) // cell), int(max(ys) // cell) + 1):
+                grid.setdefault((i, j), []).append((item, stroke, fill))
+    return grid
+
+
+def _paths_near(path, page_index, color, point, radius, cell=30.0):
+    """[(item, stroke, fill)]: the paths of one colour within about radius points of point"""
+    path = os.path.abspath(path)
+    grid = _colour_grid(path, page_index, os.path.getmtime(path), color, cell)
+    seen, out = set(), []
+    for i in range(int((point[0] - radius) // cell), int((point[0] + radius) // cell) + 1):
+        for j in range(int((point[1] - radius) // cell), int((point[1] + radius) // cell) + 1):
+            for entry in grid.get((i, j), ()):
+                if id(entry[0]) not in seen:
+                    seen.add(id(entry[0]))
+                    out.append(entry)
+    return out
+
+
 def mast_shapes(path, foot, axis, color="red", page_index=0, reach=32.0, width=2.2):
     """(shapes, foot bar length, small circles beside, texts) of the symbol on a mast, in mm: the shapes
     stacked on the mast from the foot outwards (see _shape), circles [(s, t)] beside it (Zusatzlicht),
     texts [(text, s, t)]"""
-    test = COLORS[color]
-    _w, _h, paths, texts = read_page(path, page_index)
+    _w, _h, _paths, texts = read_page(path, page_index)
     box = (reach + 5) * MM
 
     def loc(p):
@@ -317,10 +415,8 @@ def mast_shapes(path, foot, axis, color="red", page_index=0, reach=32.0, width=2
 
     pieces, fills, beside = [], [], []
     bar = top = 0.0
-    for item in paths:
-        stroke, fill = bool(item["stroke"] and test(*item["stroke"])), bool(item["fill"] and test(*item["fill"]))
-        if not (stroke or fill) or not item["segs"] or all(
-                abs(p[0] - foot[0]) > box or abs(p[1] - foot[1]) > box for p, _q, _c in item["segs"]):
+    for item, stroke, fill in _paths_near(path, page_index, color, foot, box):
+        if all(abs(p[0] - foot[0]) > box or abs(p[1] - foot[1]) > box for p, _q, _c in item["segs"]):
             continue
         segs = [(loc(p), loc(q), c) for p, q, c in item["segs"]]
         pts = [p for seg in segs for p in seg[:2]]
@@ -339,7 +435,7 @@ def mast_shapes(path, foot, axis, color="red", page_index=0, reach=32.0, width=2
             elif inside or (not c and abs(a[1]) <= width and abs(b[1]) <= width and 0.2 < min(a[0], b[0]) < reach
                             and math.dist(a, b) < 6):
                 pieces.append((a, b, c, fill))
-        if stroke and all(c for _a, _b, c in segs):
+        if stroke and all(c for _a, _b, c in segs) and math.dist(segs[0][0], segs[-1][1]) < 0.1:   # a circle
             s0, s1 = min(p[0] for p in pts), max(p[0] for p in pts)
             t0, t1 = min(p[1] for p in pts), max(p[1] for p in pts)
             if 0.7 < s1 - s0 < 1.8 and 0.7 < t1 - t0 < 1.8 and 1.4 < abs(t0 + t1) / 2 < 4 and 0.5 < s0 < reach:
@@ -374,13 +470,15 @@ def _number(texts, s0, s1, t_max):
     return found[0][1] if found and found[0][1] <= 16 else 0
 
 
-def classify(path, foot, axis, color="red", page_index=0):
-    """([(bauform, config)], reason): the signals a mast symbol shows (foot and axis as from symbols()),
-    read from the vector drawing; Bauformen and elements as in signal_spec. Usually one signal; a mast
-    with several signs (Lf 6 and Lf 7) gives several. An empty list: no signal (e.g. a dimension line,
-    or the foot found at the head end of a symbol), the reason says why."""
-    shapes, bar, beside, texts = mast_shapes(path, foot, axis, color, page_index)
-    if not 0.8 <= bar < 2.6:
+def classify(path, foot, axis, color="red", page_index=0, base=None):
+    """([(bauform, config)], reason): the signals a mast symbol shows (foot, axis and base as from
+    symbols()), read from the vector drawing; Bauformen and elements as in signal_spec. Usually one
+    signal; a mast with several signs (Lf 6 and Lf 7) gives several. An empty list: no signal (e.g. a
+    dimension line, or the foot found at the head end of a symbol), the reason says why. base: where the
+    straight mast starts when it is not at the foot (bent masts, heads without a foot bar); the foot bar
+    is not checked then."""
+    shapes, bar, beside, texts = mast_shapes(path, base or foot, axis, color, page_index)
+    if base is None and not 0.8 <= bar < 2.6:
         return [], "foot bar %.1f mm, a foot bar is 0.8 to 2.6 mm" % bar
     if not shapes:
         return [], "nothing on the mast"
