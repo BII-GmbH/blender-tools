@@ -312,6 +312,9 @@ def build_observations(scene, obj):
                                            weight=place.landmark_weight))
     obs += attach_observations(obj, place.attach_weight)
     if not any(o.kind in ('POINT', 'DIR') for o in obs):
+        if any(p.use and p.km is not None for p in place.km_points):
+            raise ValueError(f"None of the km lies on the Kilometrierung of {place.strecke or 'the Strecke'}: "
+                             "is it the right Strecke? " + "; ".join(m.lstrip("!") for m in messages[:2]))
         raise ValueError("Type the km of at least one point, or add an Align to Scene point "
                          "(landmark)")
     return obs, checks, messages
