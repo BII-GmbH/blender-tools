@@ -348,7 +348,9 @@ def vector_symbols(obj, color="red", head_mm=8.0):
     "stripes" (ne3)}], foot and head in IMAGE pixels. "mast": a short bar across the end of a
     leader (signals, Lf 6/Lf 7 plates, Zs 6 ...): the foot is where the signal stands, the head
     lies head_mm along the leader, so head-to-foot is the direction the symbol is drawn.
-    "ne3": a Vorsignalbake with its stripe count. Raises ValueError for raster plans."""
+    "ne3": a Vorsignalbake with its stripe count. "signals": [(bauform, config)] read from the
+    drawing (plan_vector.classify; empty: not a signal, "reason" says why). Raises ValueError for
+    raster plans."""
     from . import plan_vector
     path = pdf_path(obj)
     out = []
@@ -361,6 +363,10 @@ def vector_symbols(obj, color="red", head_mm=8.0):
                 "foot_world": plan_to_world(obj, fx, fy, 'PDF'), "head_world": plan_to_world(obj, hx, hy, 'PDF')}
         if s["kind"] == "ne3":
             item["stripes"] = s["stripes"]
+            item["signals"], item["reason"] = [("ne3", {"streifen": s["stripes"]})], "Vorsignalbake"
+        else:
+            item["signals"], item["reason"] = plan_vector.classify(path, s["foot"], s["axis"], color,
+                                                                   obj.bii_plan.page - 1)
         out.append(item)
     return out
 

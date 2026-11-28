@@ -107,6 +107,83 @@ class PlanVectorTest(unittest.TestCase):
             self.assertAlmostEqual(big[2][1], 6 / plan_vector.point_per_m(1000), places=3)
             self.assertEqual(small[2], (0.8, 0.8))  # a small symbol: at least min_size
 
+    def test_classify(self):
+        import signal_spec
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "slp.pdf")
+            ks, lf = make_signals_pdf(path)
+            found = {}
+            for s in plan_vector.symbols(path, "red"):
+                if s["kind"] == "mast":
+                    signals, reason = plan_vector.classify(path, s["foot"], s["axis"])
+                    self.assertTrue(reason)
+                    if signals:
+                        found[min((ks, lf), key=lambda p: math.dist(p, s["foot"]))] = signals
+            # the head edge of the Ks signal (found as a foot too) and the long line with a wide bar: no signals
+            self.assertEqual(len(found), 2)
+            self.assertEqual(found[ks], [("ks_haupt", {"bedienung": "stellwerk_zug", "kopf": "zs1", "zs3": "ohne",
+                                                       "zs6": False, "sh1": False, "licht": "oben"})])
+            self.assertEqual(found[lf], [("lf6", {"kennziffer": 9}), ("lf7", {"kennziffer": 16})])
+            for bauform, cfg in found[ks] + found[lf]:
+                self.assertTrue(signal_spec.valid(bauform, signal_spec.config(bauform, **cfg)))
+
+
+def make_signals_pdf(path):
+    """a sheet with masts pointing up the page: a Ks-Hauptsignal (bell, half filled, Zs 1 above, light beside),
+    a mast with Lf 6 and Lf 7 (numbers 9 and 16), and a long line with a wide bar (no signal)"""
+    doc = raw.FPDF_CreateNewDocument()
+    page = raw.FPDFPage_New(doc, 0, 600.0, H)
+    red = (230, 0, 0)
+
+    def at(foot, s, t):
+        """the point s mm up the mast and t mm to the right of it"""
+        return foot[0] + t * MM, foot[1] - s * MM
+
+    def poly(foot, points, fill=False, close=False):
+        raw.FPDFPage_InsertObject(page, path_of([at(foot, s, t) for s, t in points], red, fill=fill, close=close))
+
+    def arc(foot, s, t, r, a0, a1):
+        """a quarter circle around (s, t), radius r mm, from angle a0 to a1 (degrees from the mast direction)"""
+        k, a0, a1 = 0.5523 * r, math.radians(a0), math.radians(a1)
+        sign = 1 if a1 > a0 else -1
+        p0 = (s + r * math.cos(a0), t + r * math.sin(a0))
+        p3 = (s + r * math.cos(a1), t + r * math.sin(a1))
+        c1 = (p0[0] - sign * k * math.sin(a0), p0[1] + sign * k * math.cos(a0))
+        c2 = (p3[0] + sign * k * math.sin(a1), p3[1] - sign * k * math.cos(a1))
+        (x0, y0), (x1, y1), (x2, y2), (x3, y3) = (at(foot, *p) for p in (p0, c1, c2, p3))
+        obj = raw.FPDFPageObj_CreateNewPath(x0, H - y0)
+        raw.FPDFPath_BezierTo(obj, x1, H - y1, x2, H - y2, x3, H - y3)
+        raw.FPDFPageObj_SetStrokeColor(obj, *red, 255)
+        raw.FPDFPageObj_SetStrokeWidth(obj, 0.3)
+        raw.FPDFPath_SetDrawMode(obj, 0, True)
+        raw.FPDFPage_InsertObject(page, obj)
+
+    ks = (100.0, 300.0)
+    poly(ks, [(0, -1), (0, 1)])                                   # foot bar
+    poly(ks, [(0, 0), (7.5, 0)])                                  # mast
+    poly(ks, [(7.5, -1.5), (7.5, 1.5)])                           # the head: straight end at the foot
+    poly(ks, [(7.5, -1.5), (10, -1.5)])
+    poly(ks, [(7.5, 1.5), (10, 1.5)])
+    poly(ks, [(7.5, 0), (10, 0), (10, 1.5), (7.5, 1.5)], fill=True, close=True)  # half filled
+    arc(ks, 10, 0, 1.5, -90, 0)                                   # rounded at the far end
+    arc(ks, 10, 0, 1.5, 0, 90)
+    poly(ks, [(12, -1.5), (14.6, 0)])                             # Zs 1: chevron, tip away from the head
+    poly(ks, [(12, 1.5), (14.6, 0)])
+    circle(page, *at(ks, 11, -2.4), 0.6 * MM, red)              # Zusatzlicht beside the head, near its top
+    lf = (250.0, 300.0)
+    poly(lf, [(0, -0.8), (0, 0.8)])
+    poly(lf, [(0, 0), (4.5, 0)])
+    poly(lf, [(7.1, -1.5), (4.5, 0), (7.1, 1.5), (7.1, -1.5)])   # Lf 6: open triangle towards the foot
+    poly(lf, [(7.5, -1.5), (11.5, -1.5), (11.5, 1.5), (7.5, 1.5)], close=True)  # Lf 7: upright plate
+    text(doc, page, "9", *at(lf, 5.0, 2.2), size=5.0)
+    text(doc, page, "16", *at(lf, 8.8, -0.9), size=5.0)
+    other = (400.0, 300.0)
+    poly(other, [(0, -1.5), (0, 1.5)])
+    poly(other, [(0, 0), (20, 0)])
+    raw.FPDFPage_GenerateContent(page)
+    pdfium.PdfDocument(doc).save(path)
+    return ks, lf
+
 
 TROUGH_GAP = 0.5 * MM   # two parallel lines 0.5 mm apart
 

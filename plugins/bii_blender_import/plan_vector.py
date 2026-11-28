@@ -3,7 +3,8 @@
 A Signallageplan draws its symbols as straight strokes. Two patterns are found here, in one
 colour (red for the new signals):
 - a symbol on a mast: a short bar (the foot) across the end of a longer line (the leader); the
-  foot point is the end of the leader, the head lies along the leader;
+  foot point is the end of the leader, the head lies along the leader; classify() reads which
+  signal it is from the shapes along the mast;
 - a Vorsignalbake (Ne 3): a narrow plate of two parallel lines about 8 mm long with diagonal
   stripes inside and a short support bar at one end.
 A Kabeltiefbau plan draws new cable troughs as two parallel red lines, Gleisquerungen as red dashed
@@ -213,6 +214,231 @@ def symbols(path, color="red", page_index=0):
     test = COLORS[color]
     segs = [(a, b) for a, b, col in strokes(path, page_index) if test(*col)]
     return [{"kind": "mast", **m} for m in mast_symbols(segs)] + [{"kind": "ne3", **n} for n in ne3_boards(segs)]
+
+
+# ---------------------------------------------------------------- what a mast symbol shows
+# Shapes along the mast, in mm in the symbol's frame: s from the foot towards the head, t across.
+# Pieces are ((s, t), (s, t), curved, from_filled_path); fills are the segments of filled paths.
+
+def _vertices(pieces, tol=0.2):
+    out = []
+    for a, b, *_rest in pieces:
+        for p in (a, b):
+            if all(math.dist(p, o) > tol for o in out):
+                out.append(p)
+    return out
+
+
+def _shape(pieces, fills):
+    """one shape on the mast: {"kind": "circle" | "ks_head" | "triangle" | "chevron" | "rect" | "other", "s0", "s1",
+    "t0", "t1", "fill": "full" | "half" | "none", ...}"""
+    s0 = min(min(p[0][0], p[1][0]) for p in pieces)
+    s1 = max(max(p[0][0], p[1][0]) for p in pieces)
+    t0 = min(min(p[0][1], p[1][1]) for p in pieces)
+    t1 = max(max(p[0][1], p[1][1]) for p in pieces)
+    ln, w = s1 - s0, t1 - t0
+    round_ = [p for p in pieces if p[2] or math.dist(p[0], p[1]) < 0.35]   # curves, also drawn as short lines
+    straight = [p for p in pieces if p not in round_]
+    cross = [((a[0] + b[0]) / 2, f) for a, b, _c, f in straight
+             if abs(a[0] - b[0]) < 0.15 and abs(a[1] - b[1]) > 0.6 * w]          # bars across: (s, from fill)
+    near = any(abs(c - s0) < 0.2 for c, _f in cross)
+    far = any(abs(c - s1) < 0.2 for c, _f in cross)
+    sides = sum(abs(a[0] - b[0]) for a, b, _c, _f in straight
+                if abs(a[1] - b[1]) < 0.15 and abs(abs(a[1]) - w / 2) < 0.3) >= 0.6 * ln
+    out = {"kind": "other", "s0": s0, "s1": s1, "t0": t0, "t1": t1, "fill": "none"}
+    if fills:
+        f0 = min(min(a[1], b[1]) for f in fills for a, b, _c in f)
+        f1 = max(max(a[1], b[1]) for f in fills for a, b, _c in f)
+        out["fill"] = "full" if f0 < t0 + 0.3 * w and f1 > t1 - 0.3 * w else "half"
+    if round_ and len(round_) >= 0.6 * len(pieces) and ln < 2.2 and w < 2.2 and abs(ln - w) < 0.5:
+        out.update(kind="circle", tc=(t0 + t1) / 2, d=max(ln, w))
+    elif round_ and sides and w > 2.0:
+        # a Ks head: a straight end towards the foot = Hauptsignal (bell), at the far end = Vorsignal (cup),
+        # none = Mehrabschnittssignal (capsule); bars across inside the head = Sh 1
+        form = {(True, False): "haupt", (False, True): "vor", (False, False): "mehr"}.get((near, far), "other")
+        out.update(kind="ks_head", form=form, sh1=any(s0 + 0.2 < c < s1 - 0.2 and not f for c, f in cross))
+    elif not round_ and len(_vertices(straight)) == 3:
+        apex = min(_vertices(straight), key=lambda v: abs(v[1] - (t0 + t1) / 2))
+        if abs(apex[1] - (t0 + t1) / 2) < 0.3 * w:
+            at_far = abs(apex[0] - s1) < abs(apex[0] - s0)
+            out.update(kind="triangle" if (near if at_far else far) else "chevron",
+                       dir="away" if at_far else "toward", filled=bool(fills))
+    elif not round_ and near and far:
+        quads = [f for f in fills if len(_vertices(f)) >= 4]
+        diagonal = any(len(_vertices(f)) == 3 for f in fills) or any(
+            not p[3] and abs(p[0][0] - p[1][0]) > 0.5 * ln and abs(p[0][1] - p[1][1]) > 0.5 * w for p in straight)
+        if diagonal:
+            inner = "diagonal"
+        elif len(quads) >= 2:
+            inner = "checker"
+        elif quads:
+            band = max(max(a[0], b[0]) for a, b, _c in quads[0]) - min(min(a[0], b[0]) for a, b, _c in quads[0])
+            inner = "band" if band < 0.5 * ln else "filled"
+        else:
+            inner = "empty"
+        out.update(kind="rect", inner=inner)
+    return out
+
+
+def _split(pieces, fills):
+    """the shapes of a group of pieces: one, or two or more touching end to end"""
+    lo = min(min(p[0][0], p[1][0]) for p in pieces)
+    hi = max(max(p[0][0], p[1][0]) for p in pieces)
+
+    def own(a, b):
+        return [f for f in fills if a - 0.1 <= sum(p[0] for p, _q, _c in f) / len(f) <= b + 0.1]
+
+    shape = _shape(pieces, own(lo, hi))
+    if shape["kind"] != "other":
+        return [shape]
+    for cut in sorted({round(p[i][0], 2) for p in pieces for i in (0, 1)}):
+        if not lo + 0.5 < cut < hi - 0.5:
+            continue
+        left = [p for p in pieces if max(p[0][0], p[1][0]) <= cut + 0.02]
+        right = [p for p in pieces if min(p[0][0], p[1][0]) >= cut - 0.02]
+        if len(left) + len(right) == len(pieces):
+            parts = _split(left, own(lo, cut)) + _split(right, own(cut, hi))
+            if all(s["kind"] != "other" for s in parts):
+                return parts
+    return [shape]
+
+
+def mast_shapes(path, foot, axis, color="red", page_index=0, reach=32.0, width=2.2):
+    """(shapes, foot bar length, small circles beside, texts) of the symbol on a mast, in mm: the shapes
+    stacked on the mast from the foot outwards (see _shape), circles [(s, t)] beside it (Zusatzlicht),
+    texts [(text, s, t)]"""
+    test = COLORS[color]
+    _w, _h, paths, texts = read_page(path, page_index)
+    box = (reach + 5) * MM
+
+    def loc(p):
+        x, y = p[0] - foot[0], p[1] - foot[1]
+        return (x * axis[0] + y * axis[1]) / MM, (-x * axis[1] + y * axis[0]) / MM
+
+    pieces, fills, beside = [], [], []
+    bar = top = 0.0
+    for item in paths:
+        stroke, fill = bool(item["stroke"] and test(*item["stroke"])), bool(item["fill"] and test(*item["fill"]))
+        if not (stroke or fill) or not item["segs"] or all(
+                abs(p[0] - foot[0]) > box or abs(p[1] - foot[1]) > box for p, _q, _c in item["segs"]):
+            continue
+        segs = [(loc(p), loc(q), c) for p, q, c in item["segs"]]
+        pts = [p for seg in segs for p in seg[:2]]
+        inside = all(abs(t) <= width and 0.2 < s < reach for s, t in pts)
+        if fill and inside:
+            fills.append(segs)
+        for a, b, c in segs:
+            if math.dist(a, b) < 1e-3:
+                continue
+            if not c and abs(a[1]) < 0.15 and abs(b[1]) < 0.15:
+                if min(a[0], b[0]) < 0.15:
+                    top = max(top, a[0], b[0])      # the mast
+            elif not c and max(abs(a[0]), abs(b[0])) < 0.15:
+                if min(a[1], b[1]) < 0.1 and max(a[1], b[1]) > -0.1:
+                    bar = max(bar, abs(a[1] - b[1]))  # the foot bar
+            elif inside or (not c and abs(a[1]) <= width and abs(b[1]) <= width and 0.2 < min(a[0], b[0]) < reach
+                            and math.dist(a, b) < 6):
+                pieces.append((a, b, c, fill))
+        if stroke and all(c for _a, _b, c in segs):
+            s0, s1 = min(p[0] for p in pts), max(p[0] for p in pts)
+            t0, t1 = min(p[1] for p in pts), max(p[1] for p in pts)
+            if 0.7 < s1 - s0 < 1.8 and 0.7 < t1 - t0 < 1.8 and 1.4 < abs(t0 + t1) / 2 < 4 and 0.5 < s0 < reach:
+                beside.append(((s0 + s1) / 2, (t0 + t1) / 2))
+    # pieces overlapping along the mast make one shape (or several touching ones)
+    groups = []
+    for p in sorted(pieces, key=lambda p: min(p[0][0], p[1][0])):
+        lo, hi = sorted((p[0][0], p[1][0]))
+        if groups and lo <= groups[-1][1] + 0.08:
+            groups[-1][1] = max(groups[-1][1], hi)
+            groups[-1][2].append(p)
+        else:
+            groups.append([lo, hi, [p]])
+    shapes = sorted((s for _lo, _hi, ps in groups for s in _split(ps, fills)), key=lambda s: s["s0"])
+    # the shapes stacked on the mast, with gaps of at most 2 mm; small things at the foot are something else
+    stack, end = [], top
+    for s in shapes:
+        if s["s1"] <= 1.5:
+            continue
+        if s["s0"] > end + 2.0:
+            break
+        stack.append(s)
+        end = max(end, s["s1"])
+    words = [(text, *loc(((x0 + x1) / 2, (y0 + y1) / 2))) for text, (x0, y0, x1, y1) in texts]
+    return stack, bar, beside, [w for w in words if -3 < w[1] < reach and abs(w[2]) < 8]
+
+
+def _number(texts, s0, s1, t_max):
+    """the number (0 to 16) written within s0..s1 along the mast and t_max across, nearest to the mast"""
+    found = sorted((abs(t), int(x)) for x, s, t in texts if re.fullmatch(r"\d{1,2}", x.strip()) and s0 <= s <= s1
+                   and abs(t) <= t_max)
+    return found[0][1] if found and found[0][1] <= 16 else 0
+
+
+def classify(path, foot, axis, color="red", page_index=0):
+    """([(bauform, config)], reason): the signals a mast symbol shows (foot and axis as from symbols()),
+    read from the vector drawing; Bauformen and elements as in signal_spec. Usually one signal; a mast
+    with several signs (Lf 6 and Lf 7) gives several. An empty list: no signal (e.g. a dimension line,
+    or the foot found at the head end of a symbol), the reason says why."""
+    shapes, bar, beside, texts = mast_shapes(path, foot, axis, color, page_index)
+    if not 0.8 <= bar < 2.6:
+        return [], "foot bar %.1f mm, a foot bar is 0.8 to 2.6 mm" % bar
+    if not shapes:
+        return [], "nothing on the mast"
+    kinds = {k: [s for s in shapes if s["kind"] == k] for k in ("ks_head", "circle", "triangle", "chevron", "rect")}
+    heads = [s for s in kinds["ks_head"] if s["form"] != "other"]
+    lamps = [s for s in kinds["circle"] if abs(s["tc"]) < 0.4 and s["d"] > 0.9]
+    dots = [s for s in kinds["circle"] if abs(s["tc"]) >= 0.4]
+    zs6 = any(s["inner"] == "diagonal" for s in kinds["rect"])
+
+    def zs3(direction):
+        """Zs 3 (triangle pointing away from the foot) or Zs 3v (towards it): filled = light, open = sign"""
+        t = [s for s in kinds["triangle"] if s["dir"] == direction]
+        return ("licht" if t[0]["filled"] else "tafel") if t else "ohne"
+
+    def kopf(end):
+        """chevron beyond the head: tip away from the head = Zs 1, towards it = Zs 7"""
+        c = [s for s in kinds["chevron"] if s["s0"] >= end - 0.2]
+        return ("zs1" if c[0]["dir"] == "away" else "zs7") if c else "ohne"
+
+    if heads:
+        h = heads[0]
+        cfg = {"bedienung": {"full": "stellwerk", "half": "stellwerk_zug", "none": "zug"}[h["fill"]]}
+        if h["form"] != "vor":
+            cfg.update(kopf=kopf(h["s1"]), zs3=zs3("away"), zs6=zs6, sh1=h["sh1"])
+        if h["form"] != "haupt":
+            cfg["zs3v"] = zs3("toward")
+        light = [b for b in beside if h["s0"] - 1 <= b[0] <= h["s1"] + 1]
+        cfg["licht"] = "ohne" if not light else "unten" if (
+            h["form"] == "vor" and light[0][0] < (h["s0"] + h["s1"]) / 2) else "oben"
+        return [("ks_" + h["form"], cfg)], "Ks head (%s)" % h["form"]
+    # H/V: lamps on the mast (Hauptsignal), small dots beside it (Vorsignal); the fill of the lamps does not
+    # tell the Bedienung on these plans
+    if lamps:
+        first = min(s["s0"] for s in lamps)
+        below = [s for s in dots if first - 3 < s["s1"] <= first + 0.2]
+        cfg = {"bedienung": "stellwerk", "hp": "hp012" if len(lamps) >= 2 else "hp01",
+               "kopf": kopf(max(s["s1"] for s in lamps)), "zs3": zs3("away"), "zs6": zs6, "sh1": False}
+        if below:
+            cfg.update(zs3v=zs3("toward"), licht="ohne")
+        return [("hv_mehr" if below else "hv_haupt", cfg)], "H/V lamps"
+    if len(dots) >= 2 or (dots and kinds["triangle"]):
+        return [("hv_vor", {"bedienung": "stellwerk", "zs3v": zs3("toward"), "licht": "ohne"})], "H/V dots"
+    # signs: Lf 6 (open triangle towards the foot, number beside), Lf 7 (upright plate, number inside),
+    # Zs 3 / Zs 3v alone, Zs 6 (square with a diagonal), Ne 4 (checkerboard), Ls (square with a band)
+    out = []
+    for s in shapes:
+        if s["kind"] == "triangle" and s["dir"] == "toward" and not s["filled"]:
+            out.append(("lf6", {"kennziffer": _number(texts, s["s0"] - 1.5, s["s1"] + 1.5, 4.5)}))
+        elif s["kind"] == "triangle":
+            out.append(("zs3" if s["dir"] == "away" else "zs3v", {"ausfuehrung": "licht" if s["filled"] else "tafel"}))
+        elif s["kind"] == "rect" and s["inner"] == "empty" and s["s1"] - s["s0"] > 1.15 * (s["t1"] - s["t0"]):
+            out.append(("lf7", {"kennziffer": _number(texts, s["s0"], s["s1"], 1.6)}))
+        elif s["kind"] == "rect" and s["inner"] in ("diagonal", "checker", "band"):
+            out.append(({"diagonal": "zs6", "checker": "ne4", "band": "ls"}[s["inner"]],
+                        {"bauart": "hoch"} if s["inner"] == "band" else {}))
+    if out:
+        return out, "signs"
+    return [], "no known shape: " + ", ".join(s["kind"] for s in shapes)
 
 
 # ---------------------------------------------------------------- cable troughs (Kabeltiefbau plans)
