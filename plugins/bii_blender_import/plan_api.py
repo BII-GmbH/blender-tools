@@ -1650,8 +1650,7 @@ def kabel_lines(obj, color="red"):
 
 
 def schacht_marks(obj, color="red"):
-    """[(world Vector, (short, long) in m or None)]: Schächte of a PDF plan, small quads and the ends
-    of the Gleisquerungen (None: size unknown)"""
+    """[(world Vector, (short, long) in m)]: Schächte of a PDF plan, the small outlined quads"""
     from . import plan_vector
     return [(plan_to_world(obj, u, v, 'PDF'), size) for u, v, size in plan_vector.schacht_marks(
         pdf_path(obj), obj.bii_plan.massstab, color, obj.bii_plan.page - 1)]

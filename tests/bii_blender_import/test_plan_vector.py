@@ -100,12 +100,12 @@ class PlanVectorTest(unittest.TestCase):
             self.assertLess(math.dist(sorted(dashed, key=lambda p: p[1])[0], (150, 250)), 0.1)
             self.assertLess(math.dist(sorted(dashed, key=lambda p: p[1])[1], (150, 308)), 0.1)
             pits = plan_vector.schacht_marks(path, massstab=1000)
-            quads = [p for p in pits if p[2]]
-            self.assertEqual(len(quads), 1)
-            self.assertLess(math.dist(quads[0][:2], (200, 301)), 0.1)
-            self.assertAlmostEqual(quads[0][2][0], 4 / plan_vector.point_per_m(1000), places=3)
-            self.assertAlmostEqual(quads[0][2][1], 6 / plan_vector.point_per_m(1000), places=3)
-            self.assertEqual(len([p for p in pits if p[2] is None]), 2)
+            self.assertEqual(len(pits), 2)  # not the filled quad
+            big, small = sorted(pits)
+            self.assertLess(math.dist(big[:2], (200, 301)), 0.1)
+            self.assertAlmostEqual(big[2][0], 4 / plan_vector.point_per_m(1000), places=3)
+            self.assertAlmostEqual(big[2][1], 6 / plan_vector.point_per_m(1000), places=3)
+            self.assertEqual(small[2], (0.8, 0.8))  # a small symbol: at least min_size
 
 
 TROUGH_GAP = 0.5 * MM   # two parallel lines 0.5 mm apart
@@ -148,7 +148,7 @@ def text(doc, page, s, x, y, size=8.0):
 
 def make_ktb_pdf(path):
     """a Kabeltiefbau sheet at 1:1000: hectometer marks 100 m apart along a track, a trough (two red
-    lines 0.5 mm apart with a bend), a dashed red Gleisquerung and a red Schacht"""
+    lines 0.5 mm apart with a bend), a dashed red Gleisquerung, two red Schächte and a filled red quad"""
     doc = raw.FPDF_CreateNewDocument()
     page = raw.FPDFPage_New(doc, 0, 900.0, H)
     red, gray, black = (255, 0, 0), (152, 152, 152), (0, 0, 0)
@@ -168,7 +168,10 @@ def make_ktb_pdf(path):
     # dashes of 4 points with gaps of 2 across the track
     for y in range(250, 310, 6):
         raw.FPDFPage_InsertObject(page, path_of([(150, y), (150, y + 4)], red))
-    raw.FPDFPage_InsertObject(page, path_of([(197, 299), (203, 299), (203, 303), (197, 303)], red, fill=True, close=True))
+    # Schächte: outlined quads, 6 x 4 and 1.3 x 1.8 points; a filled quad is another symbol
+    raw.FPDFPage_InsertObject(page, path_of([(197, 299), (203, 299), (203, 303), (197, 303)], red, close=True))
+    raw.FPDFPage_InsertObject(page, path_of([(250, 299), (251.3, 299), (251.3, 300.8), (250, 300.8)], red, close=True))
+    raw.FPDFPage_InsertObject(page, path_of([(100, 299), (104, 299), (104, 303), (100, 303)], red, fill=True, close=True))
     raw.FPDFPage_GenerateContent(page)
     pdf = pdfium.PdfDocument(doc)
     pdf.save(path)

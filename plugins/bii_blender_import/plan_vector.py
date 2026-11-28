@@ -530,16 +530,20 @@ def trough_lines(path, color="red", gap_mm=(0.14, 0.92), page_index=0):
     return [simplify(c, 0.2) for c in _chain(mids, dirs)] + _dashed(S)
 
 
-def schacht_marks(path, massstab=1000.0, color="red", page_index=0):
-    """[(x, y, size)]: Schächte (cable pits) in PDF points. A small closed quad (1.5 to 8 points a
-    side) gives size = (short side, long side) in meters; both ends of a Gleisquerung give None."""
-    S, right = _colour_segments(path, color, page_index)
+def schacht_marks(path, massstab=1000.0, color="red", page_index=0, min_size=0.8):
+    """[(x, y, (short, long))]: Schächte (cable pits) in PDF points with their size in meters. A
+    Schacht is a small outlined quad (1 to 8 points a side; filled quads and outlines of a filled
+    shape are other symbols). The quad is a symbol, often drawn smaller than the Schacht: each side
+    is at least min_size m."""
+    _w, _h, paths, _texts = read_page(path, page_index)
+    right = drawing_right(path, page_index)
     test = COLORS[color]
-    out = []
-    for item in read_page(path, page_index)[2]:
-        col = item["stroke"] or item["fill"]
+    quads, filled = [], []
+    for item in paths:
         segs = item["segs"]
-        if not col or not test(*col) or not 4 <= len(segs) <= 5 or any(c for _p, _q, c in segs):
+        if item["fill"] and test(*item["fill"]) and segs:
+            filled.append((sum(p[0] for p, _q, _c in segs) / len(segs), sum(p[1] for p, _q, _c in segs) / len(segs)))
+        if item["fill"] or not item["stroke"] or not test(*item["stroke"]) or not 4 <= len(segs) <= 5                 or any(c for _p, _q, c in segs):
             continue
         corners = []
         for p, _q, _c in segs:
@@ -553,8 +557,10 @@ def schacht_marks(path, massstab=1000.0, color="red", page_index=0):
         if abs(a - c) > 0.1 * a or abs(b - d) > 0.1 * b or abs(diagonals[0] - diagonals[1]) > 0.1 * max(diagonals):
             continue  # not a rectangle
         x, y = sum(c[0] for c in corners) / 4, sum(c[1] for c in corners) / 4
-        if 1.5 <= a <= 8 and 1.5 <= b <= 8 and x < right and all(math.dist((x, y), o[:2]) > 0.8 for o in out):
-            out.append((x, y, tuple(sorted((a / point_per_m(massstab), b / point_per_m(massstab))))))
-    for line in (_dashed(S) if len(S) else []):
-        out += [(x, y, None) for x, y in line]
+        if 1.0 <= a <= 8 and 1.0 <= b <= 8 and x < right:
+            quads.append((x, y, a, b))
+    out = []
+    for x, y, a, b in quads:
+        if all(math.dist((x, y), f) > 0.3 for f in filled) and all(math.dist((x, y), o[:2]) > 0.8 for o in out):
+            out.append((x, y, tuple(sorted(max(s / point_per_m(massstab), min_size) for s in (a, b)))))
     return out

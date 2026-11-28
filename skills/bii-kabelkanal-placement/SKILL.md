@@ -128,8 +128,9 @@ lines, or a red dashed line) covered by a blue line? Are there blue lines where 
 trough?" Also look at a few places where sheets overlap: the trough must not be doubled or broken
 there.
 
-**Schächte.** Every red rectangle on a trough should be a vertex with a `Schacht` size; the ends of
-each Gleisquerung get 1 x 1 m. Count them per sheet against the plan.
+**Schächte.** Every small red outlined rectangle on a trough should be a vertex with a `Schacht`
+size (at least 0.8 m a side). Filled red rectangles are other symbols, and the ends of a Gleisquerung
+get no Schacht unless the plan draws one there. Count them per sheet against the plan.
 
 Fix what is wrong by hand in the mesh (delete, draw, move vertices), or tell the user what is
 missing. Do not change the sheets' placement for it.
