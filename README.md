@@ -23,8 +23,9 @@ It is the release marked Latest, so `/releases/latest` leads to it. Pre-releases
 
 - `bii-plan-placement`: import, place, crop and check plans (BII Import).
 - `bii-signal-placement`: place configured DB signals from the plans (needs the plans placed first).
+- `bii-kabelkanal-placement`: build the cable troughs (Kabelkanäle) of Kabeltiefbau plans.
 
-They describe the functions of the BII Import version in the same commit, so install that version. To use them, link each folder into `~/.claude/skills` (Windows: `New-Item -ItemType Junction -Path $HOME\.claude\skills\bii-plan-placement -Target <repo>\skills\bii-plan-placement`, the same for `bii-signal-placement`); Claude Code then finds them.
+They describe the functions of the BII Import version in the same commit, so install that version. To use them, link each folder into `~/.claude/skills` (Windows: `New-Item -ItemType Junction -Path $HOME\.claude\skills\bii-plan-placement -Target <repo>\skills\bii-plan-placement`, the same for the others); Claude Code then finds them.
 
 ## Pipelines
 

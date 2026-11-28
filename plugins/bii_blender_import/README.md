@@ -209,6 +209,26 @@ Long Strecken come as several sheets that join at dashed match lines ("Anschluss
 
 All sheets of a chain should have the same Maßstab; Attach warns otherwise.
 
+### Cable troughs (Kabelkanäle)
+
+Kabeltiefbau plans (KTB) draw the new cable troughs in red: a trough as two parallel lines about 0.5 mm apart, a Gleisquerung (crossing under the tracks) as a dashed line, a Schacht as a small rectangle. Troughs in black (Mitnutzung, existing ones that are used) and orange (Rückbau, removed) are not built. The functions read the PDF's drawing, not the image:
+
+```python
+from bl_ext.user_default.bii_blender_import import plan_api
+
+plan_api.align_by_km(plan, plan_api.km_marks(plan), strecke="5240", unit='PDF')  # place by the hectometer marks
+plan_api.fit_to_plans(plan)                         # then onto the plans placed by their grid
+plan_api.kabel_lines(plan)                          # centre lines of troughs and Gleisquerungen, world
+plan_api.schacht_marks(plan)                        # Schächte: (world point, (short, long) in m or None)
+out = plan_api.build_kabelkanal(sheets)             # one mesh "Kabelkanal Neubau" from all placed sheets
+```
+
+- `km_marks(plan)` reads the hectometer labels ("55,3") and the small circle on the track that belongs to each, in PDF points. A sheet that shows several Strecken uses the longest run of labels; `km_range=(55.0, 58.0)` picks one.
+- `build_kabelkanal(plans, name, z=-1.0, merge=0.8)` merges the lines of overlapping sheets (parts within `merge` m of a line already there are dropped, line ends within 1.5 m of another line are joined to it) and builds an edge mesh at height `z`. Every Schacht is a vertex on its trough with the point attributes `Schacht` (size x, y and a height of 2 m; 1 x 1 m at the ends of a Gleisquerung, where the plan gives no size) and `Schacht Rotation` (along the trough). The mesh gets the Geometry Nodes group `Kabelkanäle` from `Kabelkanäle.blend` of the first asset library that has it, with Generate Schotter on and Schacht Size and Schacht Rotation set to the attributes. Without such a library the mesh has no modifier and `out["note"]` says so. An object of the same name is replaced.
+- `plan_vector.trough_lines(path)`, `km_marks(path)` and `schacht_marks(path)` do the same on a PDF file without Blender, in PDF points.
+
+Check the result: red lines of labels and symbols can turn up as short troughs, and a trough drawn with another gap is missed. The skill `bii-kabelkanal-placement` describes the checks.
+
 The plan import uses [Pillow](https://python-pillow.org/) (MIT-CMU) for images and [pypdfium2](https://github.com/pypdfium2-team/pypdfium2) (Apache-2.0 / BSD-3-Clause, PDFium BSD-3-Clause) for PDF files.
 
 ## Signals

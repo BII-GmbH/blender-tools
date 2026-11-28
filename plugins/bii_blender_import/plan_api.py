@@ -350,10 +350,7 @@ def vector_symbols(obj, color="red", head_mm=8.0):
     lies head_mm along the leader, so head-to-foot is the direction the symbol is drawn.
     "ne3": a Vorsignalbake with its stripe count. Raises ValueError for raster plans."""
     from . import plan_vector
-    pg = obj.bii_plan
-    path = import_plan.absolute_path(pg.source)
-    if os.path.splitext(path)[1].lower() not in plan_raster.PDF_EXTENSIONS:
-        raise ValueError(f"{obj.name} is not a PDF: vector symbols need the PDF's drawing")
+    path = pdf_path(obj)
     out = []
     for s in plan_vector.symbols(path, color):
         fx, fy = s["foot"]
@@ -1619,6 +1616,240 @@ def describe(result, tolerance=1.0):
     if result["along_deg"] is not None:
         text += f"; along {result['along_deg']:.0f}° not fixed (±{result['spread'] / 2:.0f} m)"
     return text
+
+
+# ---------------------------------------------------------------- cable troughs (Kabelkanäle)
+
+KABEL_GROUP = "Kabelkanäle"            # Geometry Nodes group of the BII asset library
+KABEL_FILE = "Kabelkanäle.blend"
+SCHACHT_HEIGHT = 2.0
+
+
+def pdf_path(obj):
+    """The PDF file of a plan; ValueError for a raster plan"""
+    path = import_plan.absolute_path(obj.bii_plan.source)
+    if os.path.splitext(path)[1].lower() not in plan_raster.PDF_EXTENSIONS:
+        raise ValueError(f"{obj.name} is not a PDF: this needs the PDF's drawing")
+    return path
+
+
+def km_marks(obj, km_range=None):
+    """[(u, v, "55,3")] in PDF points: the hectometer marks of a PDF plan (a Kabeltiefbau sheet), for
+    align_by_km(obj, km_marks(obj), unit='PDF'). km_range = (from, to) picks the Strecke when the
+    sheet shows several."""
+    from . import plan_vector
+    return plan_vector.km_marks(pdf_path(obj), obj.bii_plan.massstab, km_range, obj.bii_plan.page - 1)
+
+
+def kabel_lines(obj, color="red"):
+    """[[world Vector, ...]]: centre lines of the cable troughs (pairs of parallel lines) and
+    Gleisquerungen (dashed lines) of a PDF plan"""
+    from . import plan_vector
+    return [[plan_to_world(obj, u, v, 'PDF') for u, v in line]
+            for line in plan_vector.trough_lines(pdf_path(obj), color, page_index=obj.bii_plan.page - 1)]
+
+
+def schacht_marks(obj, color="red"):
+    """[(world Vector, (short, long) in m or None)]: Schächte of a PDF plan, small quads and the ends
+    of the Gleisquerungen (None: size unknown)"""
+    from . import plan_vector
+    return [(plan_to_world(obj, u, v, 'PDF'), size) for u, v, size in plan_vector.schacht_marks(
+        pdf_path(obj), obj.bii_plan.massstab, color, obj.bii_plan.page - 1)]
+
+
+def _resample(line, step):
+    a = np.asarray(line, float)
+    s = np.r_[0, np.cumsum(np.sqrt((np.diff(a, axis=0) ** 2).sum(1)))]
+    if s[-1] < 1e-6:
+        return a[:1]
+    t = np.linspace(0, s[-1], max(1, int(round(s[-1] / step))) + 1)
+    return np.c_[np.interp(t, s, a[:, 0]), np.interp(t, s, a[:, 1])]
+
+
+def _length(line):
+    return float(np.sqrt((np.diff(np.asarray(line), axis=0) ** 2).sum(1)).sum())
+
+
+def merge_lines(lines, merge=0.8, min_piece=3.0):
+    """Lines [[(x, y)]] of several sheets as one set: the longest first; of each next line only the
+    parts farther than merge m from what is there already, pieces shorter than min_piece m dropped"""
+    kept, grid = [], {}
+
+    def near(p):
+        gx, gy = int(p[0] // merge), int(p[1] // merge)
+        return any(math.dist(p, q) <= merge for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                   for q in grid.get((gx + dx, gy + dy), ()))
+
+    for line in sorted(lines, key=lambda l: -_length(l)):
+        new, run = [], []
+        for p in list(map(tuple, _resample(line, 1.0))) + [None]:
+            if p is not None and not near(p):
+                run.append(p)
+                continue
+            if len(run) > 1 and _length(run) >= min_piece:
+                new.append(run)
+            run = []
+        for p in (q for r in new for q in _resample(r, 0.25)):
+            grid.setdefault((int(p[0] // merge), int(p[1] // merge)), []).append(tuple(p))
+        kept += new
+    return kept
+
+
+def _nearest_on(p, line):
+    """(distance, point, segment index) of the point of the polyline nearest to p"""
+    a = np.asarray(line[:-1], float)
+    d = np.asarray(line[1:], float) - a
+    t = np.clip(((np.asarray(p) - a) * d).sum(1) / np.maximum((d ** 2).sum(1), 1e-12), 0, 1)
+    q = a + t[:, None] * d
+    dist = np.sqrt(((q - p) ** 2).sum(1))
+    i = int(dist.argmin())
+    return float(dist[i]), tuple(q[i]), i
+
+
+def snap_ends(lines, tol=1.5):
+    """Line ends within tol m of another line moved onto it, with a vertex there on the other line
+    (T joints, gaps at sheet edges)"""
+    out = [list(map(tuple, l)) for l in lines]
+    for i, line in enumerate(out):
+        for e in (0, -1):
+            best = None
+            for j, other in enumerate(out):
+                if j != i and len(other) > 1:
+                    d, q, k = _nearest_on(line[e], other)
+                    if d <= tol and (best is None or d < best[0]):
+                        best = (d, q, k, other)
+            if best and best[0] > 0.05:
+                _d, q, k, other = best
+                line[e] = q
+                if math.dist(q, other[k]) > 0.05 and math.dist(q, other[k + 1]) > 0.05:
+                    other.insert(k + 1, q)
+    return out
+
+
+def _kabel_node_group():
+    """The Kabelkanäle node group: in the file already, or appended from the first asset library whose
+    Kabelkanäle.blend has it; None without"""
+    group = bpy.data.node_groups.get(KABEL_GROUP)
+    if group:
+        return group
+    for lib in bpy.context.preferences.filepaths.asset_libraries:
+        path = os.path.join(bpy.path.abspath(lib.path), KABEL_FILE)
+        if not os.path.isfile(path):
+            continue
+        with bpy.data.libraries.load(path, link=False) as (src, dst):
+            dst.node_groups = [g for g in src.node_groups if g == KABEL_GROUP]
+        if dst.node_groups and dst.node_groups[0]:
+            return dst.node_groups[0]
+    return None
+
+
+def _set_input(mod, name, value=None, attribute=None):
+    """Set a modifier input to a value or to a named attribute (Blender 5.2+ keep the inputs in
+    mod.properties, older ones as ID properties)"""
+    sock = next((s for s in mod.node_group.interface.items_tree if getattr(s, "item_type", "SOCKET") == "SOCKET"
+                 and s.in_out == 'INPUT' and s.name == name), None)
+    if sock is None:
+        return False
+    props = getattr(mod, "properties", None)
+    if props is not None and hasattr(props, "inputs"):
+        item = getattr(props.inputs, sock.identifier)
+        if attribute:
+            item.type = 'ATTRIBUTE'
+            item.attribute_name = attribute
+        else:
+            item.value = value
+    elif attribute:
+        mod[sock.identifier + "_use_attribute"] = True
+        mod[sock.identifier + "_attribute_name"] = attribute
+    else:
+        mod[sock.identifier] = value
+    return True
+
+
+def build_kabelkanal(plans, name="Kabelkanal Neubau", z=-1.0, merge=0.8, color="red", collection=None):
+    """One edge mesh of the cable troughs of the placed PDF plans (Kabeltiefbau sheets), see
+    kabelkanal_from_lines. Returns a dict with "object", counts and "note"."""
+    lines, marks = [], []
+    for plan in plans:
+        lines += [[(p.x, p.y) for p in line] for line in kabel_lines(plan, color)]
+        marks += [((p.x, p.y), size) for p, size in schacht_marks(plan, color)]
+    return kabelkanal_from_lines(lines, marks, name, z, merge, collection)
+
+
+def kabelkanal_from_lines(lines, marks, name="Kabelkanal Neubau", z=-1.0, merge=0.8, collection=None):
+    """Edge mesh of trough lines [[(x, y)]] (world m) of several sheets: merged (parts within merge m
+    of a line already there are dropped, ends snapped onto lines nearby), a vertex at every Schacht of
+    marks [((x, y), (short, long) or None)] with the point attributes "Schacht" (size x, y, height in
+    m) and "Schacht Rotation" (along its trough), at height z, with the Geometry Nodes group
+    Kabelkanäle from the asset library. An object of that name is replaced. Returns a dict with
+    "object", counts and "note" (the modifier is missing when no asset library has the node group)."""
+    from . import plan_vector
+    lines = snap_ends([plan_vector.simplify(l, 0.05) for l in merge_lines(lines, merge)])
+    # Schächte: those with a size first; the same Schacht on overlapping sheets once
+    schaechte = []
+    for p, size in sorted(marks, key=lambda m: m[1] is None):
+        if all(math.dist(p, q) > 1.5 for q, _s, _a in schaechte):
+            schaechte.append([p, size, 0.0])
+    # each Schacht onto its trough (within 2.5 m): a vertex there, turned along the trough
+    for s in schaechte:
+        best = None
+        for line in lines:
+            d, q, k = _nearest_on(s[0], line)
+            if best is None or d < best[0]:
+                best = (d, q, k, line)
+        if best and best[0] <= 2.5:
+            _d, q, k, line = best
+            a, b = line[k], line[k + 1]
+            s[2] = math.atan2(b[1] - a[1], b[0] - a[0])
+            s[0] = q
+            if math.dist(q, a) > 0.05 and math.dist(q, b) > 0.05:
+                line.insert(k + 1, q)
+    import bmesh
+    from mathutils import kdtree
+    bm = bmesh.new()
+    for line in lines:
+        verts = [bm.verts.new((x, y, 0.0)) for x, y in line]
+        for a, b in zip(verts, verts[1:]):
+            bm.edges.new((a, b))
+    for p, _size, _a in schaechte:
+        bm.verts.new((p[0], p[1], 0.0))
+    bmesh.ops.remove_doubles(bm, verts=bm.verts[:], dist=0.05)
+    old = bpy.data.objects.get(name)
+    if old is not None:
+        bpy.data.objects.remove(old)
+    me = bpy.data.meshes.new(name)
+    bm.to_mesh(me)
+    bm.free()
+    tree = kdtree.KDTree(len(me.vertices))
+    for v in me.vertices:
+        tree.insert(v.co, v.index)
+    tree.balance()
+    size = [0.0] * (3 * len(me.vertices))
+    rot = [0.0] * len(me.vertices)
+    for p, s, angle in schaechte:
+        _co, i, _d = tree.find((p[0], p[1], 0.0))
+        size[3 * i:3 * i + 3] = [*(s or (1.0, 1.0)), SCHACHT_HEIGHT]
+        rot[i] = angle
+    me.attributes.new("Schacht", 'FLOAT_VECTOR', 'POINT').data.foreach_set("vector", size)
+    me.attributes.new("Schacht Rotation", 'FLOAT', 'POINT').data.foreach_set("value", rot)
+    obj = bpy.data.objects.new(name, me)
+    obj.location.z = z
+    (collection or bpy.context.scene.collection).objects.link(obj)
+    out = {"object": obj, "lines": len(lines), "length_m": round(sum(_length(l) for l in lines), 1),
+           "schaechte": len(schaechte), "modifier": False, "note": ""}
+    group = _kabel_node_group()
+    if group is None:
+        out["note"] = (f"No asset library has {KABEL_FILE} with the node group {KABEL_GROUP}: the mesh has no "
+                       "modifier. Add the BII asset library under Preferences > File Paths > Asset Libraries.")
+        return out
+    mod = obj.modifiers.new("Kabelkanäle", 'NODES')
+    mod.node_group = group
+    _set_input(mod, "Generate Schotter", True)
+    _set_input(mod, "Schacht Size", attribute="Schacht")
+    _set_input(mod, "Schacht Rotation", attribute="Schacht Rotation")
+    obj.update_tag()
+    out["modifier"] = True
+    return out
 
 
 # ---------------------------------------------------------------- operators
