@@ -547,9 +547,11 @@ def point_per_m(massstab):
 
 
 def drawing_right(path, page_index=0):
-    """x where the drawing ends: the title block and legend on the right side are left out"""
+    """x where the drawing ends: the title block and legend on the right side are left out. Only short
+    texts count: a note in the drawing such as "Rückbau vorh. BKK" is not the legend."""
     w, _h, _paths, texts = read_page(path, page_index)
-    xs = [box[0] for text, box in texts if re.search(r"Legende|Rückbau|Plankopf|Maßstab", text) and box[0] > 0.6 * w]
+    xs = [box[0] for text, box in texts if re.match(r"\s*(Legende|Rückbau|Plankopf|Maßstab)", text)
+          and len(text.strip()) <= 16 and box[0] > 0.6 * w]
     return min(xs) - 10 if xs else w
 
 

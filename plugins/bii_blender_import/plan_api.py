@@ -22,6 +22,7 @@ from . import import_plan, plan_place, plan_raster
 UNITS = ('SHEET', 'PDF', 'IMAGE', 'SOURCE')
 INCH = 0.0254
 INK_LEVEL = 160          # gray below this is ink
+VECTOR_INK_LEVEL = 235   # on a PDF drawing (not a scan) light gray lines are ink as well
 MAX_CELLS = 16_000_000   # grid size limit of the placement check
 MIN_SCORE = 0.2          # a match scoring less is not trusted (see compare)
 CONTRAST = 1.08          # fit_to_plans: the best match must beat the next one by this factor
@@ -1248,13 +1249,28 @@ def grid_placed(obj):
     return len(obj.bii_plan.points) >= 2
 
 
+def _vector_page(obj):
+    """True if the plan is a PDF page drawn as vectors, not a scan"""
+    path = import_plan.absolute_path(obj.bii_plan.source)
+    if os.path.splitext(path)[1].lower() not in plan_raster.PDF_EXTENSIONS or not os.path.isfile(path):
+        return False
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument(path)
+    try:
+        return plan_raster._scan_resolution(pdf[obj.bii_plan.page - 1]) is None
+    finally:
+        pdf.close()
+
+
 def _neutral_ink(obj, cell, scale):
     """Ink of the plan pooled to about cell meters: dark, not colored pixels (red or blue
-    symbols of a Signallageplan are not on the plans below). (mask, k, w, h)."""
+    symbols of a Signallageplan are not on the plans below). On a PDF drawing, light gray lines
+    count as well (Kabeltiefbau plans draw the tracks in light gray). (mask, k, w, h)."""
     rgb = _rgb(obj).astype(np.int16)
     r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
     sat = np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)
-    ink = ((r + g + b) < 3 * INK_LEVEL) & (sat < 60)
+    level = VECTOR_INK_LEVEL if _vector_page(obj) else INK_LEVEL
+    ink = ((r + g + b) < 3 * level) & (sat < 60)
     h, w = ink.shape
     k = max(1, int(cell / scale / (obj.bii_plan.width / w)))
     if k > 1:
